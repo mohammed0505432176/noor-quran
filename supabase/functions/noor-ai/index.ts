@@ -93,16 +93,25 @@ async function bump(uid: string, action: string, cost = 1): Promise<number> {
       body: JSON.stringify({ p_uid: uid, p_action: action, p_cost: cost }),
       signal: AbortSignal.timeout(4000),
     });
-    if (!r.ok) { await r.body?.cancel(); return 0; }
+    if (!r.ok) { await r.body?.cancel(); return localBump(uid, action, cost); }
     return Number(await r.json()) || 0;
-  } catch { return 0; } // never block the user because accounting failed
+  } catch { return localBump(uid, action, cost); } // accounting down: fall back to a per-instance counter (never fail open)
+}
+const localUse = new Map<string, number>();
+function localBump(uid: string, action: string, cost: number): number {
+  const k = new Date().toISOString().slice(0, 10) + "|" + uid + "|" + action;
+  const v = (localUse.get(k) ?? 0) + cost;
+  localUse.set(k, v);
+  if (localUse.size > 20000) localUse.clear();
+  return v;
 }
 // Per-network (IP) and global daily ceilings, so creating many anonymous accounts can't drain the free quotas.
 const IP_DAILY: Record<string, number> = { chat: 600, transcribe: 9000, tajweed: 120, status: 1500, family: 1500 };
 const GLOBAL_DAILY: Record<string, number> = { chat: 4000, transcribe: 60000, tajweed: 600, status: 20000, family: 20000 };
 const GLOBAL_ID = "00000000-0000-0000-0000-000000000000";
 async function ipId(req: Request): Promise<string> {
-  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
+  // prefer headers set by the edge proxy over the client-controllable x-forwarded-for chain
+  const ip = (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? (req.headers.get("x-forwarded-for") ?? "").split(",")[0]).trim() || "unknown";
   const h = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("noor-ip:" + ip))).slice(0, 16);
   h[6] = (h[6] & 0x0f) | 0x50; h[8] = (h[8] & 0x3f) | 0x80; // uuid-shaped
   const x = Array.from(h, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -235,10 +244,10 @@ async function pollinations(messages: Msg[]) {
 
 function sanitizeMessages(raw: unknown): Msg[] {
   if (!Array.isArray(raw)) return [];
-  return raw.slice(-24).map((m: any) => ({
-    role: m?.role === "assistant" ? "assistant" : m?.role === "system" ? "system" : "user",
-    content: String(m?.content ?? "").slice(0, 12000),
-  })).filter((m) => m.content);
+  return raw.slice(-16).map((m: any) => {
+    const role = m?.role === "assistant" ? "assistant" : m?.role === "system" ? "system" : "user";
+    return { role, content: String(m?.content ?? "").slice(0, role === "assistant" ? 3000 : 6000) } as Msg;
+  }).filter((m) => m.content);
 }
 
 async function chat(body: any) {
@@ -417,6 +426,16 @@ async function myMembership(uid: string) {
   return m.ok && Array.isArray(m.data) && m.data[0] ? m.data[0] : null;
 }
 
+async function leaveFamily(uid: string, me: any) {
+  await rest(`noor_members?uid=eq.${uid}`, { method: "DELETE" });
+  if (!me) return;
+  const fam = me.noor_families;
+  const left = await rest(`noor_members?family_id=eq.${fam.id}&select=uid&order=joined_at.asc&limit=1`);
+  const next = Array.isArray(left.data) ? left.data[0] : null;
+  if (!next) await rest(`noor_families?id=eq.${fam.id}`, { method: "DELETE" });
+  else if (fam.owner === uid) await rest(`noor_families?id=eq.${fam.id}`, { method: "PATCH", prefer: "return=minimal", body: JSON.stringify({ owner: next.uid }) });
+}
+
 async function family(uid: string, body: any) {
   const op = String(body.op ?? "");
   if (op === "create" || op === "join") {
@@ -440,6 +459,9 @@ async function family(uid: string, body: any) {
       const c = await rest(`noor_members?family_id=eq.${fam.id}&select=uid`);
       if (Array.isArray(c.data) && c.data.length >= 30 && !c.data.some((x: any) => x.uid === uid)) return json(409, { error: "family_full" });
     }
+    // switching families: leave the old one properly (ownership handoff / delete if empty) instead of orphaning it
+    const prev = await myMembership(uid);
+    if (prev && prev.family_id !== fam.id) await leaveFamily(uid, prev);
     const up = await rest("noor_members?on_conflict=uid", {
       method: "POST", prefer: "resolution=merge-duplicates,return=minimal",
       body: JSON.stringify({ uid, family_id: fam.id, name: memberName, stats: cleanStats(body.stats), updated_at: new Date().toISOString() }),
@@ -448,15 +470,7 @@ async function family(uid: string, body: any) {
     return json(200, { ok: true, code: fam.code, name: fam.name, owner: fam.owner === uid });
   }
   if (op === "leave") {
-    const me = await myMembership(uid);
-    await rest(`noor_members?uid=eq.${uid}`, { method: "DELETE" });
-    if (me) {
-      const fam = me.noor_families;
-      const left = await rest(`noor_members?family_id=eq.${fam.id}&select=uid&order=joined_at.asc&limit=1`);
-      const next = Array.isArray(left.data) ? left.data[0] : null;
-      if (!next) await rest(`noor_families?id=eq.${fam.id}`, { method: "DELETE" });
-      else if (fam.owner === uid) await rest(`noor_families?id=eq.${fam.id}`, { method: "PATCH", prefer: "return=minimal", body: JSON.stringify({ owner: next.uid }) });
-    }
+    await leaveFamily(uid, await myMembership(uid));
     return json(200, { ok: true });
   }
   if (op === "sync") {
@@ -482,13 +496,21 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json(405, { error: "method" });
   const uid = userId(req);
   if (!uid) return json(401, { error: "unauthorized" });
+  const len = Number(req.headers.get("content-length") ?? "0");
+  if (len > MAX_AUDIO_B64 + 64 * 1024) return json(413, { error: "too_large" });
   let body: any;
   try { body = await req.json(); } catch { return json(400, { error: "bad_json" }); }
   const action = String(body?.action ?? "");
   if (!(action in DAILY)) return json(400, { error: "unknown_action" });
   if (burst(uid, action)) return json(429, { error: "rate_limited", retry: 60 });
-  const [used, ipUsed, allUsed] = await Promise.all([bump(uid, action), ipId(req).then((id) => bump(id, "ip:" + action)), bump(GLOBAL_ID, "all:" + action)]);
-  if (used > DAILY[action] || ipUsed > IP_DAILY[action]) return json(429, { error: "daily_limit", limit: DAILY[action] });
+  // audio costs in proportion to its size (≈1 unit per 1.5 MB of base64)
+  const cost = typeof body?.audio === "string" ? Math.max(1, Math.ceil(body.audio.length / 1_500_000)) : 1;
+  // sequential: a request refused by the user's own cap must not eat the network / global budget
+  const used = await bump(uid, action, cost);
+  if (used > DAILY[action]) return json(429, { error: "daily_limit", limit: DAILY[action] });
+  // network + global counters in parallel (one round-trip less for live Whisper chunks)
+  const [ipUsed, allUsed] = await Promise.all([ipId(req).then((id) => bump(id, "ip:" + action, cost)), bump(GLOBAL_ID, "all:" + action, cost)]);
+  if (ipUsed > IP_DAILY[action]) return json(429, { error: "daily_limit", limit: DAILY[action] });
   if (allUsed > GLOBAL_DAILY[action]) return json(429, { error: "rate_limited", retry: 3600 });
   if (Math.random() < 0.002) {
     fetch(`${SUPABASE_URL}/rest/v1/rpc/noor_usage_gc`, { method: "POST", headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" }, body: "{}" })

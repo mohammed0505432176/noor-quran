@@ -325,3 +325,12 @@
   .tabbar > button { font-size: .66rem; }
   .btn { padding: 0 16px; }
 }
+
+/* header that stays reachable while reading long pages (mushaf reader, recitation) */
+.page-head.sticky-head {
+  position: sticky; top: 0; z-index: 60;
+  margin: calc(-1 * (var(--safe-t) + 14px)) -16px 12px; padding: calc(var(--safe-t) + 8px) 16px 6px;
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  box-shadow: 0 1px 0 var(--line);
+}

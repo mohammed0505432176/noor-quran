@@ -36,7 +36,7 @@ p { margin: 0 0 .8em; }
   margin: 0 auto;
   padding: calc(var(--safe-t) + 14px) 16px calc(var(--tabbar-h) + var(--safe-b) + 24px);
 }
-.view.enter { animation: view-enter .45s cubic-bezier(.2, .7, .2, 1) both; }
+.view.enter { animation: view-enter .45s cubic-bezier(.2, .7, .2, 1) backwards; } /* not "both": a kept transform would make position:fixed bars scroll away with the page */
 @keyframes view-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
 .muted { color: var(--muted); }

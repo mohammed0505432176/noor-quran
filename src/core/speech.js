@@ -1,5 +1,15 @@
 // Unified speech recognition: Capacitor native plugin on Android, Web Speech API in browsers.
 import { isNative } from './platform.js';
+import { registerPlugin } from '@capacitor/core';
+
+// App's own continuous recognizer (scripts/android/NoorSpeechPlugin.java); older APKs fall back to the community plugin.
+const NoorSpeech = registerPlugin('NoorSpeech');
+let noorOk = null;
+async function hasNoorSpeech() {
+  if (noorOk !== null) return noorOk;
+  try { const r = await NoorSpeech.available(); noorOk = !!(r && r.available && r.version); } catch (e) { noorOk = false; }
+  return noorOk;
+}
 
 const LANG = 'ar-SA';
 const webCtor = () => (typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null);
@@ -13,6 +23,7 @@ async function nativePlugin() {
 export async function speechSupport() {
   try {
     if (isNative()) {
+      if (await hasNoorSpeech()) return 'native';
       const SR = await nativePlugin();
       const r = await SR.available();
       if (r && r.available) return 'native';
@@ -28,10 +39,64 @@ export async function speechSupport() {
  * pick(fullCandidates[]) -> index: optional chooser among the recognizer's alternatives (e.g. the one
  * that best matches the expected next words). Returns stop().
  */
-export async function startListening({ onText = () => {}, onState = () => {}, onError = () => {}, pick = null } = {}) {
+export async function startListening({ onText = () => {}, onState = () => {}, onError = () => {}, pick = null, onLevel = null } = {}) {
   const mode = await speechSupport();
   if (mode === 'none') { onError('unsupported'); return () => {}; }
+  if (mode === 'native' && await hasNoorSpeech()) return startNoor({ onText, onState, onError, pick, onLevel });
   return mode === 'native' ? startNative({ onText, onState, onError, pick }) : startWeb({ onText, onState, onError, pick });
+}
+
+/**
+ * NoorSpeech: segments are restarted natively with no gap. Each segment keeps its own text; a final result
+ * replaces its segment's partial (never appended twice).
+ */
+async function startNoor({ onText, onState, onError, pick, onLevel }) {
+  let active = true;
+  const segs = new Map();          // seg id -> text (insertion order = speaking order)
+  const handles = [];
+  try {
+    let perm = await NoorSpeech.checkPermissions();
+    if (!perm || perm.microphone !== 'granted') perm = await NoorSpeech.requestPermissions();
+    if (!perm || perm.microphone !== 'granted') { onError('permission'); return () => {}; }
+  } catch (e) { onError('permission'); return () => {}; }
+
+  const fullBefore = seg => { let t = ''; for (const [k, v] of segs) { if (k === seg) break; t = join(t, v); } return t; };
+  const fullText = () => { let t = ''; for (const v of segs.values()) t = join(t, v); return t; };
+  const onResult = fin => d => {
+    if (!active || !d) return;
+    const seg = d.seg | 0;
+    const m = Array.isArray(d.matches) ? d.matches : [];
+    const t = choose(m, fullBefore(seg), pick);
+    if (!t && !fin) return;
+    if (!t && fin && segs.has(seg)) { onText(fullText(), true); return; }   // empty final: keep the partial
+    if (segs.get(seg) === t && !fin) return;
+    segs.set(seg, t);
+    onText(fullText(), fin);
+  };
+  try {
+    handles.push(await NoorSpeech.addListener('partial', onResult(false)));
+    handles.push(await NoorSpeech.addListener('final', onResult(true)));
+    handles.push(await NoorSpeech.addListener('state', d => { if (active && d) onState(d.status === 'stopped' ? 'stopped' : 'listening'); }));
+    handles.push(await NoorSpeech.addListener('error', d => {
+      if (!active || !d || !d.fatal) return;
+      active = false;
+      onError(d.code === 'permission' ? 'permission' : 'error');
+    }));
+    if (onLevel) handles.push(await NoorSpeech.addListener('level', d => { if (active && d) onLevel(+d.v || 0); }));
+    await NoorSpeech.start({ language: LANG, maxResults: 3 });
+  } catch (e) {
+    active = false;
+    handles.forEach(h => { try { h.remove(); } catch (er) {} });
+    onError(e && /permission/.test(String(e.message || e.code)) ? 'permission' : 'error');
+    return () => {};
+  }
+  return function stop() {
+    if (!active) { handles.forEach(h => { try { h.remove(); } catch (e) {} }); return; }
+    active = false;
+    onState('stopped');
+    NoorSpeech.stop().catch(() => {});
+    handles.forEach(h => { try { h.remove(); } catch (e) {} });
+  };
 }
 
 const join = (a, b) => (a && b ? a + ' ' + b : a || b || '');
@@ -76,7 +141,7 @@ async function startNative({ onText, onState, onError, pick }) {
   function scheduleRestart() {
     if (!active) return;
     clearTimeout(restartTimer);
-    restartTimer = setTimeout(begin, 300);
+    restartTimer = setTimeout(begin, 60);
   }
 
   try {
@@ -143,7 +208,7 @@ function startWeb({ onText, onState, onError, pick }) {
     };
     r.onend = () => {
       if (cur) { committed = join(committed, cur); cur = ''; emitText(true); }
-      if (active) { clearTimeout(restartTimer); restartTimer = setTimeout(begin, 120); }
+      if (active) { clearTimeout(restartTimer); restartTimer = setTimeout(begin, 40); }
       else onState('stopped');
     };
     return r;

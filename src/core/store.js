@@ -33,8 +33,10 @@ function load() {
   } catch (e) { /* ignore */ }
   return DEFAULTS();
 }
+const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function deepMerge(base, over) {
   for (const k of Object.keys(over)) {
+    if (BAD_KEYS.has(k)) continue;           // no prototype pollution from stored / imported data
     const v = over[k];
     if (v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])) base[k] = deepMerge(base[k], v);
     else base[k] = v;
@@ -195,7 +197,11 @@ export function checkBadges() {
 
 // ---- settings & data ----
 export function updateSettings(patch) { deepMerge(S.settings, patch); save(); }
-export function exportData() { return JSON.stringify(S); }
+export function exportData() {
+  // never put the private API key into a backup file that may be shared
+  const ai = S.settings && S.settings.ai ? { ...S.settings.ai, apiKey: '' } : undefined;
+  return JSON.stringify({ ...S, settings: { ...S.settings, ...(ai ? { ai } : {}) } });
+}
 export function importData(json) {
   const d = JSON.parse(json); if (!d || d.v !== 1) throw new Error('bad file');
   const int = x => Math.max(0, Math.min(10000, parseInt(x, 10) || 0));
@@ -203,6 +209,11 @@ export function importData(json) {
   d.last = d.last ? { s: Math.min(114, Math.max(1, int(d.last.s))), a: Math.max(1, int(d.last.a)) } : null;
   d.rec = (Array.isArray(d.rec) ? d.rec : []).map(r => ({ d: String(r.d || '').slice(0, 10), s: int(r.s), from: int(r.from), to: int(r.to), acc: int(r.acc), miss: (Array.isArray(r.miss) ? r.miss : []).map(String).slice(0, 30) }));
   d.reviews = (Array.isArray(d.reviews) ? d.reviews : []).map(r => ({ id: String(r.id).replace(/[^\w-]/g, ''), s: int(r.s), from: int(r.from), to: int(r.to), box: int(r.box), due: String(r.due || '').slice(0, 10), added: String(r.added || '').slice(0, 10), last: r.last ? String(r.last).slice(0, 10) : null }));
-  Object.keys(S).forEach(k => delete S[k]); Object.assign(S, deepMerge(DEFAULTS(), d)); save();
+  // an imported file must not redirect the AI to another server: keep this device's AI settings
+  const keepAi = S.settings && S.settings.ai ? JSON.parse(JSON.stringify(S.settings.ai)) : null;
+  if (d.settings && typeof d.settings === 'object') delete d.settings.ai;
+  Object.keys(S).forEach(k => delete S[k]); Object.assign(S, deepMerge(DEFAULTS(), d));
+  if (keepAi) S.settings.ai = keepAi;
+  save();
 }
 export function resetAll() { Object.keys(S).forEach(k => delete S[k]); Object.assign(S, DEFAULTS()); save(); }

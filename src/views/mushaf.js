@@ -109,6 +109,7 @@ async function renderReader(el, s, startAyah) {
     `<div class="mushaf-text">${text}</div></div>` + navBtns +
     `<div class="player-bar" id="playerBar"></div>`;
 
+  $('.page-head', el).classList.add('sticky-head');
   const textEl = $('.mushaf-text', el);
   $$('.ayah', textEl).forEach(sp => { spans[+sp.dataset.a] = sp; });
   const bar = $('#playerBar', el);
@@ -164,7 +165,8 @@ async function renderReader(el, s, startAyah) {
   const startPlay = from => audio.playRange(s, from, total);
   const toggleAll = () => {
     if (audio.current() && audio.current().s === s) { audio.isPlaying() ? audio.pause() : audio.resume(); return; }
-    startPlay(sel || 1);
+    // start from the selected ayah, otherwise from the first ayah on screen (never jump back to ayah 1)
+    startPlay(sel || (visible.size ? Math.min(...visible) : (S.last && S.last.s === s ? S.last.a : 1)));
   };
 
   // ---- ayah sheet

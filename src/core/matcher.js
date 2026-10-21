@@ -83,6 +83,10 @@ export function stripOpeners(text, keepBasmala = false) {
   return (kept || []).concat(W.slice(i)).join(' ');
 }
 
+const LOOK = 3;          // a decision at transcript word j may look at T[j+1..j+LOOK]
+const RECENT = 6;        // repeated recent words (user re-reciting to correct himself) are ignored
+const FAR = 30;          // a forgotten passage of up to FAR words can be jumped over
+
 export function createMatcher(expectedWords) {
   const display = expectedWords.slice();
   const E = display.map(w => norm(w));
@@ -90,48 +94,108 @@ export function createMatcher(expectedWords) {
   let states = new Array(n).fill('pending');
   let pointer = 0;
 
-  const accOf = () => (n ? Math.round(100 * states.filter(s => s === 'ok').length / n) : 0);
+  // memoised word similarity (the same pairs are compared again and again on every partial result)
+  const memo = new Map();
+  const sim = (a, b) => {
+    const k = a + '|' + b;
+    let v = memo.get(k);
+    if (v === undefined) { if (memo.size > 50000) memo.clear(); v = similar(a, b); memo.set(k, v); }
+    return v;
+  };
+  const simJoin = (e, a, b) => { const j = a + b; return j.length >= 3 && similarity(e, j) >= 0.8; };
 
-  /** Pure alignment of a transcript against the expected words (does not touch matcher state). */
-  function align(transcriptText) {
-    const T = norm(transcriptText || '').split(' ').filter(Boolean);
-    const st = new Array(n).fill('pending');
-    let p = 0;
-    for (let j = 0; j < T.length && p < n; j++) {
-      const t = T[j];
-      if (similar(E[p], t)) { st[p++] = 'ok'; continue; }
-      // noise / repetition: the expected word shows up again within the next 3 transcript words
-      let noise = false;
-      for (let d = 1; d <= 3 && j + d < T.length; d++) if (similar(E[p], T[j + d])) { noise = true; break; }
-      if (noise) continue;
-      // skipped word(s): current transcript word matches expected p+1 or p+2
-      const maxSkip = t.length >= 3 ? 4 : 2;
-      for (let k = 1; k <= maxSkip && p + k < n; k++) {
-        if (similar(E[p + k], t)) {
-          for (let q = p; q < p + k; q++) st[q] = 'bad';
-          st[p + k] = 'ok';
-          p += k + 1;
-          break;
-        }
-      }
-      // otherwise: filler/unrelated word, ignore
+  /**
+   * One alignment step for transcript word T[j]. Mutates st, records every write in undo, returns new
+   * {p, eat}. eat = 1 means the next transcript word was already consumed (a word split in two).
+   */
+  function step(T, j, st, p, undo) {
+    const set = (q, v) => { if (st[q] !== v) { undo.push(q, st[q]); st[q] = v; } };
+    const t = T[j];
+    if (sim(E[p], t)) { set(p, 'ok'); return { p: p + 1, eat: 0 }; }
+    // the recognizer split one Quran word in two («يا ايها» → يايها)
+    if (j + 1 < T.length && t.length <= 4 && simJoin(E[p], t, T[j + 1])) { set(p, 'ok'); return { p: p + 1, eat: 1 }; }
+    // or merged two Quran words into one («بسمالله»)
+    if (p + 1 < n && t.length >= 4 && !sim(E[p + 1], t) && similarity(E[p] + E[p + 1], t) >= 0.8) { set(p, 'ok'); set(p + 1, 'ok'); return { p: p + 2, eat: 0 }; }
+    // noise / stutter: the expected word shows up within the next LOOK transcript words
+    for (let d = 1; d <= LOOK && j + d < T.length; d++) if (sim(E[p], T[j + d])) return { p, eat: 0 };
+    // repetition of what was just recited (going back to correct oneself): ignore, but upgrade a red word
+    for (let q = p - 1; q >= 0 && q >= p - RECENT; q--) {
+      if (sim(E[q], t)) { if (st[q] === 'bad' && q >= p - 3) set(q, 'ok'); return { p, eat: 0 }; }
     }
+    // skipped / forgotten words: t matches a word further ahead. Prefer the nearest place that the following
+    // transcript word(s) confirm (so a repeated phrase like «ولم» lands on the right ayah); without
+    // confirmation only a short skip is accepted.
+    const maxSkip = t.length >= 3 ? 4 : 2;
+    const confirmed = k => {
+      const need = k > 12 ? 2 : 1;
+      for (let d = 1; d <= need; d++) {
+        if (!(j + d < T.length && p + k + d < n && sim(E[p + k + d], T[j + d]))) return false;
+      }
+      return true;
+    };
+    let pick = 0, fallback = 0;
+    const far = t.length >= 3 ? FAR : maxSkip;
+    for (let k = 1; k <= far && p + k < n; k++) {
+      if (!sim(E[p + k], t)) continue;
+      if (confirmed(k)) { pick = k; break; }
+      if (!fallback && k <= maxSkip) fallback = k;
+    }
+    // an unconfirmed short skip is only trusted when there is nothing after t to confirm with yet
+    // or the next word does not match anything nearby (a genuine skip followed by a slip)
+    if (!pick && fallback) pick = fallback;
+    if (pick) {
+      for (let q = p; q < p + pick; q++) set(q, 'bad');
+      set(p + pick, 'ok');
+      return { p: p + pick + 1, eat: 0 };
+    }
+    return { p, eat: 0 };   // filler / unrelated word
+  }
+
+  // Incremental cache: the transcript only grows at its end on most updates, so alignment resumes from
+  // just before the first changed word instead of re-scanning the whole passage every partial result.
+  let cache = { T: [], st: new Array(n).fill('pending'), p: 0, eat: 0, cp: [], ce: [], undo: [] };
+
+  function align(transcriptText, commit) {
+    const T = norm(transcriptText || '').split(' ').filter(Boolean);
+    const C = cache;
+    let lcp = 0;
+    while (lcp < T.length && lcp < C.T.length && T[lcp] === C.T[lcp]) lcp++;
+    const done = C.cp.length;                         // steps processed last time
+    const start = Math.min(Math.max(0, lcp - LOOK - 1), done);
+    const st = commit ? C.st : C.st.slice();
+    for (let j = done - 1; j >= start; j--) {         // roll back steps start..done-1
+      const u = C.undo[j];
+      for (let x = u.length - 2; x >= 0; x -= 2) st[u[x]] = u[x + 1];
+    }
+    let p = start < done ? C.cp[start] : C.p, eat = start < done ? C.ce[start] : C.eat;
+    const cp = C.cp.slice(0, start), ce = C.ce.slice(0, start), undoL = C.undo.slice(0, start);
+    for (let j = start; j < T.length && p < n; j++) {
+      cp.push(p); ce.push(eat);
+      const undo = [];
+      undoL.push(undo);
+      if (eat) { eat = 0; continue; }
+      const r = step(T, j, st, p, undo);
+      p = r.p; eat = r.eat;
+    }
+    if (commit) cache = { T, st, p, eat, cp, ce, undo: undoL };
     return { st, p };
   }
 
   function update(transcriptText) {
-    const { st, p } = align(transcriptText);
-    states = st; pointer = p;
+    const { st, p } = align(transcriptText, true);
+    states = st.slice(); pointer = p;
     return { states: states.slice(), pointer, acc: accOf() };
   }
 
   /** Score a candidate transcript without committing it: higher = better fit (used to pick ASR alternatives). */
   function peek(transcriptText) {
-    const { st, p } = align(transcriptText);
+    const { st, p } = align(transcriptText, false);
     let ok = 0;
     for (const x of st) if (x === 'ok') ok++;
     return { ok, pointer: p, score: ok * 2 - (p - ok) };
   }
+
+  const accOf = () => (n ? Math.round(100 * states.filter(s => s === 'ok').length / n) : 0);
 
   function finish() {
     states = states.map(s => (s === 'ok' ? 'ok' : 'bad'));

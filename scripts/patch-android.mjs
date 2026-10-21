@@ -110,4 +110,32 @@ function read(file) {
   else log('ic_stat_noor.xml unchanged');
 }
 
+// ---------- native continuous speech plugin (NoorSpeech) ----------
+{
+  const dir = p('app/src/main/java/app/noor/quran');
+  const main = resolve(dir, 'MainActivity.java');
+  const src = read(resolve(root, 'scripts/android/NoorSpeechPlugin.java'));
+  const dst = resolve(dir, 'NoorSpeechPlugin.java');
+  if (!existsSync(dst) || readFileSync(dst, 'utf8') !== src) { writeFileSync(dst, src); log('wrote NoorSpeechPlugin.java'); }
+  const act = read(main);
+  if (!act.includes('registerPlugin(NoorSpeechPlugin.class)')) {
+    if (!/class MainActivity extends BridgeActivity/.test(act)) fail('MainActivity anchor not found');
+    if (/onCreate\s*\(/.test(act)) fail('MainActivity already has onCreate; add registerPlugin manually');
+    writeFileSync(main, `package app.noor.quran;
+
+import android.os.Bundle;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(NoorSpeechPlugin.class);
+        super.onCreate(savedInstanceState);
+    }
+}
+`);
+    log('MainActivity: registered NoorSpeechPlugin');
+  }
+}
+
 log('done');

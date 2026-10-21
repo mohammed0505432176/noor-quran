@@ -242,35 +242,36 @@ export default {
 
       const noVoice = engine === 'device' && voiceLike && support === 'none';
       const fsCtl = `<button class="icon-btn rc-fsbtn" id="rc-fsm" aria-label="تصغير خط التسميع">أ<small>−</small></button><button class="icon-btn rc-fsbtn" id="rc-fsp" aria-label="تكبير خط التسميع">أ<small>+</small></button>`;
+      const centerBtn = mode === 'hide'
+        ? `<button class="btn rc-okbtn" id="rc-ok">${icon('check', 18)} تذكرتها</button>`
+        : (noVoice ? '<span></span>' : `<button class="mic-btn rc-mic" id="rc-mic" aria-label="تشغيل الميكروفون">${icon('mic', 30)}</button>`);
       el.innerHTML = header(MODE_TITLE[mode], { actions: fsCtl }) + `
-        <div class="card tight">
-          <div class="row" style="justify-content:space-between;align-items:center">
-            <div><span class="muted small">${esc(surahName(s))} · ${N(from)}–${N(to)}</span></div>
-            <div class="score" id="rc-score">٠٪</div>
-          </div>
-          <div class="progress mt"><i id="rc-prog" style="width:0%"></i></div>
-        </div>
         ${noVoice ? `<div class="card"><p>التعرف على الصوت غير متاح على هذا الجهاز أو المتصفح.</p><button class="btn block" id="rc-tohide">جرّب اختبار الحفظ (إخفاء)</button></div>` : ''}
+        <div class="rc-sub muted small">${esc(surahName(s))} · الآيات ${N(from)}–${N(to)}</div>
         <div class="mushaf-page rc-page${disp === 'full' ? ' rc-full' : ''}" id="rc-page" style="--rc-fs:${fs}px">
           ${showBanner ? `<div class="surah-banner">سورة ${esc(surahName(s))}</div>` : ''}
           ${showBasmala ? '<div class="basmala">بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ</div>' : ''}
           <div class="mushaf-text" id="rc-text">${body}</div>
         </div>
-        ${voiceLike && !noVoice ? `<div class="center mt"><button class="mic-btn" id="rc-mic" aria-label="تشغيل الميكروفون">${icon('mic', 34)}</button><p class="muted small" id="rc-status">اضغط على الميكروفون وابدأ التسميع</p>
-          ${mode === 'ai' ? `<div class="progress" id="rc-lvlw" style="max-width:200px;margin:8px auto 0"><i id="rc-lvl" style="width:0%;transition:none"></i></div>` : ''}</div>` : ''}
-        <div class="row mt" style="justify-content:center">
-          <button class="btn ghost sm" id="rc-hint">إظهار الكلمة التالية</button>
-          ${mode === 'hide' ? `<button class="btn ghost sm" id="rc-ok">تذكرتها ${icon('check', 16)}</button>` : ''}
-          <button class="btn sm" id="rc-end">إنهاء</button>
-        </div>
-        ${mode === 'hide' ? '<p class="muted small center mt">اضغط على أي مكان فارغ لكشف كلمته (تُحسب خطأ)، أو اضغط «تذكرتها» عند إتقان الآية التالية.</p>'
-          : '<p class="muted small center mt">تُكتب الكلمة على الصفحة عند نطقها صحيحة، والأخطاء تظهر بالأحمر — اضغط عليها لسماعها.</p>'}`;
+        ${mode === 'hide' ? '<p class="muted small center mt">اضغط على مكان أي كلمة لكشفها (تُحسب خطأ)، أو «تذكرتها» عند إتقان الآية التالية.</p>'
+          : '<p class="muted small center mt">تُكتب الكلمة عند نطقها صحيحة، والأخطاء بالأحمر — اضغط عليها لسماعها.</p>'}
+        <div class="rc-spacer"></div>
+        <div class="rc-dock" id="rc-dock">
+          <div class="rc-dock-top"><span class="small muted" id="rc-status">${voiceLike ? 'جارٍ تشغيل الميكروفون…' : 'تذكّر الآية التالية'}</span><b class="score" id="rc-score">٠٪</b></div>
+          <div class="progress rc-prog"><i id="rc-prog" style="width:0%"></i></div>
+          <div class="rc-dock-row">
+            <button class="btn ghost sm" id="rc-hint">${icon('eye', 16)} تلميح</button>
+            ${centerBtn}
+            <button class="btn sm" id="rc-end">إنهاء</button>
+          </div>
+        </div>`;
 
+      { const hd = $('.page-head', el); if (hd) hd.classList.add('sticky-head'); }
       const spans = $$('.word', el);
       const shown = new Array(total).fill(null);
       const pageEl = $('#rc-page', el);
       const scoreEl = $('#rc-score', el), progEl = $('#rc-prog', el), micEl = $('#rc-mic', el), statusEl = $('#rc-status', el);
-      const lvlEl = $('#rc-lvl', el);
+      const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
 
       const setFs = v => {
         fs = Math.max(FS_MIN, Math.min(FS_MAX, v));
@@ -295,41 +296,46 @@ export default {
         const lineTop = Math.round(r.top + window.scrollY);
         if (!force && lastLineTop !== null && Math.abs(lineTop - lastLineTop) < 8) return;   // same line
         lastLineTop = lineTop;
-        const target = window.innerHeight * 0.36;
-        if (!force && r.top > target - 40 && r.top < window.innerHeight * 0.6) return;
+        const target = window.innerHeight * 0.3;
+        if (!force && r.top > target - 40 && r.top < window.innerHeight * 0.55) return;
         const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         try { window.scrollTo({ top: Math.max(0, window.scrollY + r.top - target), behavior: reduce ? 'auto' : 'smooth' }); } catch (e) {}
       }
 
       let prevSt = new Array(total).fill('pending');
+      let prevPtr = -2;
       const ayahDone = new Set();
+      /** Repaint only what changed since the last update (cheap even for a whole surah). */
       function paint() {
         const st = effective();
         const ptr = st.indexOf('pending');
         let ok = 0, done = 0, newBad = false, newAyah = false;
-        spans.forEach((sp, i) => {
+        for (let i = 0; i < total; i++) {
           const x = st[i];
-          if (x !== prevSt[i]) {
-            sp.classList.toggle('w-ok', x === 'ok');
-            sp.classList.toggle('w-bad', x === 'bad');
-            sp.classList.toggle('w-pend', x === 'pending');
-            if (x === 'bad' && prevSt[i] !== 'bad') newBad = true;
-          }
-          sp.classList.toggle('w-cur', !finished && i === ptr);
-          const first = x === 'pending' && disp === 'first';
-          if (shown[i] !== first) {
-            shown[i] = first;
-            sp.textContent = first ? firstLetter(flat[i].w) : flat[i].w;
-            sp.classList.toggle('w-first', first);
-          }
           if (x === 'ok') ok++;
           if (x !== 'pending') done++;
-        });
-        groups.forEach(g => {
-          if (ayahDone.has(g.a)) return;
-          for (let k = g.start; k < g.end; k++) if (st[k] === 'pending') return;
-          ayahDone.add(g.a); newAyah = true;
-        });
+          if (x === prevSt[i]) continue;
+          const sp = spans[i];
+          sp.classList.toggle('w-ok', x === 'ok');
+          sp.classList.toggle('w-bad', x === 'bad');
+          sp.classList.toggle('w-pend', x === 'pending');
+          if (x === 'bad') newBad = true;
+          const first = x === 'pending' && disp === 'first';
+          if (shown[i] !== first) { shown[i] = first; sp.textContent = first ? firstLetter(flat[i].w) : flat[i].w; sp.classList.toggle('w-first', first); }
+          const g = groupOf[i];
+          if (x === 'pending') ayahDone.delete(g.a);
+          else if (!ayahDone.has(g.a)) {
+            let all = true;
+            for (let k = g.start; k < g.end; k++) if (st[k] === 'pending') { all = false; break; }
+            if (all) { ayahDone.add(g.a); newAyah = true; }
+          }
+        }
+        const curNow = finished ? -1 : ptr;
+        if (curNow !== prevPtr) {
+          if (prevPtr >= 0 && spans[prevPtr]) spans[prevPtr].classList.remove('w-cur');
+          if (curNow >= 0) spans[curNow].classList.add('w-cur');
+          prevPtr = curNow;
+        }
         prevSt = st;
         if (newBad || newAyah) haptic('light');      // no haptic per written word: only mistakes / ayah completion
         const acc = total ? Math.round(100 * ok / total) : 0;
@@ -338,10 +344,13 @@ export default {
         if (ptr !== curPtr) { curPtr = ptr; if (ptr >= 0) scrollToCurrent(); }
         return ptr;
       }
+      // first paint of "first letters" display
+      if (disp === 'first') for (let i = 0; i < total; i++) { shown[i] = true; spans[i].textContent = firstLetter(flat[i].w); spans[i].classList.add('w-first'); }
 
       function setListening(on) {
         listening = on;
         if (micEl) micEl.classList.toggle('live', on);
+        if (!on) setLevel(0);
         setStatus(on ? 'أسمعك… اقرأ الآن' : 'اضغط على الميكروفون وابدأ التسميع');
       }
       function stopListeningNow() { base = lastFull; if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; } setListening(false); }
@@ -372,6 +381,7 @@ export default {
         try {
           const stop = await startListening({
             pick: pickAlt,
+            onLevel: setLevel,
             onText: (text, isFinal) => {
               if (finished || my !== sess || !listening) return;
               lastFull = joinT(base, text);
@@ -444,7 +454,6 @@ export default {
         if (r) r.stop().then(b => { recBlob = b; recSecs = r.elapsed(); }).catch(() => {});
         if (aiCtl) { try { aiCtl.abort(); } catch (e) {} aiCtl = null; }
         inflight = 0; showBusy();
-        const lw = $('#rc-lvlw', el); if (lw) lw.hidden = true;
         setListening(false);
         base = lastFull;
         support = await speechSupport();
@@ -455,7 +464,7 @@ export default {
 
       async function toggleAi() {
         if (finished || ending || starting) return;
-        if (aiState === 'rec') { rec.pause(); aiState = 'paused'; listening = false; micEl.classList.remove('live'); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); if (lvlEl) lvlEl.style.width = '0%'; return; }
+        if (aiState === 'rec') { rec.pause(); aiState = 'paused'; listening = false; micEl.classList.remove('live'); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); setLevel(0); return; }
         if (aiState === 'paused') { rec.resume(); aiState = 'rec'; setListening(true); return; }
         starting = true;
         let r = null;
@@ -464,7 +473,7 @@ export default {
             chunkMs: 4500,
             vad: FAST_VAD,
             onChunk,
-            onLevel: v => { if (lvlEl) lvlEl.style.width = Math.round(v * 100) + '%'; },
+            onLevel: setLevel,
             onError: onRecError
           });
         } catch (e) { onRecError('error'); }
@@ -565,6 +574,11 @@ export default {
         if (mode === 'hide' && hst[i] === 'pending') { hst[i] = 'bad'; paint(); playWord(i); }
       });
       paint();
+      // jump to the first word and start listening right away (the «ابدأ» tap is the user gesture)
+      curPtr = effective().indexOf('pending');
+      requestAnimationFrame(() => { if (isLive()) scrollToCurrent(true); });
+      if (micEl && !noVoice) micEl.onclick();
+      else if (!voiceLike) setStatus('تذكّر الآية التالية ثم اضغط «تذكرتها»');
     }
 
     // ---------------- result ----------------
