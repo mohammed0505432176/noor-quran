@@ -13,6 +13,7 @@ import '@fontsource/tajawal/700.css';
 import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
+import './styles/mushaf.css';
 import { S, on } from './core/store.js';
 import { icon, celebrate, toast } from './ui.js';
 import { loadQuran } from './core/quran.js';

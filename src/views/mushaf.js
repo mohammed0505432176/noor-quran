@@ -1,7 +1,8 @@
-// Mushaf: index (surahs / juz / bookmarks) and the ayah reader with audio.
+// Mushaf: index (surahs / juz / bookmarks / pages) and the page-based reader with audio.
 import { esc, $, $$, toast, sheet, icon, ayahMark, header, N } from '../ui.js';
 import { S, markRead, setLast, isBookmarked, toggleBookmark, addReview } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, typeName, ayah, JUZ, SURAH_COUNT } from '../core/quran.js';
+import { PAGE_COUNT, pageOf, pageContent, pageFirst, side, quarterOf, quarterStartsOn, hizbLabel, juzOfPage } from '../core/pages.js';
 import * as audio from '../core/audio.js';
 import { loadTajweed, TAJWEED_LEGEND } from '../core/tajweed.js';
 
@@ -9,8 +10,8 @@ const BASMALA = 'بِسۡمِ ٱللَّهِ ٱلرَّحۡمَٰنِ ٱلرَّ
 const ORD = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع', 'العاشر', 'الحادي عشر', 'الثاني عشر', 'الثالث عشر', 'الرابع عشر', 'الخامس عشر', 'السادس عشر', 'السابع عشر', 'الثامن عشر', 'التاسع عشر', 'العشرون', 'الحادي والعشرون', 'الثاني والعشرون', 'الثالث والعشرون', 'الرابع والعشرون', 'الخامس والعشرون', 'السادس والعشرون', 'السابع والعشرون', 'الثامن والعشرون', 'التاسع والعشرون', 'الثلاثون'];
 const RATES = [0.75, 1, 1.25, 1.5];
 const reduced = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const AUTO_KEY = 'noor.autoread';
 const TJ_KEY = 'noor.tajweed';
+const clampP = p => Math.min(PAGE_COUNT, Math.max(1, p | 0));
 
 function readCounts() {
   const c = new Array(SURAH_COUNT + 1).fill(0);
@@ -25,8 +26,8 @@ function surahListHTML() {
   for (let s = 1; s <= SURAH_COUNT; s++) {
     const total = ayahCount(s), r = counts[s];
     const done = r >= total;
-    h += `<div class="list-item" data-go="mushaf/${s}"><div class="li-start"><span class="num-diamond">${N(s)}</span></div>` +
-      `<div class="li-main"><div>${esc(surahName(s))}</div><div class="li-sub">${typeName(s)} · ${N(total)} آية${r ? ` · مقروءة ${N(r)}` : ''}</div></div>` +
+    h += `<div class="list-item" data-go="mushaf/p${pageOf(s, 1)}"><div class="li-start"><span class="num-diamond">${N(s)}</span></div>` +
+      `<div class="li-main"><div>${esc(surahName(s))}</div><div class="li-sub">${typeName(s)} · ${N(total)} آية · ص ${N(pageOf(s, 1))}${r ? ` · مقروءة ${N(r)}` : ''}</div></div>` +
       `<div class="li-end">${done ? `<span class="gold">${icon('check', 20)}</span>` : ''}</div></div>`;
   }
   return h;
@@ -34,8 +35,8 @@ function surahListHTML() {
 
 function juzListHTML() {
   return JUZ.map(([s, a], i) =>
-    `<div class="list-item" data-go="mushaf/${s}?a=${a}"><div class="li-start"><span class="num-diamond">${N(i + 1)}</span></div>` +
-    `<div class="li-main"><div>الجزء ${ORD[i]}</div><div class="li-sub">يبدأ من سورة ${esc(surahName(s))} · الآية ${N(a)}</div></div></div>`).join('');
+    `<div class="list-item" data-go="mushaf/p${pageOf(s, a)}"><div class="li-start"><span class="num-diamond">${N(i + 1)}</span></div>` +
+    `<div class="li-main"><div>الجزء ${ORD[i]}</div><div class="li-sub">يبدأ من سورة ${esc(surahName(s))} · الآية ${N(a)} · ص ${N(pageOf(s, a))}</div></div></div>`).join('');
 }
 
 function bookmarksHTML() {
@@ -51,23 +52,37 @@ function bookmarksHTML() {
   }).join('');
 }
 
+function pagesTabHTML() {
+  return `<div class="card mb"><div class="muted small mb">اذهب إلى صفحة (١ – ${N(PAGE_COUNT)})</div>` +
+    `<div class="row" style="gap:8px"><input class="input" id="pgIn" type="number" inputmode="numeric" min="1" max="${PAGE_COUNT}" placeholder="رقم الصفحة" style="flex:1">` +
+    `<button class="btn" id="pgGo">اذهب</button></div></div>` +
+    `<div class="muted small mb">بدايات الأجزاء</div><div class="grid-2">` +
+    JUZ.map(([s, a], i) => `<button class="btn ghost" data-go="mushaf/p${pageOf(s, a)}">الجزء ${N(i + 1)} · ص ${N(pageOf(s, a))}</button>`).join('') + `</div>`;
+}
+
 function renderIndex(el) {
   const last = S.last && S.last.s >= 1 && S.last.s <= SURAH_COUNT ? S.last : null;
   const hero = last ? `<div class="card hero mb"><div class="muted small">متابعة القراءة</div>` +
-    `<h3 class="gold">سورة ${esc(surahName(last.s))} · الآية ${N(last.a)}</h3>` +
-    `<button class="btn" data-go="mushaf/${last.s}?a=${last.a}">${icon('book', 18)} تابع القراءة</button></div>` : '';
+    `<h3 class="gold">صفحة ${N(pageOf(last.s, last.a))} · سورة ${esc(surahName(last.s))}</h3>` +
+    `<button class="btn" data-go="mushaf/p${pageOf(last.s, last.a)}">${icon('book', 18)} تابع القراءة</button></div>` : '';
   el.innerHTML = header('المصحف', { actions: `<button class="icon-btn" data-go="search" aria-label="بحث">${icon('search')}</button>` }) +
     hero +
-    `<div class="seg mb"><button class="active" data-tab="s">السور</button><button data-tab="j">الأجزاء</button><button data-tab="b">العلامات</button></div>` +
+    `<div class="seg mb"><button class="active" data-tab="s">السور</button><button data-tab="j">الأجزاء</button><button data-tab="b">العلامات</button><button data-tab="p">الصفحات</button></div>` +
     `<div class="list" data-panel="s">${surahListHTML()}</div>` +
     `<div class="list" data-panel="j" hidden>${juzListHTML()}</div>` +
-    `<div data-panel="b" hidden>${bookmarksHTML()}</div>`;
+    `<div data-panel="b" hidden>${bookmarksHTML()}</div>` +
+    `<div data-panel="p" hidden>${pagesTabHTML()}</div>`;
 
   const onClick = e => {
     const tab = e.target.closest('[data-tab]');
     if (tab) {
       $$('[data-tab]', el).forEach(b => b.classList.toggle('active', b === tab));
       $$('[data-panel]', el).forEach(p => { p.hidden = p.dataset.panel !== tab.dataset.tab; });
+      return;
+    }
+    if (e.target.closest('#pgGo')) {
+      const n = Number($('#pgIn', el).value);
+      if (Number.isInteger(n) && n >= 1 && n <= PAGE_COUNT) location.hash = '#/mushaf/p' + n; else toast('أدخل رقمًا من ١ إلى ٦٠٤');
       return;
     }
     const rm = e.target.closest('[data-unbm]');
@@ -79,57 +94,172 @@ function renderIndex(el) {
       toast('أُزيلت العلامة');
     }
   };
+  const onKey = e => { if (e.key === 'Enter' && e.target.id === 'pgIn') $('#pgGo', el).click(); };
   el.addEventListener('click', onClick);
-  return () => el.removeEventListener('click', onClick);
+  el.addEventListener('keydown', onKey);
+  return () => { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey); };
 }
 
 // ---------------------------------------------------------------- reader
-async function renderReader(el, s, startAyah) {
-  const total = ayahCount(s);
-  const name = surahName(s);
-  const spans = [];
-  let text = '';
-  for (let n = 1; n <= total; n++) {
-    text += `<span class="ayah${S.read[s + ':' + n] ? ' read' : ''}" data-a="${n}">${esc(ayah(s, n))} ${ayahMark(n)}</span> `;
-  }
-  const navBtns = `<div class="row mt" style="justify-content:space-between">` +
-    (s > 1 ? `<button class="btn ghost" data-go="mushaf/${s - 1}">السورة السابقة</button>` : '<span></span>') +
-    (s < SURAH_COUNT ? `<button class="btn ghost" data-go="mushaf/${s + 1}">السورة التالية</button>` : '<span></span>') + `</div>`;
+const isWide = () => window.matchMedia && window.matchMedia('(min-width:900px)').matches;
+const pageSurahs = p => { const r = []; for (const g of pageContent(p)) if (!r.includes(g.s)) r.push(g.s); return r; };
+const pageTitle = p => pageSurahs(p).map(surahName).join(' · ');
 
-  let autoRead = false, tjOn = false;
+async function renderPages(el, page, focusS, focusA) {
+  let cur = clampP(page);
+  let shown = [];
+  let rubs = new Set();
+  let sel = null, playing = null;
+  let userStopped = false;
+  let dead = false, tafsirAbort = null, openSheet = null, hiTimer = null, animTimer = null, tjSeq = 0;
+  const tjCache = new Map();
+  let tjOn = false;
   try { tjOn = localStorage.getItem(TJ_KEY) === '1'; } catch (e) { /* ignore */ }
-  try { autoRead = localStorage.getItem(AUTO_KEY) === '1'; } catch (e) { /* ignore */ }
 
-  el.innerHTML = header(name, { back: 'mushaf', actions: `<button class="chip${tjOn ? ' active' : ''}" id="tjToggle" aria-pressed="${tjOn}">تجويد</button><button class="icon-btn" id="playAll" aria-label="استماع للسورة">${icon('play')}</button>` }) +
-    `<div class="row small muted mb" style="justify-content:space-between"><span>تعليم الآيات كمقروءة أثناء التمرير</span>` +
-    `<label class="switch"><input type="checkbox" id="autoRead"${autoRead ? ' checked' : ''}><span></span></label></div>` +
-    `<div class="tj-bar mb" id="tjBar" hidden><button class="chip" id="tjLegend">دليل الألوان</button><span class="small muted" id="tjState"></span></div>` +
-    `<div class="mushaf-page"><div class="surah-banner">سورة ${esc(name)} · ${typeName(s)} · آياتها ${N(total)}</div>` +
-    (s !== 1 && s !== 9 ? `<div class="basmala">${BASMALA}</div>` : '') +
-    `<div class="mushaf-text">${text}</div></div>` + navBtns +
+  const pagesFor = p => {
+    if (!isWide()) return [p];
+    const base = p % 2 ? p : p - 1;
+    return base + 1 <= PAGE_COUNT ? [base, base + 1] : [base];
+  };
+  const step = () => (isWide() ? 2 : 1);
+
+  const ayahInner = (s, a) => {
+    const html = tjOn && tjCache.get(s) && tjCache.get(s)[a - 1];
+    return (rubs.has(s + ':' + a) && s + a > 2 ? '<span class="rub">۞</span> ' : '') + (html || esc(ayah(s, a))) + ' ' + ayahMark(a);
+  };
+  const pageHTML = p => {
+    const segs = pageContent(p);
+    const first = pageFirst(p);
+    const qs = quarterStartsOn(p);
+    const hz = qs.length ? qs.map(x => hizbLabel(x.q)).join(' · ') : hizbLabel(quarterOf(first.s, first.a));
+    let body = '';
+    for (const g of segs) {
+      if (g.from === 1) {
+        body += `<div class="surah-banner">سورة ${esc(surahName(g.s))} · ${typeName(g.s)} · آياتها ${N(ayahCount(g.s))}</div>` +
+          (g.s !== 1 && g.s !== 9 ? `<div class="basmala">${BASMALA}</div>` : '');
+      }
+      let t = '';
+      for (let a = g.from; a <= g.to; a++) {
+        t += `<span class="ayah${S.read[g.s + ':' + a] ? ' read' : ''}" data-s="${g.s}" data-a="${a}">${ayahInner(g.s, a)}</span> `;
+      }
+      body += `<div class="mushaf-text">${t}</div>`;
+    }
+    return `<section class="mp-page page-${side(p)}" data-p="${p}">` +
+      `<div class="mp-top"><span class="mp-surah">${esc(pageTitle(p))}</span><span class="mp-hizb">${esc(hz)}</span><span class="mp-juz">الجزء ${ORD[juzOfPage(p) - 1]}</span></div>` +
+      `<div class="mp-body">${body}</div>` +
+      `<div class="mp-foot"><span class="mp-num">${N(p)}</span><span class="mp-side">${side(p) === 'right' ? 'صفحة يمنى' : 'صفحة يسرى'}</span></div></section>`;
+  };
+  const progressHTML = () => `<div class="mp-progress"><i style="width:${(cur / PAGE_COUNT * 100).toFixed(2)}%"></i></div>`;
+  const bookHTML = () => `<div class="mp-book${shown.length > 1 ? ' spread' : ''}">${shown.map(pageHTML).join('')}</div>`;
+  const navHTML = () => {
+    const lo = shown[0], hi = shown[shown.length - 1];
+    return `<div class="mp-nav"><button class="icon-btn mp-prev" aria-label="الصفحة السابقة"${lo <= 1 ? ' disabled' : ''}>${icon('back')}</button>` +
+      `<button class="chip mp-goto">صفحة ${N(cur)} من ${N(PAGE_COUNT)}</button>` +
+      `<button class="icon-btn mp-next" aria-label="الصفحة التالية" style="transform:scaleX(-1)"${hi >= PAGE_COUNT ? ' disabled' : ''}>${icon('back')}</button></div>`;
+  };
+
+  shown = pagesFor(cur);
+  rubs = new Set(shown.flatMap(p => quarterStartsOn(p).map(x => x.s + ':' + x.a)));
+
+  el.innerHTML = header(pageTitle(cur), { back: 'mushaf', actions: `<button class="chip${tjOn ? ' active' : ''}" id="tjToggle" aria-pressed="${tjOn}">تجويد</button><button class="icon-btn mp-goto-ic" id="gotoIc" aria-label="اذهب إلى صفحة">${icon('search')}</button><button class="icon-btn" id="playAll" aria-label="استماع للصفحة">${icon('play')}</button>` }) +
+    `<div class="tj-bar mb" id="tjBar"${tjOn ? '' : ' hidden'}><button class="chip" id="tjLegend">دليل الألوان</button><span class="small muted" id="tjState"></span></div>` +
+    progressHTML() + bookHTML() + navHTML() +
+    `<div class="center mt"><button class="btn ghost" id="markPage">${icon('check', 18)} تعليم الصفحة كمقروءة</button></div>` +
     `<div class="player-bar" id="playerBar"></div>`;
 
   $('.page-head', el).classList.add('sticky-head');
-  const textEl = $('.mushaf-text', el);
-  $$('.ayah', textEl).forEach(sp => { spans[+sp.dataset.a] = sp; });
   const bar = $('#playerBar', el);
   const playBtn = $('#playAll', el);
+  const tjBtn = $('#tjToggle', el), tjBar = $('#tjBar', el), tjState = $('#tjState', el);
+  const spanOf = (s, a) => $(`.ayah[data-s="${s}"][data-a="${a}"]`, el);
+  const onShown = (s, a) => shown.includes(pageOf(s, a));
 
-  let sel = 0, dead = false, tafsirAbort = null, openSheet = null, hiTimer = null, lastTimer = null;
-  const timers = new Map();
-  const visible = new Set();
+  const select = o => {
+    const old = $('.ayah.selected', el); if (old) old.classList.remove('selected');
+    sel = o;
+    const sp = o && spanOf(o.s, o.a); if (sp) sp.classList.add('selected');
+  };
+  const mark = o => {
+    const old = $('.ayah.playing', el); if (old) old.classList.remove('playing');
+    playing = o;
+    const sp = o && spanOf(o.s, o.a); if (sp) sp.classList.add('playing');
+  };
 
-  const select = n => {
-    if (sel && spans[sel]) spans[sel].classList.remove('selected');
-    sel = n; if (n && spans[n]) spans[n].classList.add('selected');
+  // ---- tajweed colours
+  const repaint = () => {
+    $$('.ayah', el).forEach(sp => { sp.innerHTML = ayahInner(+sp.dataset.s, +sp.dataset.a); });
   };
-  const scrollTo = (n, smooth = true) => {
-    const sp = spans[n]; if (!sp) return;
-    sp.scrollIntoView({ block: 'center', behavior: smooth && !reduced() ? 'smooth' : 'auto' });
+  const applyTj = async () => {
+    const my = ++tjSeq;
+    const need = [...new Set(shown.flatMap(pageSurahs))].filter(s => !tjCache.has(s));
+    if (!need.length) { repaint(); tjState.textContent = ''; const b0 = $('.mp-book', el); if (b0) b0.classList.remove('tj-load'); return; }
+    const book = $('.mp-book', el);
+    book.classList.add('tj-load');
+    tjState.textContent = 'جارٍ تحميل الألوان…';
+    try {
+      for (const s of need) {
+        const html = await loadTajweed(s);
+        if (dead) return;
+        if (html.length < ayahCount(s)) { if (my !== tjSeq) return; throw new Error('short'); }
+        tjCache.set(s, html);
+        if (my !== tjSeq) return;
+      }
+      repaint();
+      tjState.textContent = '';
+    } catch (e) {
+      if (dead || my !== tjSeq) return;
+      tjOn = false;
+      tjBtn.classList.remove('active'); tjBtn.setAttribute('aria-pressed', 'false');
+      tjBar.hidden = true; tjState.textContent = '';
+      repaint();
+      toast('تعذّر تحميل ألوان التجويد');
+    } finally {
+      if (my === tjSeq) { const b = $('.mp-book', el); if (b) b.classList.remove('tj-load'); }
+    }
   };
+  const setTj = on => {
+    tjOn = on;
+    tjBtn.classList.toggle('active', on);
+    tjBtn.setAttribute('aria-pressed', String(on));
+    tjBar.hidden = !on;
+    try { localStorage.setItem(TJ_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+    if (!on) { tjSeq++; tjState.textContent = ''; repaint(); return; }
+    applyTj();
+  };
+  const openLegend = () => {
+    sheet(`<h3 class="gold center">دليل ألوان التجويد</h3><div class="tj-legend">` +
+      TAJWEED_LEGEND.map(l => `<div class="tj-legend-item"><span class="tj-chip tj-${l.cls}">نموذج</span>` +
+        `<div><b>${esc(l.name)}</b><small>${esc(l.desc)}</small></div></div>`).join('') + `</div>`);
+  };
+
+  // ---- turning
+  const show = (p, dir) => {
+    cur = clampP(p);
+    shown = pagesFor(cur);
+    rubs = new Set(shown.flatMap(x => quarterStartsOn(x).map(q => q.s + ':' + q.a)));
+    const bar0 = $('.mp-progress i', el); if (bar0) bar0.style.width = (cur / PAGE_COUNT * 100).toFixed(2) + '%';
+    $('.mp-book', el).outerHTML = bookHTML();
+    const pv = $('.mp-prev', el), nx = $('.mp-next', el), go = $('.mp-goto', el);
+    if (pv) pv.disabled = shown[0] <= 1;
+    if (nx) nx.disabled = shown[shown.length - 1] >= PAGE_COUNT;
+    if (go) go.textContent = `صفحة ${N(cur)} من ${N(PAGE_COUNT)}`;
+    $('.page-title', el).textContent = pageTitle(cur);
+    if (dir && !reduced()) {
+      $$('.mp-page', el).forEach(pg => pg.classList.add(dir === 'prev' ? 'turn-prev' : 'turn-next'));
+      clearTimeout(animTimer);
+      animTimer = setTimeout(() => $$('.mp-page', el).forEach(pg => pg.classList.remove('turn-next', 'turn-prev')), 700);
+    }
+    if (sel) select(sel);
+    if (playing) mark(playing);
+    try { history.replaceState(null, '', '#/mushaf/p' + cur); } catch (e) { /* ignore */ }
+    const f = pageFirst(cur); setLast(f.s, f.a);
+    window.scrollTo(0, 0);
+    if (tjOn) applyTj();
+  };
+  const goNext = () => { const hi = shown[shown.length - 1]; if (hi < PAGE_COUNT) show(hi + 1, 'next'); };
+  const goPrev = () => { const lo = shown[0]; if (lo > 1) show(lo - 1, 'prev'); };
 
   // ---- audio ui
-  let playing = null;
   const rateIdx = () => Math.max(0, RATES.indexOf(audio.getRate()));
   const drawBar = () => {
     const c = audio.current();
@@ -142,31 +272,38 @@ async function renderReader(el, s, startAyah) {
       `<button class="icon-btn" data-pl="stop" aria-label="إيقاف">${icon('stop')}</button>` +
       `<button class="chip" data-pl="rate">${N(audio.getRate())}×</button></div></div>`;
   };
-  const mark = a => {
-    if (playing && spans[playing]) spans[playing].classList.remove('playing');
-    playing = a;
-    if (a && spans[a]) spans[a].classList.add('playing');
-  };
   const unsub = audio.onAudio(ev => {
     if (dead) return;
     if (ev.type === 'error') {
-      bar.classList.remove('show'); mark(0); playBtn.innerHTML = icon('play');
+      bar.classList.remove('show'); mark(null); playBtn.innerHTML = icon('play');
       toast('تعذّر تشغيل الصوت، تأكد من الإنترنت');
       return;
     }
-    if (ev.type === 'stop') { bar.classList.remove('show'); mark(0); playBtn.innerHTML = icon('play'); return; }
-    if (ev.s !== s) return;
+    if (ev.type === 'stop') {
+      const was = userStopped; userStopped = false;
+      bar.classList.remove('show'); mark(null); playBtn.innerHTML = icon('play');
+      const s = ev.s;
+      if (!was && s >= 1 && s < SURAH_COUNT && ev.a === ayahCount(s)) {
+        const np = pageOf(s + 1, 1);
+        if (np >= shown[0] && np <= shown[shown.length - 1] + 1) audio.playRange(s + 1, 1, ayahCount(s + 1));
+      }
+      return;
+    }
     bar.classList.add('show');
-    if (ev.type === 'ayah') { mark(ev.a); scrollTo(ev.a); }
+    if (ev.type === 'ayah' && ev.s >= 1) {
+      if (playing && onShown(playing.s, playing.a) && !onShown(ev.s, ev.a)) {
+        const np = pageOf(ev.s, ev.a);
+        show(np, np < shown[0] ? 'prev' : 'next');
+      }
+      mark({ s: ev.s, a: ev.a });
+    }
     playBtn.innerHTML = icon(audio.isPlaying() ? 'pause' : 'play');
     drawBar();
   });
-
-  const startPlay = from => audio.playRange(s, from, total);
   const toggleAll = () => {
-    if (audio.current() && audio.current().s === s) { audio.isPlaying() ? audio.pause() : audio.resume(); return; }
-    // start from the selected ayah, otherwise from the first ayah on screen (never jump back to ayah 1)
-    startPlay(sel || (visible.size ? Math.min(...visible) : (S.last && S.last.s === s ? S.last.a : 1)));
+    if (audio.current()) { audio.isPlaying() ? audio.pause() : audio.resume(); return; }
+    const st = sel && onShown(sel.s, sel.a) ? sel : pageFirst(shown[0]);
+    audio.playRange(st.s, st.a, ayahCount(st.s));
   };
 
   // ---- ayah sheet
@@ -178,7 +315,7 @@ async function renderReader(el, s, startAyah) {
       ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok;
     } catch (e) { return false; }
   };
-  const showTafsir = async (box, a) => {
+  const showTafsir = async (box, s, a) => {
     box.style.display = 'block';
     box.innerHTML = '<span class="muted">جارٍ تحميل التفسير…</span>';
     if (tafsirAbort) tafsirAbort.abort();
@@ -195,7 +332,8 @@ async function renderReader(el, s, startAyah) {
       box.innerHTML = '<span class="muted">تعذّر تحميل التفسير، تأكد من الإنترنت وحاول مرة أخرى.</span>';
     }
   };
-  const openAyahSheet = a => {
+  const openAyahSheet = (s, a) => {
+    const name = surahName(s);
     const bm = isBookmarked(s, a);
     const html = `<div class="center mb"><div class="small muted mb">سورة ${esc(name)} · الآية ${N(a)}</div>` +
       `<div class="quran" style="max-height:20vh;overflow:auto">${esc(ayah(s, a))}</div></div>` +
@@ -209,21 +347,23 @@ async function renderReader(el, s, startAyah) {
       `<button class="btn ghost" data-act="tafsir">${icon('book', 18)} التفسير</button>` +
       `<button class="btn ghost" data-act="copy">نسخ</button></div>` +
       `<div class="card tight mt" id="tafsirBox" style="display:none"></div>`;
+    if (openSheet) openSheet.close();
     const sh = openSheet = sheet(html, { onClose: () => { if (tafsirAbort) tafsirAbort.abort(); if (openSheet === sh) openSheet = null; } });
     sh.addEventListener('click', async e => {
       const b = e.target.closest('[data-act]'); if (!b) return;
       const act = b.dataset.act;
       if (act === 'close') { sh.close(); return; }
-      if (act === 'play') { sh.close(); audio.playRange(s, a, total); return; }
+      if (act === 'play') { sh.close(); audio.playRange(s, a, ayahCount(s)); return; }
       if (act === 'read') {
         const r = markRead(s, a);
-        spans[a].classList.add('read');
+        const sp = spanOf(s, a); if (sp) sp.classList.add('read');
+        { const f = pageFirst(cur); setLast(f.s, f.a); }
         toast(r.counted ? '+٢ نقطة' : 'سُجّلت قراءتها اليوم مسبقًا');
         sh.close(); return;
       }
       if (act === 'bm') { const on = toggleBookmark(s, a); toast(on ? 'تمت إضافة العلامة' : 'أُزيلت العلامة'); sh.close(); return; }
       if (act === 'review') { toast(addReview(s, a, a) ? 'أُضيفت للمراجعة' : 'الآية موجودة في المراجعة مسبقًا'); sh.close(); return; }
-      if (act === 'tafsir') { showTafsir($('#tafsirBox', sh), a); return; }
+      if (act === 'tafsir') { showTafsir($('#tafsirBox', sh), s, a); return; }
       if (act === 'copy') {
         const ok = await copyText(`${ayah(s, a)} ﴿${N(a)}﴾ [سورة ${name}]`);
         toast(ok ? 'تم النسخ' : 'تعذّر النسخ'); sh.close();
@@ -231,52 +371,40 @@ async function renderReader(el, s, startAyah) {
     });
   };
 
-  // ---- tajweed colours
-  const plain = [];
-  for (let n = 1; n <= total; n++) plain[n] = esc(ayah(s, n));
-  const tjBtn = $('#tjToggle', el), tjBar = $('#tjBar', el), tjState = $('#tjState', el);
-  let tjSeq = 0;
-  const paint = html => {
-    for (let n = 1; n <= total; n++) {
-      const sp = spans[n]; if (!sp) continue;
-      sp.innerHTML = `${html ? html[n - 1] : plain[n]} ${ayahMark(n)}`;
-    }
+  // ---- go to page
+  const openGoto = () => {
+    const html = `<h3 class="gold center mb">اذهب إلى صفحة</h3>` +
+      `<div class="row mb" style="gap:8px"><input class="input" id="gpIn" type="number" inputmode="numeric" min="1" max="${PAGE_COUNT}" placeholder="١ – ${N(PAGE_COUNT)}" style="flex:1">` +
+      `<button class="btn" data-gp="go">اذهب</button></div>` +
+      `<div class="muted small mb">الأجزاء</div><div class="row" style="flex-wrap:wrap;gap:6px">` +
+      JUZ.map(([s, a], i) => `<button class="chip" data-gp="${pageOf(s, a)}">${N(i + 1)}</button>`).join('') + `</div>`;
+    if (openSheet) openSheet.close();
+    const sh = openSheet = sheet(html, { onClose: () => { if (openSheet === sh) openSheet = null; } });
+    const jump = p => { sh.close(); show(p, p >= cur ? 'next' : 'prev'); };
+    const input = $('#gpIn', sh);
+    const goInput = () => {
+      const n = Number(input.value);
+      if (Number.isInteger(n) && n >= 1 && n <= PAGE_COUNT) jump(n); else toast('أدخل رقمًا من ١ إلى ٦٠٤');
+    };
+    sh.addEventListener('click', e => {
+      const b = e.target.closest('[data-gp]'); if (!b) return;
+      if (b.dataset.gp === 'go') goInput(); else jump(+b.dataset.gp);
+    });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') goInput(); });
   };
-  const setTj = async on => {
-    const my = ++tjSeq;
-    tjOn = on;
-    tjBtn.classList.toggle('active', on);
-    tjBtn.setAttribute('aria-pressed', String(on));
-    tjBar.hidden = !on;
-    try { localStorage.setItem(TJ_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
-    if (!on) { tjState.textContent = ''; paint(null); return; }
-    textEl.classList.add('tj-load');
-    tjState.textContent = 'جارٍ تحميل الألوان…';
-    try {
-      const html = await loadTajweed(s);
-      if (dead || my !== tjSeq) return;
-      if (html.length < total) throw new Error('short');
-      paint(html);
-      tjState.textContent = '';
-    } catch (e) {
-      if (dead || my !== tjSeq) return;
-      tjOn = false;
-      tjBtn.classList.remove('active'); tjBtn.setAttribute('aria-pressed', 'false');
-      tjBar.hidden = true; tjState.textContent = '';
-      paint(null);
-      toast('تعذّر تحميل ألوان التجويد');
-    } finally {
-      if (my === tjSeq) textEl.classList.remove('tj-load');
-    }
-  };
-  const openLegend = () => {
-    sheet(`<h3 class="gold center">دليل ألوان التجويد</h3><div class="tj-legend">` +
-      TAJWEED_LEGEND.map(l => `<div class="tj-legend-item"><span class="tj-chip tj-${l.cls}">نموذج</span>` +
-        `<div><b>${esc(l.name)}</b><small>${esc(l.desc)}</small></div></div>`).join('') + `</div>`);
-  };
-  if (tjOn) setTj(true);
 
-  // ---- events (delegated)
+  // ---- mark page read
+  const markPage = () => {
+    let n = 0, counted = 0;
+    for (const p of shown) for (const g of pageContent(p)) for (let a = g.from; a <= g.to; a++) {
+      const r = markRead(g.s, a); n++; if (r.counted) counted++;
+      const sp = spanOf(g.s, a); if (sp) sp.classList.add('read');
+    }
+    { const f = pageFirst(cur); setLast(f.s, f.a); }
+    toast(counted ? `عُلّمت ${N(n)} آية كمقروءة` : 'سُجّلت قراءتها اليوم مسبقًا');
+  };
+
+  // ---- events
   const onClick = e => {
     const pl = e.target.closest('[data-pl]');
     if (pl) {
@@ -284,92 +412,99 @@ async function renderReader(el, s, startAyah) {
       if (k === 'toggle') audio.isPlaying() ? audio.pause() : audio.resume();
       else if (k === 'prev') audio.prev();
       else if (k === 'next') audio.next();
-      else if (k === 'stop') audio.stop();
+      else if (k === 'stop') { userStopped = true; audio.stop(); }
       else if (k === 'rate') { audio.setRate(RATES[(rateIdx() + 1) % RATES.length]); drawBar(); }
       return;
     }
     if (e.target.closest('#playAll')) { toggleAll(); return; }
     if (e.target.closest('#tjToggle')) { setTj(!tjOn); return; }
     if (e.target.closest('#tjLegend')) { openLegend(); return; }
+    if (e.target.closest('#markPage')) { markPage(); return; }
+    if (e.target.closest('.mp-next')) { goNext(); return; }
+    if (e.target.closest('.mp-prev')) { goPrev(); return; }
+    if (e.target.closest('.mp-goto') || e.target.closest('#gotoIc')) { openGoto(); return; }
     const sp = e.target.closest('.ayah');
-    if (sp && textEl.contains(sp)) { const a = +sp.dataset.a; select(a); openAyahSheet(a); }
+    if (sp && el.contains(sp)) { const s = +sp.dataset.s, a = +sp.dataset.a; select({ s, a }); openAyahSheet(s, a); }
   };
+  const onKey = e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented || openSheet) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.key === 'ArrowLeft') goNext();
+    else if (e.key === 'ArrowRight') goPrev();
+  };
+  let tx = 0, ty = 0, tracking = false;
+  const onTs = e => {
+    const t = e.touches && e.touches[0];
+    tracking = !!(t && e.touches.length === 1 && e.target.closest && e.target.closest('.mp-book'));
+    if (tracking) { tx = t.clientX; ty = t.clientY; }
+  };
+  const onTe = e => {
+    if (!tracking) return;
+    tracking = false;
+    const t = e.changedTouches && e.changedTouches[0]; if (!t) return;
+    const dx = t.clientX - tx, dy = t.clientY - ty;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { if (dx > 0) goNext(); else goPrev(); }
+  };
+  const mq = window.matchMedia ? window.matchMedia('(min-width:900px)') : null;
+  const onMq = () => show(cur, null);
   el.addEventListener('click', onClick);
-  const onAuto = e => {
-    autoRead = e.target.checked;
-    try { localStorage.setItem(AUTO_KEY, autoRead ? '1' : '0'); } catch (err) { /* ignore */ }
-    if (!autoRead) { timers.forEach(clearTimeout); timers.clear(); }
-    else if (!('IntersectionObserver' in window)) toast('الميزة غير مدعومة على هذا الجهاز');
-  };
-  $('#autoRead', el).addEventListener('change', onAuto);
+  document.addEventListener('keydown', onKey);
+  el.addEventListener('touchstart', onTs, { passive: true });
+  el.addEventListener('touchend', onTe, { passive: true });
+  if (mq) { if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq); }
 
-  // ---- scroll tracking (last position + optional auto mark)
-  let io = null;
-  if ('IntersectionObserver' in window) {
-    io = new IntersectionObserver(entries => {
-      for (const en of entries) {
-        const a = +en.target.dataset.a;
-        if (en.isIntersecting && en.intersectionRatio >= 0.6) {
-          visible.add(a);
-          if (autoRead && !timers.has(a) && !en.target.classList.contains('read')) {
-            timers.set(a, setTimeout(() => {
-              timers.delete(a);
-              if (dead || !visible.has(a)) return;
-              markRead(s, a);
-              spans[a].classList.add('read');
-            }, 2500));
-          }
-        } else {
-          visible.delete(a);
-          if (timers.has(a)) { clearTimeout(timers.get(a)); timers.delete(a); }
-        }
-      }
-      clearTimeout(lastTimer);
-      lastTimer = setTimeout(() => {
-        if (dead || !visible.size) return;
-        setLast(s, Math.min(...visible));
-      }, 1500);
-    }, { threshold: [0, 0.6, 1] });
-    for (let n = 1; n <= total; n++) io.observe(spans[n]);
-  }
-
-  // ---- initial scroll
-  if (startAyah >= 1 && startAyah <= total) {
-    select(startAyah);
-    requestAnimationFrame(() => scrollTo(startAyah, true));
-    hiTimer = setTimeout(() => { if (!openSheet && sel === startAyah) select(0); }, 3000);
+  if (tjOn) applyTj();
+  if (focusS) {
+    select({ s: focusS, a: focusA });
+    hiTimer = setTimeout(() => { if (!openSheet && sel && sel.s === focusS && sel.a === focusA) select(null); }, 3000);
+    { const f = pageFirst(cur); setLast(f.s, f.a); }
+  } else {
+    const f = pageFirst(cur); setLast(f.s, f.a);
   }
 
   return () => {
     dead = true;
+    userStopped = true;
     tjSeq++;
     unsub();
     audio.stop();
-    if (io) io.disconnect();
-    timers.forEach(clearTimeout); timers.clear();
-    clearTimeout(hiTimer); clearTimeout(lastTimer);
+    clearTimeout(hiTimer); clearTimeout(animTimer);
     if (tafsirAbort) tafsirAbort.abort();
     if (openSheet) openSheet.close();
     el.removeEventListener('click', onClick);
+    document.removeEventListener('keydown', onKey);
+    el.removeEventListener('touchstart', onTs);
+    el.removeEventListener('touchend', onTe);
+    if (mq) { if (mq.removeEventListener) mq.removeEventListener('change', onMq); else if (mq.removeListener) mq.removeListener(onMq); }
   };
 }
 
 export default {
   async render(el, { id, q }) {
+    const pm = /^p(\d+)$/.exec(id || '');
     const s = parseInt(id, 10);
-    if (!(s >= 1 && s <= SURAH_COUNT)) {
+    const isSurah = !pm && s >= 1 && s <= SURAH_COUNT;
+    if (!pm && !isSurah) {
       try { await loadQuran(); } catch (e) {
         el.innerHTML = header('المصحف') + `<div class="card empty"><p>تعذّر تحميل نص المصحف.</p><button class="btn" data-go="mushaf">إعادة المحاولة</button></div>`;
         return;
       }
       return renderIndex(el);
     }
+    const hash0 = location.hash;
     el.innerHTML = header('المصحف', { back: 'mushaf' }) + `<div class="card empty"><p class="muted">جارٍ تحميل المصحف…</p></div>`;
-    try { await loadQuran(); } catch (e) {
-      el.innerHTML = header('المصحف', { back: 'mushaf' }) + `<div class="card empty"><p>تعذّر تحميل نص المصحف.</p><button class="btn" data-go="mushaf/${s}">إعادة المحاولة</button></div>`;
+    let loadErr = false;
+    try { await loadQuran(); } catch (e) { loadErr = true; }
+    if (location.hash !== hash0) return;
+    if (loadErr) {
+      el.innerHTML = header('المصحف', { back: 'mushaf' }) + `<div class="card empty"><p>تعذّر تحميل نص المصحف.</p><button class="btn" data-go="mushaf/${esc(id)}">إعادة المحاولة</button></div>`;
       return;
     }
-    const a = parseInt(q && q.get('a'), 10) || 0;
-    return renderReader(el, s, a);
+    if (pm) return renderPages(el, clampP(parseInt(pm[1], 10)), 0, 0);
+    const raw = parseInt(q && q.get('a'), 10);
+    const hasA = raw >= 1;
+    const a = Math.min(ayahCount(s), hasA ? raw : 1);
+    return renderPages(el, pageOf(s, a), hasA ? s : 0, hasA ? a : 0);
   }
 };
