@@ -16,7 +16,7 @@
 // POST JSON { action, ... }
 //   status                                       -> { ok, providers, stt, tajweed, limits, used }
 //   chat       { messages, mode:'fast'|'smart' } -> { text, provider, model }
-//   transcribe { audio(base64), mime, prompt }   -> { text, provider, model }
+//   transcribe { audio(base64), mime, prompt, fast? } -> { text, provider, model }
 //   tajweed    { audio, mime, s, from, to, text } -> { score, summary, mistakes, tajweed, advice, provider }
 //   family     { op:"create", name, member, stats } | { op:"join", code, member, stats } -> { ok, code, name, owner }
 //              { op:"sync", stats, member? } | { op:"leave" } -> { ok }
@@ -257,7 +257,9 @@ async function transcribe(body: any) {
   if (a.bytes.length < 1500) return json(200, { text: "", provider: "none" });
   const prompt = String(body.prompt ?? "").slice(0, 600);
   if (GROQ_KEY) {
-    for (const model of list("GROQ_STT_MODELS", ["whisper-large-v3", "whisper-large-v3-turbo"])) {
+    // fast=true (live chunks): turbo first for lower latency; otherwise the most accurate model first.
+    const sttModels = list("GROQ_STT_MODELS", ["whisper-large-v3", "whisper-large-v3-turbo"]);
+    for (const model of body.fast === true ? [...sttModels].reverse() : sttModels) {
       if (cooling("stt:" + model)) continue;
       const form = new FormData();
       form.append("file", new Blob([a.bytes as BlobPart], { type: a.mime }), "chunk." + extFor(a.mime));

@@ -92,7 +92,8 @@ export function createMatcher(expectedWords) {
 
   const accOf = () => (n ? Math.round(100 * states.filter(s => s === 'ok').length / n) : 0);
 
-  function update(transcriptText) {
+  /** Pure alignment of a transcript against the expected words (does not touch matcher state). */
+  function align(transcriptText) {
     const T = norm(transcriptText || '').split(' ').filter(Boolean);
     const st = new Array(n).fill('pending');
     let p = 0;
@@ -115,8 +116,21 @@ export function createMatcher(expectedWords) {
       }
       // otherwise: filler/unrelated word, ignore
     }
+    return { st, p };
+  }
+
+  function update(transcriptText) {
+    const { st, p } = align(transcriptText);
     states = st; pointer = p;
     return { states: states.slice(), pointer, acc: accOf() };
+  }
+
+  /** Score a candidate transcript without committing it: higher = better fit (used to pick ASR alternatives). */
+  function peek(transcriptText) {
+    const { st, p } = align(transcriptText);
+    let ok = 0;
+    for (const x of st) if (x === 'ok') ok++;
+    return { ok, pointer: p, score: ok * 2 - (p - ok) };
   }
 
   function finish() {
@@ -125,5 +139,41 @@ export function createMatcher(expectedWords) {
     return { states: states.slice(), acc: accOf(), missed: display.filter((_, i) => states[i] === 'bad') };
   }
 
-  return { update, finish };
+  return { update, peek, finish };
+}
+
+/**
+ * Stabilises live (interim) matcher results so revised hypotheses never "un-write" confirmed words.
+ *   const tr = createLockedTracker(n, { confirm: 2 });
+ *   tr.apply(matcherStates, { final }) -> { states, pointer, acc }
+ * - 'ok' is shown immediately; once ok for >= confirm consecutive updates (or in a final result) it is locked.
+ * - 'bad' is only shown after >= confirm consecutive updates (or in a final result), so transient interim
+ *   garbage never flashes red. A shown 'bad' may still be upgraded to 'ok' later.
+ */
+export function createLockedTracker(n, { confirm = 2 } = {}) {
+  const lockedOk = new Array(n).fill(false);
+  const shownBad = new Array(n).fill(false);
+  const okRun = new Array(n).fill(0), badRun = new Array(n).fill(0);
+  let last = new Array(n).fill('pending');
+
+  function apply(states, { final = false } = {}) {
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const s = states[i];
+      if (s === 'ok') { okRun[i]++; badRun[i] = 0; }
+      else if (s === 'bad') { badRun[i]++; okRun[i] = 0; }
+      else { okRun[i] = 0; badRun[i] = 0; }
+      if (s === 'ok' && (final || okRun[i] >= confirm)) lockedOk[i] = true;
+      if (s === 'bad' && (final || badRun[i] >= confirm)) shownBad[i] = true;
+      if (lockedOk[i] || s === 'ok') out[i] = 'ok';
+      else if (shownBad[i]) out[i] = 'bad';
+      else out[i] = 'pending';
+    }
+    last = out;
+    let pointer = 0, ok = 0;
+    out.forEach((x, i) => { if (x !== 'pending') pointer = i + 1; if (x === 'ok') ok++; });
+    return { states: out.slice(), pointer, acc: n ? Math.round(100 * ok / n) : 0 };
+  }
+
+  return { apply, get states() { return last.slice(); }, isLocked: i => lockedOk[i] };
 }

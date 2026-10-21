@@ -32,7 +32,8 @@ export function recorderSupported() {
 
 const wavBlob = bytes => new Blob([bytes], { type: 'audio/wav' });
 
-export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLevel = () => {}, onError = () => {} } = {}) {
+/** vad (optional): { minSpeechMs, silenceMs, maxMs } overrides for chunk cutting (lower = lower latency). */
+export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLevel = () => {}, onError = () => {}, vad = null } = {}) {
   // chunkMs is kept for API compatibility; chunk boundaries now follow pauses in speech.
   void chunkMs;
   if (!recorderSupported()) { onError('unsupported'); return null; }
@@ -60,7 +61,11 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
   let activeMs = 0, since = Date.now();
   let source = null, node = null, mute = null, workletUrl = null, lastLevel = 0;
   const ds = createDownsampler(actx.sampleRate, TARGET_RATE);
-  const chunker = createChunker();
+  const vadOpts = {};
+  if (vad && typeof vad === 'object') {
+    for (const k of ['minSpeechMs', 'silenceMs', 'maxMs']) if (Number.isFinite(vad[k]) && vad[k] > 0) vadOpts[k] = vad[k];
+  }
+  const chunker = createChunker(vadOpts);
   const full = [];                   // Int16Array blocks
   let fullLen = 0;
 

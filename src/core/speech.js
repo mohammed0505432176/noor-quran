@@ -22,19 +22,32 @@ export async function speechSupport() {
 }
 
 /**
- * Start a continuous listening session. onText(fullTranscript) gets the whole session text
- * (committed + current partial). onState('listening'|'stopped'), onError('permission'|'unsupported'|'error').
- * Returns stop().
+ * Start a continuous listening session. onText(fullTranscript, isFinal) gets the whole session text
+ * (committed + current partial) on EVERY partial/interim result; isFinal is true when the recognizer
+ * committed the segment. onState('listening'|'stopped'), onError('permission'|'unsupported'|'error').
+ * pick(fullCandidates[]) -> index: optional chooser among the recognizer's alternatives (e.g. the one
+ * that best matches the expected next words). Returns stop().
  */
-export async function startListening({ onText = () => {}, onState = () => {}, onError = () => {} } = {}) {
+export async function startListening({ onText = () => {}, onState = () => {}, onError = () => {}, pick = null } = {}) {
   const mode = await speechSupport();
   if (mode === 'none') { onError('unsupported'); return () => {}; }
-  return mode === 'native' ? startNative({ onText, onState, onError }) : startWeb({ onText, onState, onError });
+  return mode === 'native' ? startNative({ onText, onState, onError, pick }) : startWeb({ onText, onState, onError, pick });
 }
 
 const join = (a, b) => (a && b ? a + ' ' + b : a || b || '');
 
-async function startNative({ onText, onState, onError }) {
+/** Pick the best alternative (by the caller's chooser) — falls back to the first one. */
+function choose(alts, prefix, pick) {
+  const list = alts.map(a => String(a || '').trim()).filter(Boolean);
+  if (!list.length) return '';
+  if (list.length === 1 || typeof pick !== 'function') return list[0];
+  try {
+    const i = pick(list.map(a => join(prefix, a)));
+    return list[i >= 0 && i < list.length ? i : 0];
+  } catch (e) { return list[0]; }
+}
+
+async function startNative({ onText, onState, onError, pick }) {
   const SR = await nativePlugin();
   let active = true, committed = '', cur = '', starting = false, restartTimer = null;
   const handles = [];
@@ -44,15 +57,17 @@ async function startNative({ onText, onState, onError }) {
     if (perm && perm.speechRecognition && perm.speechRecognition !== 'granted') { onError('permission'); return () => {}; }
   } catch (e) { onError('permission'); return () => {}; }
 
-  const emitText = () => onText(join(committed, cur));
-  const commit = () => { if (cur) { committed = join(committed, cur); cur = ''; } };
+  const emitText = (fin = false) => onText(join(committed, cur), fin);
+  const commit = () => { if (cur) { committed = join(committed, cur); cur = ''; return true; } return false; };
 
   async function begin() {
     if (!active || starting) return;
-    commit(); emitText();
+    clearTimeout(restartTimer);
+    if (commit()) emitText(true);
     starting = true;
     try {
-      await SR.start({ language: LANG, partialResults: true, popup: false, maxResults: 1 });
+      // partialResults streams hypotheses (~200 ms); popup:false is required for partials on Android.
+      await SR.start({ language: LANG, partialResults: true, popup: false, maxResults: 3 });
       onState('listening');
     } catch (e) {
       if (active) { onError('error'); }
@@ -61,20 +76,21 @@ async function startNative({ onText, onState, onError }) {
   function scheduleRestart() {
     if (!active) return;
     clearTimeout(restartTimer);
-    restartTimer = setTimeout(begin, 700);
+    restartTimer = setTimeout(begin, 300);
   }
 
   try {
     handles.push(await SR.addListener('partialResults', d => {
       if (!active) return;
-      const t = d && d.matches && d.matches[0];
-      if (typeof t === 'string') { cur = t; emitText(); }
+      const m = d && Array.isArray(d.matches) ? d.matches : [];
+      const t = choose(m, committed, pick);
+      if (t && t !== cur) { cur = t; emitText(); }
     }));
   } catch (e) { /* ignore */ }
   try {
     handles.push(await SR.addListener('listeningState', d => {
       if (!active || !d) return;
-      if (d.status === 'stopped') scheduleRestart();
+      if (d.status === 'stopped') { if (commit()) emitText(true); scheduleRestart(); }
       else onState('listening');
     }));
   } catch (e) { /* event not available */ }
@@ -83,8 +99,8 @@ async function startNative({ onText, onState, onError }) {
   // Watchdog: Android's recognizer can end on silence/errors without a 'stopped' event.
   const watchdog = setInterval(async () => {
     if (!active || starting) return;
-    try { const r = await SR.isListening(); if (r && r.listening === false) scheduleRestart(); } catch (e) {}
-  }, 1000);
+    try { const r = await SR.isListening(); if (active && !starting && r && r.listening === false) scheduleRestart(); } catch (e) {}
+  }, 800);
 
   return function stop() {
     if (!active) return;
@@ -97,20 +113,27 @@ async function startNative({ onText, onState, onError }) {
   };
 }
 
-function startWeb({ onText, onState, onError }) {
+function startWeb({ onText, onState, onError, pick }) {
   const Ctor = webCtor();
   let active = true, committed = '', cur = '', rec = null, restartTimer = null;
 
-  const emitText = () => onText(join(committed, cur));
+  const emitText = (fin = false) => onText(join(committed, cur), fin);
 
   function make() {
     const r = new Ctor();
-    r.lang = LANG; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+    r.lang = LANG; r.continuous = true; r.interimResults = true; r.maxAlternatives = 3;
     r.onstart = () => onState('listening');
     r.onresult = ev => {
       let t = '';
-      for (let i = 0; i < ev.results.length; i++) t = join(t, ev.results[i][0].transcript.trim());
-      cur = t; emitText();
+      const n = ev.results.length;
+      for (let i = 0; i < n - 1; i++) t = join(t, String(ev.results[i][0].transcript || '').trim());
+      const lastRes = n ? ev.results[n - 1] : null;
+      if (lastRes) {
+        const alts = [];
+        for (let k = 0; k < lastRes.length; k++) alts.push(lastRes[k].transcript);
+        t = join(t, choose(alts, join(committed, t), pick));
+      }
+      cur = t; emitText(!!(lastRes && lastRes.isFinal));
     };
     r.onerror = ev => {
       const err = ev && ev.error;
@@ -119,8 +142,8 @@ function startWeb({ onText, onState, onError }) {
       // 'no-speech' / 'aborted' / 'network': let onend restart
     };
     r.onend = () => {
-      if (cur) { committed = join(committed, cur); cur = ''; emitText(); }
-      if (active) { clearTimeout(restartTimer); restartTimer = setTimeout(begin, 200); }
+      if (cur) { committed = join(committed, cur); cur = ''; emitText(true); }
+      if (active) { clearTimeout(restartTimer); restartTimer = setTimeout(begin, 120); }
       else onState('stopped');
     };
     return r;

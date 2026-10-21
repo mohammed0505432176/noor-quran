@@ -3,24 +3,39 @@ import { esc, $, $$, toast, icon, ayahMark, header, N } from '../ui.js';
 import { S, addRecitation, addReview, dueReviews } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/quran.js';
 import { words as splitWords } from '../core/arabic.js';
-import { createMatcher, stripOpeners } from '../core/matcher.js';
+import { createMatcher, createLockedTracker, stripOpeners } from '../core/matcher.js';
 import { speechSupport, startListening } from '../core/speech.js';
 import { haptic } from '../core/platform.js';
 import { startRecorder, recorderSupported } from '../core/recorder.js';
 import { cloudStatus, transcribe, tajweedReview } from '../core/cloud.js';
-import { playRange, stop as stopReciter } from '../core/audio.js';
+import { playRange, playAyah, stop as stopReciter } from '../core/audio.js';
 import * as recordings from '../core/recordings.js';
+import '../styles/recite.css';
 
 const MODE_KEY = 'noor.recite.mode';
-const MODES = ['ai', 'device', 'hide'];
+const MODES = ['device', 'ai', 'hide'];
+const FS_KEY = 'noor.recite.fs';
+const FS_MIN = 26, FS_MAX = 52;
+// Whisper chunking tuned for latency (shorter chunks, quicker cut after a pause)
+const FAST_VAD = { minSpeechMs: 600, silenceMs: 320, maxMs: 6000 };
 const DISPLAYS = ['hidden', 'first', 'full'];
 const MAX_REVIEW_SECS = 240;
 
 const MISTAKE_KIND = { missing: 'نقص', wrong: 'خطأ', extra: 'زيادة', harakah: 'حركة' };
 function loadMode() { try { const m = localStorage.getItem(MODE_KEY); return MODES.includes(m) ? m : null; } catch (e) { return null; } }
 function saveMode(m) { try { localStorage.setItem(MODE_KEY, m); } catch (e) { /* ignore */ } }
+function loadFs() {
+  let v = NaN;
+  try { v = parseInt(localStorage.getItem(FS_KEY), 10); } catch (e) { /* ignore */ }
+  if (!Number.isFinite(v)) v = Math.max(Number(S.settings && S.settings.fontSize) || 0, 32);
+  return Math.max(FS_MIN, Math.min(FS_MAX, v));
+}
+function saveFs(v) { try { localStorage.setItem(FS_KEY, String(v)); } catch (e) { /* ignore */ } }
+const pad3 = n => String(n).padStart(3, '0');
+/** quran.com word-by-word audio (word index is 1-based within the ayah). */
+const wordAudioUrl = (s, a, w) => `https://audio.qurancdn.com/wbw/${pad3(s)}_${pad3(a)}_${pad3(w)}.mp3`;
 
-// userMode: explicit choice (saved or deep-linked). null = pick automatically from cloud status.
+// userMode: explicit choice (saved or deep-linked). Without one the instant on-device engine is the default.
 let userMode = loadMode();
 const cfg = { s: 1, from: 1, to: 5, mode: userMode || 'device', display: 'hidden' };
 
@@ -30,7 +45,7 @@ function firstLetter(w) {
   const m = /[\u0621-\u064A\u0671]/.exec(w || '');
   return m ? m[0] + '\u0640' : '…';
 }
-const MODE_TITLE = { ai: 'تسميع بالذكاء', device: 'تسميع صوتي', hide: 'اختبار الحفظ' };
+const MODE_TITLE = { ai: 'تسميع دقيق', device: 'تسميع فوري', hide: 'اختبار الحفظ' };
 
 function parseQuery(q) {
   if (!q) return {};
@@ -71,12 +86,14 @@ export default {
     let resUrl = null, resAudio = null;
     let setupTok = 0;
     let cloud = null;            // last cloudStatus()
+    let wAudio = null;           // word-by-word audio for hints / mistakes
     const cleanup = () => {
       alive = false; gen++; setupTok++;
       if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; }
       if (recCtl) { const r = recCtl; recCtl = null; try { r.stop().catch(() => {}); } catch (e) {} }
       if (aiCtl) { try { aiCtl.abort(); } catch (e) {} aiCtl = null; }
       if (tjCtl) { try { tjCtl.abort(); } catch (e) {} tjCtl = null; }
+      if (wAudio) { try { wAudio.pause(); wAudio.removeAttribute('src'); wAudio.load(); } catch (e) {} wAudio = null; }
       if (resAudio) { try { resAudio.pause(); resAudio.removeAttribute('src'); resAudio.load(); } catch (e) {} resAudio = null; }
       if (resUrl) { try { URL.revokeObjectURL(resUrl); } catch (e) {} resUrl = null; }
     };
@@ -105,7 +122,7 @@ export default {
       if (!cloud) return '<span class="muted small">جارٍ فحص الذكاء…</span>';
       return aiReady()
         ? '<span class="chip active small">الذكاء متصل ✓</span>'
-        : '<span class="chip small">غير متصل — سيُستخدم التعرف على الجهاز</span>';
+        : '<span class="chip small">الوضع الدقيق غير متاح الآن — سيُستخدم الفوري</span>';
     };
 
     function showSetup() {
@@ -130,8 +147,8 @@ export default {
           </div>
           <p class="muted small" id="rc-max">عدد آيات السورة: ${N(ayahCount(cfg.s))}</p>
           <div class="row mt" id="rc-mode">
-            ${modeChip('ai', 'دقيق بالذكاء الاصطناعي')}
-            ${modeChip('device', 'سريع على الجهاز')}
+            ${modeChip('device', 'فوري')}
+            ${modeChip('ai', 'دقيق (Whisper)')}
             ${modeChip('hide', 'اختبار الحفظ (إخفاء)')}
           </div>
           <div class="mt" id="rc-cloud">${chipHtml()}</div>
@@ -165,15 +182,11 @@ export default {
       });
       $('#rc-start', el).onclick = () => { readInputs(); startSession(); };
 
-      // Cloud status is checked lazily (cached for 5 minutes) and may switch the default mode.
+      // Cloud status is checked lazily (cached) only to show whether the precise mode is reachable.
       cloudStatus().then(st => {
         cloud = st;
         if (!alive || tok !== setupTok) return;
         const box = $('#rc-cloud', el); if (box) box.innerHTML = chipHtml();
-        if (!userMode) {
-          cfg.mode = aiReady() ? 'ai' : 'device';
-          $$('#rc-mode button', el).forEach(x => x.classList.toggle('active', x.dataset.mode === cfg.mode));
-        }
       }).catch(() => {});
     }
 

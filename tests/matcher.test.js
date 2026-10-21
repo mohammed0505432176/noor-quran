@@ -106,3 +106,37 @@ test('skipping a 3-word chunk marks them bad and continues', () => {
   assert.deepEqual(r.states, ['ok', 'ok', 'ok', 'ok', 'bad', 'bad', 'bad', 'ok', 'ok']);
   assert.equal(r.pointer, 9);
 });
+
+test('locked tracker: a word confirmed twice stays ok when a later interim drops it', async () => {
+  const { createLockedTracker } = await import('../src/core/matcher.js');
+  const m = createMatcher(A2);
+  const tr = createLockedTracker(A2.length, { confirm: 2 });
+  tr.apply(m.update('الحمد لله').states);
+  let r = tr.apply(m.update('الحمد لله رب').states);
+  assert.deepEqual(r.states.slice(0, 3), ['ok', 'ok', 'ok']);
+  // interim revision drops «لله» (confirmed twice → locked) and «رب» (seen once → not locked)
+  r = tr.apply(m.update('الحمد').states);
+  assert.deepEqual(r.states, ['ok', 'ok', 'pending', 'pending']);
+  assert.equal(r.pointer, 2);
+});
+
+test('locked tracker: transient interim bad does not show until stable or final', async () => {
+  const { createLockedTracker } = await import('../src/core/matcher.js');
+  const m = createMatcher(A2);
+  const tr = createLockedTracker(A2.length);
+  let r = tr.apply(m.update('الحمد لله العالمين').states);
+  assert.equal(r.states[2], 'pending');
+  r = tr.apply(m.update('الحمد لله رب العالمين').states);
+  assert.deepEqual(r.states, ['ok', 'ok', 'ok', 'ok']);
+  const m2 = createMatcher(A2), tr2 = createLockedTracker(A2.length);
+  r = tr2.apply(m2.update('الحمد لله العالمين').states, { final: true });
+  assert.deepEqual(r.states, ['ok', 'ok', 'bad', 'ok']);
+});
+
+test('peek scores alternatives without changing state', () => {
+  const m = createMatcher(A2);
+  m.update('الحمد');
+  assert.ok(m.peek('الحمد لله رب').score > m.peek('الحمد جبل سهل').score);
+  assert.ok(m.peek('الحمد لله رب').ok >= 3);
+  assert.equal(m.update('الحمد').pointer, 1);
+});

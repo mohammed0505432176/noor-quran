@@ -3,7 +3,7 @@
 // CONTRACT:
 //   status({force}) -> { ok, providers:{gemini,groq,cerebras,openrouter,mistral,pollinations}, stt, sttEngine, tajweed, limits } | null (offline/unreachable)
 //   cloudChat(messages, { mode:'fast'|'smart', signal }) -> { text, provider, model }      (throws CloudError)
-//   transcribe(blob|base64, { mime, prompt, signal })   -> { text, provider, model }      (throws CloudError)
+//   transcribe(blob|base64, { mime, prompt, signal, fast })   -> { text, provider, model }      (throws CloudError)
 //   tajweedReview(blob, { s, from, to, text, signal })  -> { score, summary, mistakes[], tajweed[], advice[], provider }
 //   CloudError has .code: 'offline' | 'auth' | 'rate_limited' | 'daily_limit' | 'no_provider' | 'bad_audio' | 'server' | 'timeout' | 'aborted'
 
@@ -127,9 +127,10 @@ export function blobToBase64(blob) {
   });
 }
 
-export async function transcribe(audio, { mime = 'audio/wav', prompt = '', signal } = {}) {
+export async function transcribe(audio, { mime = 'audio/wav', prompt = '', signal, fast = false } = {}) {
   const b64 = typeof audio === 'string' ? audio : await blobToBase64(audio);
-  return call('transcribe', { audio: b64, mime: (audio && audio.type) || mime, prompt: String(prompt).slice(0, 600) }, { signal, timeout: 30000 });
+  // fast: backend tries whisper-large-v3-turbo first (lower latency for live sessions)
+  return call('transcribe', { audio: b64, mime: (audio && audio.type) || mime, prompt: String(prompt).slice(0, 600), ...(fast ? { fast: true } : {}) }, { signal, timeout: 30000 });
 }
 
 export async function tajweedReview(blob, { s, from, to, text, signal } = {}) {
