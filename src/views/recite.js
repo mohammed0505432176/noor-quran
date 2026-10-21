@@ -22,7 +22,13 @@ const DISPLAYS = ['hidden', 'first', 'full'];
 const MAX_REVIEW_SECS = 240;
 
 const MISTAKE_KIND = { missing: 'نقص', wrong: 'خطأ', extra: 'زيادة', harakah: 'حركة' };
-function loadMode() { try { const m = localStorage.getItem(MODE_KEY); return MODES.includes(m) ? m : null; } catch (e) { return null; } }
+function loadMode() {
+  try {
+    // v1.3: instant on-device mode became the default — reset choices saved by older versions once.
+    if (localStorage.getItem('noor.recite.modev') !== '3') { localStorage.removeItem(MODE_KEY); localStorage.setItem('noor.recite.modev', '3'); }
+    const m = localStorage.getItem(MODE_KEY); return MODES.includes(m) ? m : null;
+  } catch (e) { return null; }
+}
 function saveMode(m) { try { localStorage.setItem(MODE_KEY, m); } catch (e) { /* ignore */ } }
 function loadFs() {
   let v = NaN;
@@ -201,7 +207,7 @@ export default {
       if (mode === 'ai') {
         if (!cloud) { try { cloud = await cloudStatus(); } catch (e) { cloud = null; } }
         if (!isLive()) return;
-        if (!aiReady()) { toast('الذكاء غير متاح الآن — سيُستخدم التعرف على الجهاز'); mode = 'device'; }
+        if (!aiReady()) { toast('الوضع الدقيق غير متاح الآن — سيُستخدم الفوري'); mode = 'device'; }
       }
       const voiceLike = mode !== 'hide';
       let engine = mode === 'ai' ? 'ai' : 'device';       // may fall back ai -> device mid-session
@@ -209,9 +215,13 @@ export default {
       const { flat, groups } = buildRange(s, from, to);
       const total = flat.length;
       const matcher = createMatcher(flat.map(x => x.w));
+      const tracker = createLockedTracker(total, { confirm: 2 });
+      let raw = new Array(total).fill('pending');       // last raw matcher states (before locking)
       let mres = { states: new Array(total).fill('pending'), pointer: 0, acc: 0 };
       const hst = new Array(total).fill('pending');   // hide-mode states
       const forced = new Set();                         // hinted words (always bad)
+      const groupOf = new Array(total);
+      groups.forEach(g => { for (let k = g.start; k < g.end; k++) groupOf[k] = g; });
       let finished = false, ending = false, listening = false, support = 'native';
       let base = '', lastFull = '', sess = 0;               // base = transcript of earlier device-mic sessions
       const keepBasmala = s === 1 && from === 1;
@@ -222,14 +232,17 @@ export default {
       if (!isLive()) return;
       if (engine === 'ai') aiCtl = new AbortController();
 
+      let fs = loadFs();
+      const showBanner = from === 1;
       const showBasmala = from === 1 && s !== 1 && s !== 9;
       const body = groups.map(g => {
-        const spans = flat.slice(g.start, g.end).map((x, k) => `<span class="word" data-i="${g.start + k}">${esc(x.w)}</span>`).join(' ');
+        const spans = flat.slice(g.start, g.end).map((x, k) => `<span class="word w-pend" data-i="${g.start + k}">${esc(x.w)}</span>`).join(' ');
         return spans + ' ' + ayahMark(g.a);
       }).join(' ');
 
       const noVoice = engine === 'device' && voiceLike && support === 'none';
-      el.innerHTML = header(MODE_TITLE[mode]) + `
+      const fsCtl = `<button class="icon-btn rc-fsbtn" id="rc-fsm" aria-label="تصغير خط التسميع">أ<small>−</small></button><button class="icon-btn rc-fsbtn" id="rc-fsp" aria-label="تكبير خط التسميع">أ<small>+</small></button>`;
+      el.innerHTML = header(MODE_TITLE[mode], { actions: fsCtl }) + `
         <div class="card tight">
           <div class="row" style="justify-content:space-between;align-items:center">
             <div><span class="muted small">${esc(surahName(s))} · ${N(from)}–${N(to)}</span></div>
@@ -238,51 +251,91 @@ export default {
           <div class="progress mt"><i id="rc-prog" style="width:0%"></i></div>
         </div>
         ${noVoice ? `<div class="card"><p>التعرف على الصوت غير متاح على هذا الجهاز أو المتصفح.</p><button class="btn block" id="rc-tohide">جرّب اختبار الحفظ (إخفاء)</button></div>` : ''}
-        <div class="mushaf-page">
+        <div class="mushaf-page rc-page${disp === 'full' ? ' rc-full' : ''}" id="rc-page" style="--rc-fs:${fs}px">
+          ${showBanner ? `<div class="surah-banner">سورة ${esc(surahName(s))}</div>` : ''}
           ${showBasmala ? '<div class="basmala">بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ</div>' : ''}
           <div class="mushaf-text" id="rc-text">${body}</div>
         </div>
         ${voiceLike && !noVoice ? `<div class="center mt"><button class="mic-btn" id="rc-mic" aria-label="تشغيل الميكروفون">${icon('mic', 34)}</button><p class="muted small" id="rc-status">اضغط على الميكروفون وابدأ التسميع</p>
-          ${mode === 'ai' ? `<div class="progress" id="rc-lvlw" style="max-width:200px;margin:8px auto 0"><i id="rc-lvl" style="width:0%;transition:none"></i></div><p class="muted small" id="rc-ana" hidden>يُحلل…</p>` : ''}</div>` : ''}
+          ${mode === 'ai' ? `<div class="progress" id="rc-lvlw" style="max-width:200px;margin:8px auto 0"><i id="rc-lvl" style="width:0%;transition:none"></i></div>` : ''}</div>` : ''}
         <div class="row mt" style="justify-content:center">
           <button class="btn ghost sm" id="rc-hint">إظهار الكلمة التالية</button>
           ${mode === 'hide' ? `<button class="btn ghost sm" id="rc-ok">تذكرتها ${icon('check', 16)}</button>` : ''}
           <button class="btn sm" id="rc-end">إنهاء</button>
         </div>
-        ${mode === 'hide' ? '<p class="muted small center mt">اضغط على أي كلمة لكشفها (تُحسب خطأ)، أو اضغط «تذكرتها» عند إتقان الآية التالية.</p>' : ''}`;
+        ${mode === 'hide' ? '<p class="muted small center mt">اضغط على أي مكان فارغ لكشف كلمته (تُحسب خطأ)، أو اضغط «تذكرتها» عند إتقان الآية التالية.</p>'
+          : '<p class="muted small center mt">تُكتب الكلمة على الصفحة عند نطقها صحيحة، والأخطاء تظهر بالأحمر — اضغط عليها لسماعها.</p>'}`;
 
       const spans = $$('.word', el);
       const shown = new Array(total).fill(null);
+      const pageEl = $('#rc-page', el);
       const scoreEl = $('#rc-score', el), progEl = $('#rc-prog', el), micEl = $('#rc-mic', el), statusEl = $('#rc-status', el);
-      const lvlEl = $('#rc-lvl', el), anaEl = $('#rc-ana', el);
+      const lvlEl = $('#rc-lvl', el);
+
+      const setFs = v => {
+        fs = Math.max(FS_MIN, Math.min(FS_MAX, v));
+        saveFs(fs);
+        pageEl.style.setProperty('--rc-fs', fs + 'px');
+        lastLineTop = null; scrollToCurrent(true);
+      };
+      $('#rc-fsm', el).onclick = () => setFs(fs - 2);
+      $('#rc-fsp', el).onclick = () => setFs(fs + 2);
 
       const baseStates = () => (voiceLike ? mres.states : hst);
       const effective = () => baseStates().map((st, i) => (forced.has(i) ? 'bad' : st));
-      let lastPointer = -1;
       const setStatus = t => { if (statusEl) statusEl.textContent = t; };
 
+      // ---- keep the current line around the upper-middle of the viewport ----
+      let curPtr = -1, lastLineTop = null;
+      function scrollToCurrent(force = false) {
+        const sp = curPtr >= 0 ? spans[curPtr] : null;
+        if (!sp) return;
+        let r;
+        try { r = sp.getBoundingClientRect(); } catch (e) { return; }
+        const lineTop = Math.round(r.top + window.scrollY);
+        if (!force && lastLineTop !== null && Math.abs(lineTop - lastLineTop) < 8) return;   // same line
+        lastLineTop = lineTop;
+        const target = window.innerHeight * 0.36;
+        if (!force && r.top > target - 40 && r.top < window.innerHeight * 0.6) return;
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        try { window.scrollTo({ top: Math.max(0, window.scrollY + r.top - target), behavior: reduce ? 'auto' : 'smooth' }); } catch (e) {}
+      }
+
+      let prevSt = new Array(total).fill('pending');
+      const ayahDone = new Set();
       function paint() {
         const st = effective();
         const ptr = st.indexOf('pending');
-        let ok = 0, done = 0;
-        st.forEach(x => { if (x === 'ok') ok++; if (x !== 'pending') done++; });
+        let ok = 0, done = 0, newBad = false, newAyah = false;
         spans.forEach((sp, i) => {
-          const pend = st[i] === 'pending';
-          sp.classList.toggle('ok', st[i] === 'ok');
-          sp.classList.toggle('bad', st[i] === 'bad');
-          sp.classList.toggle('hidden', pend && disp === 'hidden');
-          sp.classList.toggle('current', !finished && i === ptr);
-          const first = pend && disp === 'first';
+          const x = st[i];
+          if (x !== prevSt[i]) {
+            sp.classList.toggle('w-ok', x === 'ok');
+            sp.classList.toggle('w-bad', x === 'bad');
+            sp.classList.toggle('w-pend', x === 'pending');
+            if (x === 'bad' && prevSt[i] !== 'bad') newBad = true;
+          }
+          sp.classList.toggle('w-cur', !finished && i === ptr);
+          const first = x === 'pending' && disp === 'first';
           if (shown[i] !== first) {
             shown[i] = first;
             sp.textContent = first ? firstLetter(flat[i].w) : flat[i].w;
-            sp.style.opacity = first ? '.75' : '';
+            sp.classList.toggle('w-first', first);
           }
+          if (x === 'ok') ok++;
+          if (x !== 'pending') done++;
         });
+        groups.forEach(g => {
+          if (ayahDone.has(g.a)) return;
+          for (let k = g.start; k < g.end; k++) if (st[k] === 'pending') return;
+          ayahDone.add(g.a); newAyah = true;
+        });
+        prevSt = st;
+        if (newBad || newAyah) haptic('light');      // no haptic per written word: only mistakes / ayah completion
         const acc = total ? Math.round(100 * ok / total) : 0;
         scoreEl.textContent = N(acc) + '٪';
         progEl.style.width = (total ? 100 * done / total : 0) + '%';
-        if (ptr !== lastPointer && ptr >= 0 && spans[ptr]) { lastPointer = ptr; try { spans[ptr].scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {} }
+        if (ptr !== curPtr) { curPtr = ptr; if (ptr >= 0) scrollToCurrent(); }
         return ptr;
       }
 
@@ -293,21 +346,37 @@ export default {
       }
       function stopListeningNow() { base = lastFull; if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; } setListening(false); }
 
-      // ----- on-device engine -----
+      /** Apply a (partial or final) transcript: match, lock confirmed words, repaint immediately. */
+      function applyTranscript(full, isFinal) {
+        raw = matcher.update(stripOpeners(full, keepBasmala)).states;
+        mres = tracker.apply(raw, { final: !!isFinal });
+        return paint();
+      }
+
+      /** Choose the ASR alternative that best fits the expected words. */
+      function pickAlt(cands) {
+        let best = 0, bestScore = -Infinity;
+        cands.forEach((c, k) => {
+          const sc = matcher.peek(stripOpeners(joinT(base, c), keepBasmala)).score;
+          if (sc > bestScore) { bestScore = sc; best = k; }
+        });
+        return best;
+      }
+
+      // ----- on-device engine (streams partial results) -----
       async function toggleMic() {
         if (finished || ending) return;
         if (listening) { stopListeningNow(); return; }
         setListening(true);
-        haptic('light');
         const my = ++sess;
         try {
           const stop = await startListening({
-            onText: text => {
+            pick: pickAlt,
+            onText: (text, isFinal) => {
               if (finished || my !== sess || !listening) return;
               lastFull = joinT(base, text);
-              mres = matcher.update(stripOpeners(lastFull, keepBasmala));
-              const ptr = paint();
-              if (ptr === -1 && !finished) setTimeout(() => { if (isLive() && !finished) finish(); }, 700);
+              const ptr = applyTranscript(lastFull, isFinal);
+              if (ptr === -1 && !finished) setTimeout(() => { if (isLive() && !finished) finish(); }, 600);
             },
             onState: st => { if (st === 'stopped' && !stopMic) { base = lastFull; setListening(false); } },
             onError: err => {
@@ -320,8 +389,8 @@ export default {
         } catch (e) { stopListeningNow(); toast('تعذر تشغيل الميكروفون'); }
       }
 
-      // ----- AI engine -----
-      const showAna = () => { if (anaEl) anaEl.hidden = inflight <= 0; };
+      // ----- precise (Whisper) engine -----
+      const showBusy = () => { if (pageEl) pageEl.classList.toggle('rc-busy', inflight > 0 && !finished); };
 
       /** Only words already recited correctly (never upcoming ones) so the model isn't biased toward them. */
       function buildPrompt() {
@@ -334,11 +403,11 @@ export default {
         if (!isLive() || engine !== 'ai' || allDone || !aiCtl) return;
         const prompt = buildPrompt();
         const signal = aiCtl.signal;
-        inflight++; showAna();
+        inflight++; showBusy();
         // requests run concurrently, but results are applied strictly in chunk order
-        const p = transcribe(blob, { prompt, signal }).then(r => ({ ok: true, text: (r && r.text) || '' }), e => ({ ok: false, e }));
+        const p = transcribe(blob, { prompt, signal, fast: true }).then(r => ({ ok: true, text: (r && r.text) || '' }), e => ({ ok: false, e }));
         chain = chain.then(() => p).then(res => {
-          inflight = Math.max(0, inflight - 1); showAna();
+          inflight = Math.max(0, inflight - 1); showBusy();
           if (isLive() && engine === 'ai') applyChunk(res);
         });
       }
@@ -346,8 +415,10 @@ export default {
       function applyChunk(res) {
         if (!res.ok) {
           if (finished || ending) return;
-          if (res.e && (res.e.name === 'AbortError' || res.e.code === 'aborted')) return;
-          if (++fails >= 2) { toast('تعذّر التحليل بالذكاء — سيُستخدم التعرف على الجهاز'); switchToDevice(true); }
+          const code = res.e && res.e.code;
+          if (res.e && (res.e.name === 'AbortError' || code === 'aborted')) return;
+          if (code === 'rate_limited' || code === 'daily_limit') { toast('تحوّلنا إلى الوضع الفوري'); switchToDevice(true); return; }
+          if (++fails >= 2) { toast('تعذّر الوضع الدقيق — تحوّلنا إلى الفوري'); switchToDevice(true); }
           return;
         }
         fails = 0;
@@ -355,14 +426,13 @@ export default {
         if (!t || finished || ending) return;
         aiText = joinT(aiText, t);
         lastFull = aiText;
-        mres = matcher.update(stripOpeners(aiText, keepBasmala));
-        const ptr = paint();
+        const ptr = applyTranscript(aiText, true);
         if (ptr === -1 && !finished) { allDone = true; setTimeout(() => { if (isLive() && !finished) finish(); }, 0); }
       }
 
       function onRecError(err) {
         if (!isLive() || engine !== 'ai') return;
-        toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : 'تعذر تسجيل الصوت — سيُستخدم التعرف على الجهاز');
+        toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : 'تعذر تسجيل الصوت — سيُستخدم الوضع الفوري');
         switchToDevice(err !== 'permission');
       }
 
@@ -373,7 +443,7 @@ export default {
         const r = rec; rec = null; recCtl = null;
         if (r) r.stop().then(b => { recBlob = b; recSecs = r.elapsed(); }).catch(() => {});
         if (aiCtl) { try { aiCtl.abort(); } catch (e) {} aiCtl = null; }
-        inflight = 0; showAna();
+        inflight = 0; showBusy();
         const lw = $('#rc-lvlw', el); if (lw) lw.hidden = true;
         setListening(false);
         base = lastFull;
@@ -387,11 +457,12 @@ export default {
         if (finished || ending || starting) return;
         if (aiState === 'rec') { rec.pause(); aiState = 'paused'; listening = false; micEl.classList.remove('live'); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); if (lvlEl) lvlEl.style.width = '0%'; return; }
         if (aiState === 'paused') { rec.resume(); aiState = 'rec'; setListening(true); return; }
-        starting = true; haptic('light');
+        starting = true;
         let r = null;
         try {
           r = await startRecorder({
             chunkMs: 4500,
+            vad: FAST_VAD,
             onChunk,
             onLevel: v => { if (lvlEl) lvlEl.style.width = Math.round(v * 100) + '%'; },
             onError: onRecError
@@ -404,16 +475,35 @@ export default {
         setListening(true);
       }
 
+      // ----- word audio (hints / mistakes) -----
+      function playWord(i) {
+        const g = groupOf[i]; if (!g) return;
+        const a = g.a, w = i - g.start + 1;
+        try { stopReciter(); } catch (e) {}
+        if (wAudio) { try { wAudio.pause(); } catch (e) {} }
+        let fell = false;
+        const fallback = () => {
+          if (fell || !isLive()) return; fell = true;
+          try { playAyah(s, a); } catch (e) { toast('تعذر تشغيل الصوت'); }
+        };
+        try {
+          wAudio = new Audio(wordAudioUrl(s, a, w));
+          wAudio.onerror = fallback;
+          const pr = wAudio.play();
+          if (pr && pr.catch) pr.catch(fallback);
+        } catch (e) { fallback(); }
+      }
+
       function hint() {
         if (finished || ending) return;
         const st = effective();
-        const start = voiceLike ? Math.max(0, mres.pointer) : 0;
+        const start = voiceLike ? Math.max(0, st.indexOf('pending')) : 0;
         let i = -1;
         for (let k = start; k < total; k++) if (st[k] === 'pending') { i = k; break; }
         if (i < 0) return;
         if (voiceLike) forced.add(i); else hst[i] = 'bad';
-        haptic('light');
         paint();
+        playWord(i);
       }
 
       function markNextAyah() {
@@ -422,7 +512,6 @@ export default {
         const g = groups.find(x => { for (let k = x.start; k < x.end; k++) if (st[k] === 'pending') return true; return false; });
         if (!g) return;
         for (let k = g.start; k < g.end; k++) if (hst[k] === 'pending' && !forced.has(k)) hst[k] = 'ok';
-        haptic('light');
         paint();
         if (effective().indexOf('pending') === -1) setTimeout(() => { if (isLive() && !finished) finish(); }, 500);
       }
@@ -449,8 +538,11 @@ export default {
 
       function finalize() {
         finished = true;
+        if (pageEl) pageEl.classList.remove('rc-busy');
         let st;
-        if (voiceLike) { st = matcher.finish().states; } else st = hst.map(x => (x === 'ok' ? 'ok' : 'bad'));
+        if (voiceLike) st = tracker.apply(raw, { final: true }).states.map(x => (x === 'ok' ? 'ok' : 'bad'));
+        else st = hst.map(x => (x === 'ok' ? 'ok' : 'bad'));
+        try { matcher.finish(); } catch (e) { /* ignore */ }
         st = st.map((x, i) => (forced.has(i) ? 'bad' : x));
         const ok = st.filter(x => x === 'ok').length;
         const acc = total ? Math.round(100 * ok / total) : 0;
@@ -465,13 +557,13 @@ export default {
       $('#rc-hint', el).onclick = hint;
       const okBtn = $('#rc-ok', el); if (okBtn) okBtn.onclick = markNextAyah;
       $('#rc-end', el).onclick = () => { finish(); };
-      if (mode === 'hide') {
-        $('#rc-text', el).addEventListener('click', e => {
-          const sp = e.target.closest('.word'); if (!sp || finished || ending) return;
-          const i = +sp.dataset.i;
-          if (hst[i] === 'pending') { hst[i] = 'bad'; paint(); }
-        });
-      }
+      $('#rc-text', el).addEventListener('click', e => {
+        const sp = e.target.closest('.word'); if (!sp || finished || ending) return;
+        const i = +sp.dataset.i;
+        const st = effective()[i];
+        if (st === 'bad') { playWord(i); toast('الصواب: ' + flat[i].w); return; }
+        if (mode === 'hide' && hst[i] === 'pending') { hst[i] = 'bad'; paint(); playWord(i); }
+      });
       paint();
     }
 

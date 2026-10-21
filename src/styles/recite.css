@@ -1,0 +1,57 @@
+/* Recitation session: an empty mushaf page where words are "written" as they are recited correctly. */
+.rc-page { --rc-fs: 32px; scroll-margin-top: 80px; }
+.rc-page .mushaf-text { font-size: var(--rc-fs); line-height: 2.3; }
+.rc-page .basmala { font-size: calc(var(--rc-fs) * .9); }
+.rc-page .surah-banner { font-size: calc(min(var(--rc-fs), 40px) * .8); }
+
+.rc-page .word {
+  position: relative; display: inline-block; padding: 0; margin: 0; border-radius: 0;
+  background: none; box-shadow: none; filter: none; color: var(--ink);
+  transition: none; -webkit-tap-highlight-color: transparent;
+}
+
+/* not yet recited: invisible but keeps its place, with a very faint dotted baseline */
+.rc-page .word.w-pend {
+  color: transparent; user-select: none; -webkit-user-select: none;
+  text-decoration: underline dotted color-mix(in srgb, var(--gold) 22%, transparent);
+  text-decoration-thickness: 1px; text-underline-offset: .42em;
+}
+.rc-page .word.w-pend.w-first { color: var(--muted); opacity: .75; text-decoration: none; }
+.rc-page.rc-full .word.w-pend { color: var(--ink); opacity: .35; text-decoration: none; }
+
+/* written: printed mushaf ink, revealed right-to-left like a pen stroke */
+.rc-page .word.w-ok { color: var(--ink); animation: rc-ink .18s ease-out both; }
+.rc-page .word.w-bad {
+  color: var(--bad); cursor: pointer; animation: rc-ink .18s ease-out both;
+  text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--bad) 55%, transparent);
+  text-decoration-thickness: 1px; text-underline-offset: .42em;
+}
+@keyframes rc-ink {
+  from { opacity: 0; transform: translateY(.12em); clip-path: inset(0 0 0 100%); }
+  to { opacity: 1; transform: none; clip-path: inset(0 0 0 0); }
+}
+
+/* current position: thin blinking gold caret at the word's start + soft gold underline */
+.rc-page .word.w-cur { box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--gold) 45%, transparent); text-decoration: none; }
+.rc-page .word.w-cur::before {
+  content: ''; position: absolute; inset-inline-start: -3px; top: 22%; bottom: 18%; width: 2px; border-radius: 2px;
+  background: var(--gold); animation: rc-caret 1.05s steps(1, end) infinite;
+}
+@keyframes rc-caret { 50% { opacity: 0; } }
+
+/* precise mode: a chunk is being transcribed */
+.rc-page.rc-busy .word.w-cur::after {
+  content: '…'; position: absolute; inset-inline-start: 4px; top: 50%; transform: translateY(-50%);
+  font-family: var(--font-ui); font-size: .6em; line-height: 1; color: var(--gold);
+  animation: rc-busy 1s ease-in-out infinite;
+}
+@keyframes rc-busy { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+/* font size control in the session header */
+.rc-fsbtn { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; line-height: 1; }
+.rc-fsbtn small { font-family: var(--font-ui); font-size: .75em; margin-inline-start: 1px; }
+#rc-fsp { font-size: 1.3rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-page .word.w-ok, .rc-page .word.w-bad, .rc-page .word.w-cur::before, .rc-page.rc-busy .word.w-cur::after { animation: none; }
+}
