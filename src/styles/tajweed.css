@@ -1,0 +1,68 @@
+/* Tajweed colours (Dar al-Ma'rifah convention). Dark emerald = default; parchment overrides below. */
+:root {
+  --tj-silent: #9aa6a0;
+  --tj-madd-normal: #e0a05a;
+  --tj-madd-perm: #ff9f2e;
+  --tj-madd-oblig: #ff6a4d;
+  --tj-madd-nec: #ff3b4a;
+  --tj-qalaqah: #4aa8ff;
+  --tj-ghunnah: #35c46d;
+  --tj-ikhafa: #7fd64a;
+  --tj-ikhafa-sh: #b6d93c;
+  --tj-idgham: #86ad98;
+  --tj-iqlab: #21d2bd;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --tj-silent: #7d8782;
+    --tj-madd-normal: #a8661a;
+    --tj-madd-perm: #d9690a;
+    --tj-madd-oblig: #d03a1e;
+    --tj-madd-nec: #9c0f1c;
+    --tj-qalaqah: #1565c0;
+    --tj-ghunnah: #12803f;
+    --tj-ikhafa: #3f8a14;
+    --tj-ikhafa-sh: #7a8a00;
+    --tj-idgham: #5d7f6c;
+    --tj-iqlab: #00877a;
+  }
+}
+html[data-theme='light'] {
+  --tj-silent: #7d8782;
+  --tj-madd-normal: #a8661a;
+  --tj-madd-perm: #d9690a;
+  --tj-madd-oblig: #d03a1e;
+  --tj-madd-nec: #9c0f1c;
+  --tj-qalaqah: #1565c0;
+  --tj-ghunnah: #12803f;
+  --tj-ikhafa: #3f8a14;
+  --tj-ikhafa-sh: #7a8a00;
+  --tj-idgham: #5d7f6c;
+  --tj-iqlab: #00877a;
+}
+
+.tj-ham_wasl, .tj-laam_shamsiyah, .tj-slnt { color: var(--tj-silent); }
+.tj-madda_normal { color: var(--tj-madd-normal); }
+.tj-madda_permissible { color: var(--tj-madd-perm); }
+.tj-madda_obligatory { color: var(--tj-madd-oblig); }
+.tj-madda_necessary { color: var(--tj-madd-nec); }
+.tj-qalaqah { color: var(--tj-qalaqah); }
+.tj-ghunnah { color: var(--tj-ghunnah); }
+.tj-ikhafa { color: var(--tj-ikhafa); }
+.tj-ikhafa_shafawi { color: var(--tj-ikhafa-sh); }
+.tj-idgham_ghunnah, .tj-idgham_wo_ghunnah, .tj-idgham_shafawi,
+.tj-idgham_mutajanisayn, .tj-idgham_mutaqaribayn { color: var(--tj-idgham); }
+.tj-iqlab { color: var(--tj-iqlab); }
+
+/* Legend */
+.tj-legend { display: grid; gap: 8px; max-height: 58vh; overflow: auto; margin-top: 10px; }
+.tj-legend-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; background: var(--card-2); }
+.tj-chip {
+  flex: none; min-width: 64px; text-align: center; padding: 4px 10px; border-radius: 999px;
+  font-family: var(--font-quran); font-size: 1.15rem; line-height: 1.6;
+  background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line);
+}
+.tj-legend-item b { display: block; font-size: .95rem; }
+.tj-legend-item small { color: var(--muted); }
+.tj-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tj-load { opacity: .6; }

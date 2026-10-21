@@ -80,6 +80,11 @@ export default {
           <button class="btn block" data-go="${goUrl(dt.s, dt.from, dt.to, 'mode=ai&display=hidden')}">${icon('mic', 16)} ${done ? 'سمّعه مرة أخرى' : 'ابدأ التحدي'}</button>
         </div>
 
+        <div class="card" data-go="recordings" style="cursor:pointer">
+          <b>${icon('mic', 16)} تلاواتي</b>
+          <p class="muted small">استمع لتسجيلاتك السابقة وقارنها بالقارئ.</p>
+        </div>
+
         <div class="card">
           <b>الآية التالية</b>
           <p class="muted small">تُعرض آية ويُطلب منك تذكّر ما بعدها. ${N(ROUNDS)} أسئلة في كل جولة.</p>

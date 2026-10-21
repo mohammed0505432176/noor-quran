@@ -30,11 +30,13 @@ const ROUTES = {
   azkar: () => import('./views/azkar.js'),
   tasbeeh: () => import('./views/tasbeeh.js'),
   train: () => import('./views/train.js'),          // memorization drills
+  family: () => import('./views/family.js'),        // family circle board & challenges
+  recordings: () => import('./views/recordings.js'),// my saved recitations
   more: () => import('./views/more.js'),
   settings: () => import('./views/settings.js')
 };
 const TABS = [['home', 'home', 'الرئيسية'], ['mushaf', 'book', 'المصحف'], ['recite', 'mic', 'التسميع'], ['prayer', 'mosque', 'الصلاة'], ['more', 'grid', 'المزيد']];
-const TAB_OF = { search: 'mushaf', train: 'recite', review: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', tasbeeh: 'more', settings: 'more' };
+const TAB_OF = { search: 'mushaf', train: 'recite', family: 'more', recordings: 'recite', review: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', tasbeeh: 'more', settings: 'more' };
 
 const main = document.getElementById('app');
 const nav = document.getElementById('tabs');
@@ -108,6 +110,7 @@ function init() {
     } catch (e) {}
   });
   import('./core/prayer.js').then(p => p.refreshSchedule && p.refreshSchedule()).catch(() => {});
+  import('./core/family.js').then(f => f.startFamilySync && f.startFamilySync()).catch(() => {});
   const sp = document.getElementById('splash');
   if (sp) setTimeout(() => { sp.classList.add('hide'); setTimeout(() => sp.remove(), 700); }, 1300);
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.Capacitor?.isNativePlatform?.()) {

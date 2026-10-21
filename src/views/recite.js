@@ -8,7 +8,8 @@ import { speechSupport, startListening } from '../core/speech.js';
 import { haptic } from '../core/platform.js';
 import { startRecorder, recorderSupported } from '../core/recorder.js';
 import { cloudStatus, transcribe, tajweedReview } from '../core/cloud.js';
-import { playRange } from '../core/audio.js';
+import { playRange, stop as stopReciter } from '../core/audio.js';
+import * as recordings from '../core/recordings.js';
 
 const MODE_KEY = 'noor.recite.mode';
 const MODES = ['ai', 'device', 'hide'];
@@ -506,6 +507,13 @@ export default {
       const msg = acc >= 90 ? 'ما شاء الله، تسميع متقن' : acc >= 70 ? 'جيد جداً، راجع الكلمات الحمراء' : 'التكرار طريق الإتقان';
       const tooLong = secs > MAX_REVIEW_SECS;
       if (blob) { try { resUrl = URL.createObjectURL(blob); } catch (e) { resUrl = null; } }
+      let recId = null, pendingTj = null;
+      if (blob) {
+        recordings.save({ blob, s, from, to, acc, durationMs: Math.round((secs || 0) * 1000) }).then(id => {
+          recId = id;
+          if (id && pendingTj != null) recordings.update(id, { tajweedScore: pendingTj });
+        }).catch(() => {});
+      }
       el.innerHTML = header('نتيجة التسميع') + `
         <div class="card hero center">
           <div class="ring" style="position:relative;width:140px;height:140px;margin:0 auto">
@@ -517,10 +525,13 @@ export default {
         </div>
         ${missed.length ? `<h2 class="section-title">الكلمات التي تحتاج مراجعة</h2><div class="card"><div class="row">${missed.map(w => `<span class="chip quran">${esc(w)}</span>`).join('')}</div></div>` : ''}
         <div class="card mt">
-          <div class="row" style="justify-content:center">
-            ${resUrl ? `<button class="btn ghost sm" id="rc-mine">${icon('play', 16)} استمع لتلاوتك</button>` : ''}
-            <button class="btn ghost sm" id="rc-sheikh">${icon('play', 16)} استمع للشيخ</button>
+          ${resUrl ? `<div class="center muted small mb">استمع لتلاوتك وقارنها بالقارئ</div>
+          <div class="seg" role="group" aria-label="قارن بالقارئ">
+            <button id="rc-mine">${icon('play', 16)} صوتي</button>
+            <button id="rc-sheikh">${icon('play', 16)} القارئ</button>
           </div>
+          <div class="center mt"><a class="small gold" data-go="recordings">كل تلاواتي</a></div>`
+          : `<div class="row" style="justify-content:center"><button class="btn ghost sm" id="rc-sheikh">${icon('play', 16)} استمع للشيخ</button></div>`}
         </div>
         ${resUrl ? `<div id="rc-tj" class="mt">${tooLong
           ? '<div class="card"><p class="muted small center">التسجيل أطول من ٤ دقائق، قسّمه إلى مقاطع أقصر للحصول على تقييم التجويد.</p></div>'
@@ -538,22 +549,24 @@ export default {
         e.currentTarget.disabled = true;
       };
 
-      const mine = $('#rc-mine', el);
+      const mine = $('#rc-mine', el), sheikh = $('#rc-sheikh', el);
+      const mark = which => { if (mine && resUrl) { mine.classList.toggle('active', which === 'mine'); sheikh.classList.toggle('active', which === 'sheikh'); } };
+      const stopMine = () => { if (resAudio && !resAudio.paused) resAudio.pause(); };
       if (mine && resUrl) {
-        const setMine = playing => { mine.innerHTML = (playing ? icon('pause', 16) + ' إيقاف مؤقت' : icon('play', 16) + ' استمع لتلاوتك'); };
         mine.onclick = () => {
           if (!resAudio) {
             resAudio = new Audio(resUrl);
-            resAudio.onended = () => setMine(false);
-            resAudio.onerror = () => { setMine(false); toast('تعذر تشغيل التسجيل'); };
+            resAudio.onended = () => mark(null);
+            resAudio.onerror = () => { mark(null); toast('تعذر تشغيل التسجيل'); };
           }
-          if (resAudio.paused) { resAudio.play().then(() => setMine(true)).catch(() => toast('تعذر تشغيل التسجيل')); }
-          else { resAudio.pause(); setMine(false); }
+          if (!resAudio.paused) { resAudio.pause(); mark(null); return; }
+          try { stopReciter(); } catch (e) {}
+          resAudio.play().then(() => mark('mine')).catch(() => toast('تعذر تشغيل التسجيل'));
         };
       }
-      $('#rc-sheikh', el).onclick = () => {
-        if (resAudio && !resAudio.paused) { resAudio.pause(); if (mine) mine.innerHTML = icon('play', 16) + ' استمع لتلاوتك'; }
-        try { playRange(s, from, to); } catch (e) { toast('تعذر تشغيل التلاوة'); }
+      sheikh.onclick = () => {
+        stopMine();
+        try { playRange(s, from, to); mark('sheikh'); } catch (e) { toast('تعذر تشغيل التلاوة'); }
       };
 
       const box = $('#rc-tj', el), tjBtn = $('#rc-tjbtn', el);
@@ -569,6 +582,8 @@ export default {
             const r = await tajweedReview(blob, { s, from, to, text, signal: ctl.signal });
             if (ctl.signal.aborted || gen !== rg) return;
             box.innerHTML = renderTajweed(r);
+            const sc = Number(r && r.score);
+            if (Number.isFinite(sc)) { const v = Math.max(0, Math.min(100, Math.round(sc))); if (recId) recordings.update(recId, { tajweedScore: v }); else pendingTj = v; }
           } catch (e) {
             if (ctl.signal.aborted || gen !== rg) return;
             box.innerHTML = `<div class="card center"><p>${esc(e && e.message ? e.message : 'تعذّر تقييم التجويد')}</p><button class="btn sm" id="rc-tjr">أعد المحاولة</button></div>`;

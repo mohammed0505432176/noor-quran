@@ -1,15 +1,59 @@
 // Settings.
 import { S, save, updateSettings, exportData, importData, resetAll } from '../core/store.js';
 import { esc, icon, toast, sheet, header, N } from '../ui.js';
+import { cloudStatus } from '../core/cloud.js';
 
 const FALLBACK_RECITERS = [{ id: 'Alafasy_128kbps', name: 'مشاري العفاسي' }];
 const PREVIEW = 'بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ';
 const seg = (id, items, cur) => `<div class="seg" id="${id}">${items.map(([v, t]) => `<button data-v="${v}" class="${v === cur ? 'active' : ''}">${t}</button>`).join('')}</div>`;
 
+// Providers served by the noor-ai backend: [status key, label, role].
+const PROVIDERS = [
+  ['gemini', 'Gemini', 'فهم الصوت وتقييم التجويد والمحادثة'],
+  ['groq', 'Groq', 'Whisper لتسميع دقيق + محادثة سريعة'],
+  ['cerebras', 'Cerebras', 'محادثة فائقة السرعة'],
+  ['openrouter', 'OpenRouter', 'نماذج مجانية متعددة'],
+  ['mistral', 'Mistral', 'محادثة'],
+  ['pollinations', 'Pollinations', 'احتياطي بلا مفتاح']
+];
+const STT_NAMES = { 'whisper-large-v3': 'Whisper large-v3', gemini: 'Gemini' };
+
+/** Status card body for a cloudStatus() result (never throws; r may be { ok:false }). */
+function statusHtml(r) {
+  const ok = !!(r && r.ok);
+  const p = (r && r.providers) || {};
+  const lim = (r && r.limits) || {};
+  const stt = STT_NAMES[r && r.sttEngine] || (r && r.sttEngine) || 'غير متاح';
+  const dot = `<span style="display:inline-block;width:.7rem;height:.7rem;border-radius:50%;background:${ok ? 'var(--ok)' : 'var(--bad)'}"></span>`;
+  return `<div class="row" style="align-items:center;gap:.5rem">${dot}<b>${ok ? 'متصل' : 'غير متصل'}</b></div>
+    ${ok ? '' : '<p class="muted small">الخادم غير متاح الآن، سيُستخدم البديل المجاني</p>'}
+    <ul class="list mt">${PROVIDERS.map(([k, n, d]) => `<li class="list-item">
+      <span class="li-start" style="color:${p[k] ? 'var(--ok)' : 'var(--muted)'}">${p[k] ? icon('check', 18) : '—'}</span>
+      <div class="li-main">${esc(n)}</div><div class="li-sub">${esc(d)}</div></li>`).join('')}</ul>
+    <p class="small mt">محرك التسميع: ${esc(stt)}</p>
+    ${lim.chat != null ? `<p class="small muted">الحد اليومي: ${N(lim.chat)} محادثة / ${N(lim.tajweed ?? 0)} تجويد</p>` : ''}`;
+}
+
+const ADD_PROVIDER_HTML = `<h3>إضافة مزود جديد</h3>
+  <p class="muted small">أضف مفتاحاً مجانياً لتفعيل مزود إضافي. المفتاح يُحفظ في خادم نور فقط، ولا يُخزَّن داخل التطبيق.</p>
+  <ol style="padding-inline-start:1.3rem;line-height:1.9;margin:.6rem 0">
+    <li>احصل على مفتاح مجاني من <span dir="ltr">cloud.cerebras.ai</span> أو <span dir="ltr">console.mistral.ai</span></li>
+    <li>افتح <span dir="ltr">supabase.com/dashboard</span> ثم المشروع <b dir="ltr">ibrahim-assistant</b>، واختر Edge Functions ثم Secrets</li>
+    <li>أضف السر <b dir="ltr">CEREBRAS_API_KEY</b> أو <b dir="ltr">MISTRAL_API_KEY</b> مع المفتاح</li>
+    <li>يتفعّل المزود تلقائياً خلال دقيقة، ولا يلزم تحديث التطبيق</li>
+  </ol>
+  <button class="btn ghost block mt" id="ai-add-ok">حسناً</button>`;
+
 export default {
   async render(el) {
     let reciters = FALLBACK_RECITERS;
     try { const a = await import('../core/audio.js'); if (Array.isArray(a.RECITERS) && a.RECITERS.length) reciters = a.RECITERS; } catch (e) { /* fallback */ }
+
+    const loadStatus = (force = false) => {
+      const box = el.querySelector('#ai-card'); if (!box) return;
+      if (force) box.innerHTML = '<p class="muted small">جارٍ تحديث الحالة…</p>';
+      cloudStatus({ force }).then(r => { if (box.isConnected) box.innerHTML = statusHtml(r); });
+    };
 
     const draw = () => {
       const s = S.settings, ai = s.ai;
@@ -31,8 +75,9 @@ export default {
           <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح']], s.theme)}</div></div>
 
         <div class="card mt"><div class="section-title">الذكاء الاصطناعي</div>
-          <div class="field"><label>المزوّد</label>${seg('s-prov', [['auto', 'تلقائي (موصى به)'], ['free', 'مجاني بديل'], ['custom', 'مخصص']], ai.provider)}</div>
-          ${ai.provider === 'auto' ? '<p class="muted small" id="ai-status">جارٍ فحص الاتصال…</p>' : ''}
+          <div id="ai-card" style="margin-bottom:.8rem"><p class="muted small">جارٍ فحص الخدمات…</p></div>
+          <div class="row"><button class="btn sm ghost" id="ai-refresh">تحديث الحالة</button><button class="btn sm ghost" id="ai-add">إضافة مزود جديد</button></div>
+          <div class="field mt"><label>المزوّد</label>${seg('s-prov', [['auto', 'تلقائي (خادم نور)'], ['free', 'مجاني بديل'], ['custom', 'مخصص']], ai.provider)}</div>
           ${ai.provider === 'custom' ? `
             <div class="field"><label for="ai-url">Base URL</label><input class="input" id="ai-url" dir="ltr" placeholder="https://example.com/v1" value="${esc(ai.baseUrl)}"></div>
             <div class="field"><label for="ai-key">API Key</label><input class="input" id="ai-key" type="password" dir="ltr" autocomplete="off" value="${esc(ai.apiKey)}"></div>
@@ -74,14 +119,9 @@ export default {
       };
       const bindAi = (id, key) => { const i = q(id); if (i) i.oninput = () => updateSettings({ ai: { [key]: i.value.trim() } }); };
       bindAi('#ai-url', 'baseUrl'); bindAi('#ai-key', 'apiKey'); bindAi('#ai-model', 'model');
-      const st = q('#ai-status');
-      if (st) import('../core/cloud.js').then(({ cloudStatus }) => cloudStatus()).then(r => {
-        if (!st.isConnected) return;
-        if (!r || !r.ok) { st.textContent = 'الخادم غير متاح الآن، سيُستخدم البديل المجاني'; return; }
-        const p = r.providers || {};
-        const on = [p.gemini && 'Gemini ✓', p.groq && 'Groq ✓', p.openrouter && 'OpenRouter ✓', r.tajweed && 'التسميع الدقيق ✓'].filter(Boolean);
-        st.textContent = 'متصل' + (on.length ? ': ' + on.join(' · ') : '');
-      }).catch(() => { if (st.isConnected) st.textContent = 'الخادم غير متاح الآن، سيُستخدم البديل المجاني'; });
+      loadStatus();
+      q('#ai-refresh').onclick = () => loadStatus(true);
+      q('#ai-add').onclick = () => { const sh = sheet(ADD_PROVIDER_HTML); sh.querySelector('#ai-add-ok').onclick = sh.close; };
       q('#ai-test').onclick = async e => {
         const btn = e.currentTarget; btn.disabled = true; toast('جارٍ اختبار الاتصال...');
         try {

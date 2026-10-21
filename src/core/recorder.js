@@ -1,124 +1,137 @@
-// Microphone recorder for AI-assisted recitation. One continuous MediaRecorder keeps the FULL
-// recording; a second one on the same stream is restarted every chunkMs so each chunk is a
-// standalone, playable file (own container header) that can be sent to speech-to-text.
-const TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
-const SILENCE_RMS = 0.012;   // chunks whose loudest moment stays below this are not sent
-const MIN_CHUNK_BYTES = 1200;
+// Microphone recorder for AI-assisted recitation. Captures raw PCM (AudioWorklet, with a
+// ScriptProcessor fallback), downsamples to 16 kHz mono and cuts chunks at natural pauses (see
+// audio-dsp.js) so words are never split. Every chunk and the full recording are standalone
+// 16-bit WAV blobs (type 'audio/wav').
+import { TARGET_RATE, createDownsampler, createChunker, encodeWav, encodeWavPcm16, floatToPcm16, rms } from './audio-dsp.js';
 
-function pickType() {
-  if (typeof MediaRecorder === 'undefined') return '';
-  for (const t of TYPES) { try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (e) { /* next */ } }
-  return '';
+const FULL_CAP_SECONDS = 300;        // beyond 5 minutes the full recording stops growing
+const BLOCK = 2048;                  // samples per message from the audio thread
+
+const WORKLET_CODE = `
+class NoorPcm extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(${BLOCK}); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) {
+      for (let i = 0; i < ch.length; i++) {
+        this.buf[this.n++] = ch[i];
+        if (this.n === ${BLOCK}) { const b = this.buf; this.buf = new Float32Array(${BLOCK}); this.n = 0; this.port.postMessage(b, [b.buffer]); }
+      }
+    }
+    return true;
+  }
 }
+registerProcessor('noor-pcm', NoorPcm);
+`;
+
+const getAC = () => (typeof window !== 'undefined' ? (window.AudioContext || window.webkitAudioContext) : undefined);
 
 export function recorderSupported() {
-  return typeof navigator !== 'undefined' && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && typeof MediaRecorder !== 'undefined';
+  return typeof navigator !== 'undefined' && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && !!getAC();
 }
 
-function makeRecorder(stream, mime) {
-  let rec;
-  try { rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 48000 } : undefined); }
-  catch (e) { rec = new MediaRecorder(stream); }
-  const parts = [];
-  const type = (rec.mimeType || mime || 'audio/webm').split(';')[0];
-  const done = new Promise(res => {
-    rec.ondataavailable = ev => { if (ev.data && ev.data.size) parts.push(ev.data); };
-    rec.onstop = () => res(new Blob(parts, { type }));
-    rec.onerror = () => res(new Blob(parts, { type }));
-  });
-  return { rec, done };
-}
+const wavBlob = bytes => new Blob([bytes], { type: 'audio/wav' });
 
 export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLevel = () => {}, onError = () => {} } = {}) {
+  // chunkMs is kept for API compatibility; chunk boundaries now follow pauses in speech.
+  void chunkMs;
   if (!recorderSupported()) { onError('unsupported'); return null; }
+
+  // Create the context first, synchronously inside the user's tap, so it is allowed to run.
+  let actx = null;
+  try {
+    actx = new (getAC())();
+    if (actx.state === 'suspended') actx.resume().catch(() => {});
+  } catch (e) { actx = null; }
+  if (!actx) { onError('error'); return null; }
+
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
     });
   } catch (e) {
+    try { actx.close(); } catch (e2) { /* ignore */ }
     onError(e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'PermissionDeniedError') ? 'permission' : 'error');
     return null;
   }
 
-  const mime = pickType();
   let stopped = false, paused = false, idx = 0;
-  let full = null, chunk = null, chunkMax = 0, chunkTimer = null, meterTimer = null;
-  let actx = null, analyser = null, buf = null;
   let activeMs = 0, since = Date.now();
+  let source = null, node = null, mute = null, workletUrl = null, lastLevel = 0;
+  const ds = createDownsampler(actx.sampleRate, TARGET_RATE);
+  const chunker = createChunker();
+  const full = [];                   // Int16Array blocks
+  let fullLen = 0;
 
   const releaseAll = () => {
-    clearTimeout(chunkTimer); clearInterval(meterTimer);
+    try { if (node) { node.onaudioprocess = null; if (node.port) node.port.onmessage = null; node.disconnect(); } } catch (e) { /* ignore */ }
+    try { if (source) source.disconnect(); } catch (e) { /* ignore */ }
+    try { if (mute) mute.disconnect(); } catch (e) { /* ignore */ }
+    node = source = mute = null;
+    if (workletUrl) { try { URL.revokeObjectURL(workletUrl); } catch (e) { /* ignore */ } workletUrl = null; }
     try { stream.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
     if (actx) { try { actx.close(); } catch (e) { /* ignore */ } actx = null; }
   };
 
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) {
-      actx = new AC();
-      if (actx.state === 'suspended') actx.resume().catch(() => {});
-      analyser = actx.createAnalyser();
-      analyser.fftSize = 1024;
-      actx.createMediaStreamSource(stream).connect(analyser);
-      buf = new Float32Array(analyser.fftSize);
+  const deliver = chunks => {
+    for (const c of chunks) {
+      try { onChunk(wavBlob(encodeWav(c, TARGET_RATE)), idx++); } catch (e) { /* consumer error must not break recording */ }
     }
-  } catch (e) { actx = null; analyser = null; }
+  };
+
+  function handleBlock(input) {
+    if (stopped || paused) return;
+    const now = Date.now();
+    if (now - lastLevel >= 80) {
+      lastLevel = now;
+      try { onLevel(Math.min(1, rms(input) * 6)); } catch (e) { /* ignore */ }
+    }
+    const pcm = ds.push(input);
+    if (!pcm.length) return;
+    if (fullLen < FULL_CAP_SECONDS * TARGET_RATE) {
+      const p = floatToPcm16(pcm);
+      full.push(p); fullLen += p.length;
+    }
+    deliver(chunker.push(pcm));
+  }
 
   try {
-    full = makeRecorder(stream, mime);
-    full.rec.start(1000);
+    source = actx.createMediaStreamSource(stream);
+    mute = actx.createGain();
+    mute.gain.value = 0;             // keep the graph alive without playing the mic back
+    let ok = false;
+    if (actx.audioWorklet && typeof AudioWorkletNode !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && URL.createObjectURL) {
+      try {
+        workletUrl = URL.createObjectURL(new Blob([WORKLET_CODE], { type: 'application/javascript' }));
+        await actx.audioWorklet.addModule(workletUrl);
+        node = new AudioWorkletNode(actx, 'noor-pcm', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
+        node.port.onmessage = ev => handleBlock(ev.data);
+        ok = true;
+      } catch (e) {
+        try { if (node) node.disconnect(); } catch (e2) { /* ignore */ }
+        node = null;
+      }
+      if (workletUrl) { try { URL.revokeObjectURL(workletUrl); } catch (e) { /* ignore */ } workletUrl = null; }
+    }
+    if (!ok) {
+      node = actx.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = ev => handleBlock(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    }
+    source.connect(node);
+    node.connect(mute);
+    mute.connect(actx.destination);
+    if (actx.state === 'suspended') {
+      await Promise.race([actx.resume().catch(() => {}), new Promise(res => setTimeout(res, 1500))]);
+    }
   } catch (e) {
     releaseAll();
     onError('error');
     return null;
   }
 
-  function startChunk() {
-    if (stopped || paused) return;
-    try {
-      chunk = makeRecorder(stream, mime);
-      chunkMax = 0;
-      chunk.rec.start();
-      chunkTimer = setTimeout(rotate, chunkMs);
-    } catch (e) { chunk = null; }
-  }
-  /** Stop the current chunk recorder and hand its file out (if it carries sound). */
-  async function flushChunk() {
-    clearTimeout(chunkTimer);
-    const c = chunk, max = chunkMax;
-    chunk = null;
-    if (!c) return;
-    try { if (c.rec.state !== 'inactive') c.rec.stop(); } catch (e) { /* ignore */ }
-    let blob;
-    try { blob = await c.done; } catch (e) { return; }
-    if (blob && blob.size >= MIN_CHUNK_BYTES && max >= SILENCE_RMS) {
-      try { onChunk(blob, idx++); } catch (e) { /* consumer error must not break recording */ }
-    }
-  }
-  function rotate() {
-    if (stopped || paused) return;
-    flushChunk();
-    startChunk();
-  }
-
-  meterTimer = setInterval(() => {
-    if (stopped || !analyser) return;
-    let rms = 0;
-    if (!paused) {
-      analyser.getFloatTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      rms = Math.sqrt(sum / buf.length);
-      if (rms > chunkMax) chunkMax = rms;
-    }
-    try { onLevel(Math.min(1, rms * 6)); } catch (e) { /* ignore */ }
-  }, 100);
-
   // The mic can be revoked/unplugged mid-session.
   stream.getAudioTracks().forEach(t => { t.onended = () => { if (!stopped) onError('error'); }; });
-
-  startChunk();
 
   let stopPromise = null;
   function stop() {
@@ -126,11 +139,14 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
     stopPromise = (async () => {
       stopped = true;
       if (!paused) activeMs += Date.now() - since;
-      let blob = new Blob([], { type: 'audio/webm' });
+      let blob = wavBlob(encodeWav(new Float32Array(0), TARGET_RATE));
       try {
-        await flushChunk();
-        try { if (full.rec.state !== 'inactive') full.rec.stop(); } catch (e) { /* ignore */ }
-        blob = await full.done;
+        deliver(chunker.flush());
+        const all = new Int16Array(fullLen);
+        let o = 0;
+        for (const p of full) { all.set(p, o); o += p.length; }
+        full.length = 0;
+        blob = wavBlob(encodeWavPcm16(all, TARGET_RATE));
       } catch (e) { /* fall through */ }
       finally { releaseAll(); }
       return blob;
@@ -141,16 +157,15 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
     if (stopped || paused) return;
     paused = true;
     activeMs += Date.now() - since;
-    flushChunk();                       // don't lose what was said before the pause
-    try { if (full.rec.state === 'recording') full.rec.pause(); } catch (e) { /* ignore */ }
+    deliver(chunker.flush());          // don't lose what was said before the pause
+    ds.reset();
     try { onLevel(0); } catch (e) { /* ignore */ }
   }
   function resume() {
     if (stopped || !paused) return;
     paused = false;
     since = Date.now();
-    try { if (full.rec.state === 'paused') full.rec.resume(); } catch (e) { /* ignore */ }
-    startChunk();
+    try { if (actx && actx.state === 'suspended') actx.resume().catch(() => {}); } catch (e) { /* ignore */ }
   }
   const elapsed = () => (activeMs + (stopped || paused ? 0 : Date.now() - since)) / 1000;
 

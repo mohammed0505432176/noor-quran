@@ -1,49 +1,109 @@
-// Client for the "noor-ai" backend (Supabase Edge Function). The backend holds the AI provider keys
-// (Gemini, Groq, OpenRouter) so no secret ever ships inside the app or the public repo.
+// Client for the noor-ai backend (Supabase Edge Function). The app signs in anonymously so every
+// device gets its own identity and daily quota — no keys are ever shipped in the app.
 // CONTRACT:
-//   cloudStatus()                                  -> { ok, providers:{gemini,groq,openrouter}, stt, tajweed }
-//   cloudChat(messages, { signal, mode })          -> { text, provider, model }      mode: 'fast' | 'smart'
-//   transcribe(blob, { prompt, signal })           -> { text, provider }            Quran-aware speech-to-text
-//   tajweedReview(blob, { s, from, to, text, signal }) -> { score, summary, mistakes[], tajweed[], advice, provider }
-// All functions throw Error with an Arabic message on failure.
+//   status({force}) -> { ok, providers:{gemini,groq,cerebras,openrouter,mistral,pollinations}, stt, sttEngine, tajweed, limits } | null (offline/unreachable)
+//   cloudChat(messages, { mode:'fast'|'smart', signal }) -> { text, provider, model }      (throws CloudError)
+//   transcribe(blob|base64, { mime, prompt, signal })   -> { text, provider, model }      (throws CloudError)
+//   tajweedReview(blob, { s, from, to, text, signal })  -> { score, summary, mistakes[], tajweed[], advice[], provider }
+//   CloudError has .code: 'offline' | 'auth' | 'rate_limited' | 'daily_limit' | 'no_provider' | 'bad_audio' | 'server' | 'timeout' | 'aborted'
 
-export const CLOUD = {
-  url: 'https://xdrrrquzxoinqwknfrgt.supabase.co/functions/v1/noor-ai',
-  appToken: 'noor-family-2026'
-};
+export const SUPABASE_URL = 'https://xdrrrquzxoinqwknfrgt.supabase.co';
+// Public (publishable) anon key — safe to ship; it only allows anonymous sign-in. Protected by RLS + per-user limits.
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhkcnJycXV6eG9pbnF3a25mcmd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIyNTkzNTMsImV4cCI6MjEwNzgzNTM1M30.AP6KmxaymJ7JT-mD5si3Xe4mFJLCujUfEExJnBp9dHM';
+const FN_URL = SUPABASE_URL + '/functions/v1/noor-ai';
+const AUTH_KEY = 'noor.auth';
 
-async function call(action, payload = {}, { signal, timeout = 60000 } = {}) {
+export class CloudError extends Error {
+  // message is always user-facing Arabic so existing callers can show e.message directly
+  constructor(code) { super(ERROR_TEXT[code] || ERROR_TEXT.server); this.code = code; }
+}
+
+const now = () => Math.floor(Date.now() / 1000);
+function loadSession() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch (e) { return null; } }
+function saveSession(s) { try { s ? localStorage.setItem(AUTH_KEY, JSON.stringify(s)) : localStorage.removeItem(AUTH_KEY); } catch (e) {} }
+
+async function authCall(path, body, signal) {
+  const r = await fetch(SUPABASE_URL + '/auth/v1/' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY },
+    body: JSON.stringify(body), signal
+  });
+  if (!r.ok) throw new CloudError('auth');
+  const d = await r.json();
+  if (!d.access_token) throw new CloudError('auth');
+  return { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: d.expires_at || (now() + (d.expires_in || 3600)) };
+}
+
+let pending = null;
+/** Returns a valid access token, creating an anonymous account on first use. */
+export async function ensureSession(force = false) {
+  const s = loadSession();
+  if (!force && s && s.access_token && s.expires_at - now() > 90) return s.access_token;
+  if (pending) return pending;
+  pending = (async () => {
+    try {
+      if (s && s.refresh_token) {
+        try { const n = await authCall('token?grant_type=refresh_token', { refresh_token: s.refresh_token }); saveSession(n); return n.access_token; }
+        catch (e) { /* refresh token expired/revoked → new anonymous account */ }
+      }
+      const n = await authCall('signup', { data: {} });
+      saveSession(n); return n.access_token;
+    } finally { pending = null; }
+  })();
+  return pending;
+}
+
+async function call(action, payload = {}, { signal, timeout = 45000 } = {}, retried = false) {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new CloudError('offline');
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeout);
-  const onAbort = () => ctl.abort();
-  if (signal) { if (signal.aborted) ctl.abort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+  const timer = setTimeout(() => ctl.abort('timeout'), timeout);
+  const onAbort = () => ctl.abort('aborted');
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   try {
-    const r = await fetch(CLOUD.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-noor-app': CLOUD.appToken },
-      body: JSON.stringify({ action, ...payload }),
-      signal: ctl.signal
-    });
-    let data = null;
-    try { data = await r.json(); } catch (e) {}
-    if (!r.ok || !data || data.error) {
-      const code = data && data.error;
-      if (r.status === 429 || code === 'rate_limited') throw new Error('الخدمة مشغولة الآن، حاول بعد قليل');
-      if (code === 'no_provider') throw new Error('خدمة الذكاء غير متاحة حالياً');
-      throw new Error('تعذّر الاتصال بخادم نور');
+    let token;
+    try { token = await ensureSession(); } catch (e) { throw e instanceof CloudError ? e : new CloudError('offline'); }
+    let r;
+    try {
+      r = await fetch(FN_URL, {
+        method: 'POST', signal: ctl.signal,
+        headers: { 'Content-Type': 'application/json', apikey: ANON_KEY, Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ action, ...payload })
+      });
+    } catch (e) {
+      if (ctl.signal.aborted) throw new CloudError(ctl.signal.reason === 'aborted' ? 'aborted' : 'timeout');
+      throw new CloudError('offline');
     }
-    return data;
-  } catch (e) {
-    if (e.name === 'AbortError' && signal && signal.aborted) throw e;
-    if (e.name === 'AbortError') throw new Error('انتهت مهلة الاتصال بخادم نور');
-    if (/^[؀-ۿ]/.test(e.message)) throw e;
-    throw new Error('تعذّر الاتصال بخادم نور، تحقق من الإنترنت');
+    if (r.status === 401 && !retried) { await ensureSession(true).catch(() => {}); return call(action, payload, { signal, timeout }, true); }
+    let d = null; try { d = await r.json(); } catch (e) {}
+    if (!r.ok) {
+      const code = d && d.error;
+      throw new CloudError(r.status === 429 ? (code === 'daily_limit' ? 'daily_limit' : 'rate_limited')
+        : code === 'no_provider' ? 'no_provider' : code === 'bad_audio' ? 'bad_audio' : r.status === 401 ? 'auth' : 'server');
+    }
+    return d;
   } finally {
-    clearTimeout(t);
+    clearTimeout(timer);
     if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 
+let statusCache = null;
+export async function status({ force = false } = {}) {
+  if (!force && statusCache && Date.now() - statusCache.at < 10 * 60_000) return statusCache.d;
+  try { const d = await call('status', {}, { timeout: 12000 }); statusCache = { d, at: Date.now() }; return d; }
+  catch (e) { return null; }
+}
+
+/** Back-compat shape used by views: never throws; { ok:false } when unreachable. */
+export async function cloudStatus(opts) {
+  return (await status(opts)) || { ok: false, providers: {}, stt: false, tajweed: false, error: ERROR_TEXT.offline };
+}
+
+export function cloudChat(messages, { mode = 'fast', signal } = {}) {
+  return call('chat', { messages, mode }, { signal, timeout: 60000 });
+}
+
+/** Blob → base64 (no data: prefix). */
 export function blobToBase64(blob) {
   return new Promise((res, rej) => {
     const fr = new FileReader();
@@ -53,25 +113,30 @@ export function blobToBase64(blob) {
   });
 }
 
-let statusCache = null, statusAt = 0;
-export async function cloudStatus({ force = false } = {}) {
-  if (!force && statusCache && Date.now() - statusAt < 5 * 60e3) return statusCache;
-  try { statusCache = await call('status', {}, { timeout: 12000 }); }
-  catch (e) { statusCache = { ok: false, providers: {}, stt: false, tajweed: false, error: e.message }; }
-  statusAt = Date.now();
-  return statusCache;
-}
-
-export function cloudChat(messages, { signal, mode = 'fast' } = {}) {
-  return call('chat', { messages, mode }, { signal, timeout: 80000 });
-}
-
-export async function transcribe(blob, { prompt = '', signal } = {}) {
-  const audio = await blobToBase64(blob);
-  return call('transcribe', { audio, mime: blob.type || 'audio/webm', prompt }, { signal, timeout: 30000 });
+export async function transcribe(audio, { mime = 'audio/wav', prompt = '', signal } = {}) {
+  const b64 = typeof audio === 'string' ? audio : await blobToBase64(audio);
+  return call('transcribe', { audio: b64, mime: (audio && audio.type) || mime, prompt: String(prompt).slice(0, 600) }, { signal, timeout: 30000 });
 }
 
 export async function tajweedReview(blob, { s, from, to, text, signal } = {}) {
-  const audio = await blobToBase64(blob);
-  return call('tajweed', { audio, mime: blob.type || 'audio/webm', s, from, to, text }, { signal, timeout: 120000 });
+  const b64 = await blobToBase64(blob);
+  return call('tajweed', { audio: b64, mime: blob.type || 'audio/wav', s, from, to, text: String(text).slice(0, 6000) }, { signal, timeout: 120000 });
+}
+
+export const ERROR_TEXT = {
+  offline: 'لا يوجد اتصال بالإنترنت',
+  auth: 'تعذّر الاتصال بخادم نور، حاول مرة أخرى',
+  rate_limited: 'طلبات كثيرة في وقت قصير، انتظر دقيقة',
+  daily_limit: 'وصلت للحد اليومي لهذه الخدمة، تتجدد غداً',
+  no_provider: 'خدمات الذكاء مشغولة الآن، حاول بعد قليل',
+  bad_audio: 'التسجيل غير صالح أو طويل جداً',
+  server: 'حدث خطأ في الخادم، حاول مرة أخرى',
+  timeout: 'انتهت مهلة الاتصال، تحقق من الإنترنت',
+  aborted: 'أُلغي الطلب'
+};
+export const errText = e => ERROR_TEXT[e && e.code] || 'تعذّر الاتصال، تحقق من الإنترنت';
+
+/** Family circle operations: 'create' {name, member, stats} | 'join' {code, member, stats} | 'sync' {stats, member?} | 'leave' | 'board'. */
+export function familyOp(op, payload = {}) {
+  return call('family', { op, ...payload }, { timeout: 20000 });
 }

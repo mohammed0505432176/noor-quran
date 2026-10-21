@@ -33,7 +33,7 @@ function providerConfig() {
   return { url: FREE_URL, model: FREE_MODEL, headers: {} };
 }
 
-const CLOUD_NAMES = { gemini: 'Gemini', groq: 'Groq', openrouter: 'OpenRouter' };
+const CLOUD_NAMES = { gemini: 'Gemini', groq: 'Groq', cerebras: 'Cerebras', openrouter: 'OpenRouter', mistral: 'Mistral', pollinations: 'Pollinations' };
 let lastLabel = '';
 /** Short Arabic/Latin label of who answered the last chat() call. */
 export function lastProvider() { return lastLabel; }

@@ -15,7 +15,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      VERSION: 1.1.${{ github.run_number }}
+      VERSION: 1.2.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -95,7 +95,7 @@ jobs:
           NOOR_KEY_ALIAS: noor
           NOOR_KEY_PASSWORD: ${{ secrets.NOOR_KEY_PASSWORD || 'noorQuran2026' }}
           NOOR_VERSION_CODE: ${{ github.run_number }}
-          NOOR_VERSION_NAME: 1.1.${{ github.run_number }}
+          NOOR_VERSION_NAME: 1.2.${{ github.run_number }}
         run: |
           set -o pipefail
           chmod +x gradlew
@@ -115,15 +115,15 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: نور 1.1.${{ github.run_number }}
+          tag_name: v1.2.${{ github.run_number }}
+          name: نور 1.2.${{ github.run_number }}
           make_latest: true
           files: Noor-Quran-${{ env.VERSION }}.apk
           body: |
-            ## تطبيق نور - الإصدار 1.1.${{ github.run_number }}
+            ## تطبيق نور - الإصدار 1.2.${{ github.run_number }}
 
             ### طريقة التثبيت على أندرويد
-            1. حمّل ملف APK من الأسفل (Noor-Quran-1.1.${{ github.run_number }}.apk).
+            1. حمّل ملف APK من الأسفل (Noor-Quran-1.2.${{ github.run_number }}.apk).
             2. افتح الملف، وإذا طلب الجهاز فاسمح بالتثبيت من مصادر غير معروفة لهذا المتصفح أو مدير الملفات.
             3. اضغط تثبيت ثم افتح التطبيق.
 

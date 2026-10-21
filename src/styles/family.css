@@ -1,0 +1,26 @@
+.fam-code { font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: clamp(1.7rem, 9vw, 2.4rem); font-weight: 800; letter-spacing: .28em; padding-inline-start: .28em; color: var(--gold-2); direction: ltr; text-align: center; text-shadow: 0 0 18px var(--gold-soft); user-select: all; }
+.fam-code-box { border: 1px dashed var(--line); border-radius: 14px; padding: .6rem .4rem; background: var(--gold-soft); }
+.fam-name { font-family: var(--font-display); font-size: 1.4rem; text-align: center; }
+.fam-input-code { text-transform: uppercase; letter-spacing: .3em; text-align: center; direction: ltr; font-family: ui-monospace, Menlo, monospace; font-weight: 700; }
+.fam-board { display: flex; flex-direction: column; gap: .55rem; margin-top: .8rem; }
+.fam-row { display: flex; align-items: center; gap: .6rem; padding: .7rem .75rem; border-radius: var(--radius); background: var(--card); box-shadow: inset 0 0 0 1px var(--line); min-width: 0; }
+.fam-row.me { box-shadow: inset 0 0 0 1.5px var(--gold); background: var(--card-2); }
+.fam-row.r1 { background: linear-gradient(135deg, var(--gold-soft), var(--card-2)); box-shadow: inset 0 0 0 1.5px var(--gold), 0 0 22px var(--gold-soft); padding-block: .95rem; }
+.fam-row.r2, .fam-row.r3 { padding-block: .8rem; }
+.fam-rank { flex: none; width: 2.2rem; text-align: center; font-size: 1.55rem; line-height: 1; }
+.fam-rank.n { font-size: 1rem; font-weight: 700; color: var(--muted); }
+.fam-main { flex: 1; min-width: 0; }
+.fam-who { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.fam-who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fam-me { flex: none; font-size: .7rem; padding: 1px 8px; border-radius: 999px; background: var(--gold); color: var(--on-gold); font-weight: 700; }
+.fam-sub { color: var(--muted); font-size: .76rem; display: flex; flex-wrap: wrap; gap: .1rem .6rem; margin-top: 2px; }
+.fam-metric { flex: none; text-align: center; min-width: 3.6rem; }
+.fam-metric b { display: block; font-size: 1.5rem; line-height: 1.1; color: var(--gold-2); }
+.fam-metric span { font-size: .7rem; color: var(--muted); }
+.fam-goal-line { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; }
+.fam-msg { text-align: center; padding: 1.2rem .5rem; }
+.fam-mini { display: flex; align-items: center; gap: .75rem; }
+.fam-spin { animation: famspin 1s linear infinite; }
+@keyframes famspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .fam-spin { animation: none; } }
+@media (max-width: 380px) { .fam-metric { min-width: 3rem; } .fam-rank { width: 1.8rem; } .seg > button { padding: 0 4px; font-size: .85rem; } }

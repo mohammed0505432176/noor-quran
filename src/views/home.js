@@ -101,6 +101,7 @@ export default {
         <div class="stat"><b>${N(S.rec.length)}</b><span>تسميع</span></div>
       </div>
       <div id="prayer-box" class="mt"></div>
+      <div id="fam-box"></div>
       ${due.length ? `<div class="card mt" data-go="review" style="cursor:pointer"><div class="row" style="align-items:center"><span class="gold">${icon('brain', 24)}</span><div style="flex:1"><b>لديك ${N(due.length)} مقاطع للمراجعة اليوم</b><div class="muted small">المراجعة المنتظمة تثبّت الحفظ</div></div></div></div>` : ''}
       <div class="section-title mt">اختصارات</div>
       <div class="grid-2">${quick}</div>`;
@@ -130,6 +131,24 @@ export default {
         timers.push(iv); tick();
       }
     } catch (e) { if (alive) fallback(); }
+
+    // Family rank (lazy, silent on failure)
+    (async () => {
+      try {
+        const fm = await import('../core/family.js');
+        if (!fm.getFamily()) return;
+        const r = await fm.board();
+        if (!alive || !r.family || !r.members.length) return;
+        const w = m => Number(m.stats && m.stats.week) || 0;
+        const sorted = [...r.members].sort((a, b) => w(b) - w(a));
+        const mine = sorted.findIndex(m => m.me), lead = sorted[0];
+        const fb = el.querySelector('#fam-box'); if (!fb) return;
+        const msg = mine === 0 ? 'أنت في الصدارة هذا الأسبوع 🥇' : `ترتيبك ${N(mine + 1)} من ${N(sorted.length)}`;
+        fb.innerHTML = `<div class="card tight mt" data-go="family" style="cursor:pointer"><div class="row" style="align-items:center;flex-wrap:nowrap"><span class="gold">${icon('home', 22)}</span>
+          <div style="flex:1;min-width:0"><div class="muted small">${esc(r.family.name || 'دائرة العائلة')}</div><b>${mine >= 0 ? msg : 'دائرة العائلة'}</b>
+          ${mine !== 0 && lead ? `<div class="muted small">المتصدر: ${esc(lead.name)} · ${N(w(lead))} آية</div>` : ''}</div></div></div>`;
+      } catch (e) { /* silent */ }
+    })();
 
     return () => { alive = false; timers.forEach(clearInterval); };
   }

@@ -3,12 +3,14 @@ import { esc, $, $$, toast, sheet, icon, ayahMark, header, N } from '../ui.js';
 import { S, markRead, setLast, isBookmarked, toggleBookmark, addReview } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, typeName, ayah, JUZ, SURAH_COUNT } from '../core/quran.js';
 import * as audio from '../core/audio.js';
+import { loadTajweed, TAJWEED_LEGEND } from '../core/tajweed.js';
 
 const BASMALA = 'بِسۡمِ ٱللَّهِ ٱلرَّحۡمَٰنِ ٱلرَّحِيمِ';
 const ORD = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع', 'العاشر', 'الحادي عشر', 'الثاني عشر', 'الثالث عشر', 'الرابع عشر', 'الخامس عشر', 'السادس عشر', 'السابع عشر', 'الثامن عشر', 'التاسع عشر', 'العشرون', 'الحادي والعشرون', 'الثاني والعشرون', 'الثالث والعشرون', 'الرابع والعشرون', 'الخامس والعشرون', 'السادس والعشرون', 'السابع والعشرون', 'الثامن والعشرون', 'التاسع والعشرون', 'الثلاثون'];
 const RATES = [0.75, 1, 1.25, 1.5];
 const reduced = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const AUTO_KEY = 'noor.autoread';
+const TJ_KEY = 'noor.tajweed';
 
 function readCounts() {
   const c = new Array(SURAH_COUNT + 1).fill(0);
@@ -94,12 +96,14 @@ async function renderReader(el, s, startAyah) {
     (s > 1 ? `<button class="btn ghost" data-go="mushaf/${s - 1}">السورة السابقة</button>` : '<span></span>') +
     (s < SURAH_COUNT ? `<button class="btn ghost" data-go="mushaf/${s + 1}">السورة التالية</button>` : '<span></span>') + `</div>`;
 
-  let autoRead = false;
+  let autoRead = false, tjOn = false;
+  try { tjOn = localStorage.getItem(TJ_KEY) === '1'; } catch (e) { /* ignore */ }
   try { autoRead = localStorage.getItem(AUTO_KEY) === '1'; } catch (e) { /* ignore */ }
 
-  el.innerHTML = header(name, { back: 'mushaf', actions: `<button class="icon-btn" id="playAll" aria-label="استماع للسورة">${icon('play')}</button>` }) +
+  el.innerHTML = header(name, { back: 'mushaf', actions: `<button class="chip${tjOn ? ' active' : ''}" id="tjToggle" aria-pressed="${tjOn}">تجويد</button><button class="icon-btn" id="playAll" aria-label="استماع للسورة">${icon('play')}</button>` }) +
     `<div class="row small muted mb" style="justify-content:space-between"><span>تعليم الآيات كمقروءة أثناء التمرير</span>` +
     `<label class="switch"><input type="checkbox" id="autoRead"${autoRead ? ' checked' : ''}><span></span></label></div>` +
+    `<div class="tj-bar mb" id="tjBar" hidden><button class="chip" id="tjLegend">دليل الألوان</button><span class="small muted" id="tjState"></span></div>` +
     `<div class="mushaf-page"><div class="surah-banner">سورة ${esc(name)} · ${typeName(s)} · آياتها ${N(total)}</div>` +
     (s !== 1 && s !== 9 ? `<div class="basmala">${BASMALA}</div>` : '') +
     `<div class="mushaf-text">${text}</div></div>` + navBtns +
@@ -225,6 +229,51 @@ async function renderReader(el, s, startAyah) {
     });
   };
 
+  // ---- tajweed colours
+  const plain = [];
+  for (let n = 1; n <= total; n++) plain[n] = esc(ayah(s, n));
+  const tjBtn = $('#tjToggle', el), tjBar = $('#tjBar', el), tjState = $('#tjState', el);
+  let tjSeq = 0;
+  const paint = html => {
+    for (let n = 1; n <= total; n++) {
+      const sp = spans[n]; if (!sp) continue;
+      sp.innerHTML = `${html ? html[n - 1] : plain[n]} ${ayahMark(n)}`;
+    }
+  };
+  const setTj = async on => {
+    const my = ++tjSeq;
+    tjOn = on;
+    tjBtn.classList.toggle('active', on);
+    tjBtn.setAttribute('aria-pressed', String(on));
+    tjBar.hidden = !on;
+    try { localStorage.setItem(TJ_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+    if (!on) { tjState.textContent = ''; paint(null); return; }
+    textEl.classList.add('tj-load');
+    tjState.textContent = 'جارٍ تحميل الألوان…';
+    try {
+      const html = await loadTajweed(s);
+      if (dead || my !== tjSeq) return;
+      if (html.length < total) throw new Error('short');
+      paint(html);
+      tjState.textContent = '';
+    } catch (e) {
+      if (dead || my !== tjSeq) return;
+      tjOn = false;
+      tjBtn.classList.remove('active'); tjBtn.setAttribute('aria-pressed', 'false');
+      tjBar.hidden = true; tjState.textContent = '';
+      paint(null);
+      toast('تعذّر تحميل ألوان التجويد');
+    } finally {
+      if (my === tjSeq) textEl.classList.remove('tj-load');
+    }
+  };
+  const openLegend = () => {
+    sheet(`<h3 class="gold center">دليل ألوان التجويد</h3><div class="tj-legend">` +
+      TAJWEED_LEGEND.map(l => `<div class="tj-legend-item"><span class="tj-chip tj-${l.cls}">نموذج</span>` +
+        `<div><b>${esc(l.name)}</b><small>${esc(l.desc)}</small></div></div>`).join('') + `</div>`);
+  };
+  if (tjOn) setTj(true);
+
   // ---- events (delegated)
   const onClick = e => {
     const pl = e.target.closest('[data-pl]');
@@ -238,6 +287,8 @@ async function renderReader(el, s, startAyah) {
       return;
     }
     if (e.target.closest('#playAll')) { toggleAll(); return; }
+    if (e.target.closest('#tjToggle')) { setTj(!tjOn); return; }
+    if (e.target.closest('#tjLegend')) { openLegend(); return; }
     const sp = e.target.closest('.ayah');
     if (sp && textEl.contains(sp)) { const a = +sp.dataset.a; select(a); openAyahSheet(a); }
   };
@@ -289,6 +340,7 @@ async function renderReader(el, s, startAyah) {
 
   return () => {
     dead = true;
+    tjSeq++;
     unsub();
     audio.stop();
     if (io) io.disconnect();
