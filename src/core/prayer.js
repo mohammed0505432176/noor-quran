@@ -1,6 +1,6 @@
 // Prayer times, qibla, and notification scheduling. Pure logic is node-importable.
 import { Coordinates, CalculationMethod, PrayerTimes, Madhab, Qibla } from 'adhan';
-import { S, updateSettings, dayStat } from './store.js';
+import { S, updateSettings, dayStat, on } from './store.js';
 
 export const METHODS = {
   UmmAlQura: 'أم القرى (السعودية)',
@@ -20,9 +20,16 @@ export const PRAYERS = [
 export const MAKKAH = { lat: 21.4225, lng: 39.8262 };
 const RIYADH = { lat: 24.7136, lng: 46.6753, city: 'الرياض' };
 
+function isUmmAlQuraRamadan(date) {
+  try {
+    return Number(new Intl.DateTimeFormat('en-u-ca-islamic-umalqura', { month: 'numeric' }).format(date)) === 9;
+  } catch (e) { return false; }
+}
+
 export function timesFor(date, { lat, lng, method = 'UmmAlQura', madhab = 'shafi' }) {
   const params = (CalculationMethod[method] || CalculationMethod.UmmAlQura)();
   params.madhab = madhab === 'hanafi' ? Madhab.Hanafi : Madhab.Shafi;
+  if (method === 'UmmAlQura' && isUmmAlQuraRamadan(date)) params.ishaInterval = 120;
   const t = new PrayerTimes(new Coordinates(lat, lng), date, params);
   return { fajr: t.fajr, sunrise: t.sunrise, dhuhr: t.dhuhr, asr: t.asr, maghrib: t.maghrib, isha: t.isha };
 }
@@ -56,7 +63,7 @@ export function currentConfig() {
   return { lat: has ? p.lat : RIYADH.lat, lng: has ? p.lng : RIYADH.lng, method: p.method, madhab: p.madhab, city: has ? p.city : RIYADH.city, known: has };
 }
 
-/** Get device location, store it. Falls back to Riyadh if never set. Returns { ok, fallback, city }. */
+/** Get device location and store it. On failure the Riyadh fallback is NOT persisted (in-memory default only). Returns { ok, fallback, city }. */
 export async function ensureLocation(force = false) {
   const p = S.settings.prayer;
   const has = typeof p.lat === 'number' && typeof p.lng === 'number';
@@ -74,12 +81,26 @@ export async function ensureLocation(force = false) {
     return { ok: true, fallback: false, city };
   } catch (e) {
     if (!has) {
-      updateSettings({ prayer: { lat: RIYADH.lat, lng: RIYADH.lng, city: RIYADH.city } });
       return { ok: false, fallback: true, city: RIYADH.city };
     }
     return { ok: false, fallback: false, city: p.city };
   }
 }
+
+let goalSubscribed = false;
+function subscribeGoal() {
+  if (goalSubscribed) return;
+  goalSubscribed = true;
+  on('goal', async () => {
+    try {
+      const notify = await import('./notify.js');
+      const { isNative } = await import('./platform.js');
+      if (isNative()) await notify.cancelRange(notify.ID.wird[0], notify.ID.wird[0]);
+      else if (S.settings.prayer.notify) await refreshSchedule(); // web timers are cleared together
+    } catch (e) { /* ignore */ }
+  });
+}
+subscribeGoal();
 
 /** Reschedule 7 days of adhan notifications + daily wird reminder. Safe no-op on errors. */
 export async function refreshSchedule() {
@@ -89,6 +110,8 @@ export async function refreshSchedule() {
     const cfg = currentConfig();
     if (!cfg.known) return { scheduled: 0 };
     const notify = await import('./notify.js');
+    const perm = await notify.ensurePermission();
+    if (!perm.granted) return { scheduled: 0, denied: true };
     const { ID } = notify;
     await notify.cancelRange(ID.prayer[0], ID.wird[1]);
     const list = [];
@@ -110,7 +133,7 @@ export async function refreshSchedule() {
         }
         rid++;
       }
-      // daily wird reminder at 9 PM unless today's goal is already met
+      // daily wird reminder at 9 PM unless today's goal is already met (re-checked on the 'goal' event below)
       const wird = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d, 21, 0, 0);
       const done = d === 0 && dayStat(0).a >= S.settings.goal;
       if (wird > now && !done) list.push({ id: ID.wird[0] + d, title: 'وردك اليومي بانتظارك 📖', body: 'خصّص دقائق مع كتاب الله قبل أن ينقضي يومك', at: wird, channel: 'reminders' });

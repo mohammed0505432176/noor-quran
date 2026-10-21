@@ -45,7 +45,7 @@ function ayahOfDay() {
 function fmtCountdown(ms) {
   const t = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
-  const p = x => N(String(x).padStart(2, '0'));
+  const p = x => String(x).padStart(2, '0').replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
   return `${p(h)}:${p(m)}:${p(s)}`;
 }
 
@@ -60,6 +60,7 @@ export default {
     const last = S.last;
 
     try { await loadQuran(); } catch (e) { /* offline fallback below */ }
+    if (!alive) return;
     let ad = null;
     try { ad = ayahOfDay(); } catch (e) { ad = null; }
 

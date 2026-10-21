@@ -36,3 +36,11 @@ test('qibla bearings', () => {
   const c = qiblaDirection(30.0444, 31.2357);
   assert.ok(c >= 135 && c <= 138, String(c));
 });
+
+test('Umm al-Qura isha interval is 120 min in Ramadan, 90 otherwise', () => {
+  const gap = d => { const t = timesFor(d, riyadh); return (t.isha - t.maghrib) / 60000; };
+  const ram = gap(new Date('2027-02-15T09:00:00Z')); // Ramadan 1448
+  const out = gap(new Date('2026-10-15T09:00:00Z'));
+  assert.ok(Math.abs(ram - 120) <= 2, 'ramadan ' + ram);
+  assert.ok(Math.abs(out - 90) <= 2, 'outside ' + out);
+});

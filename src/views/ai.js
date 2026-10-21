@@ -38,7 +38,7 @@ function motivationPrompt() {
 
 export default {
   async render(el, params = {}) {
-    el.innerHTML = `<div class="view">${header('المساعد الذكي', { actions: `<button class="icon-btn" id="ai-new" aria-label="محادثة جديدة" title="محادثة جديدة">${icon('plus')}</button><button class="icon-btn" data-go="settings" aria-label="الإعدادات">${icon('gear')}</button>` })}
+    el.innerHTML = `<div>${header('المساعد الذكي', { actions: `<button class="icon-btn" id="ai-new" aria-label="محادثة جديدة" title="محادثة جديدة">${icon('plus')}</button><button class="icon-btn" data-go="settings" aria-label="الإعدادات">${icon('gear')}</button>` })}
       <div class="chat" id="ai-chat" aria-live="polite"></div>
       <p class="muted small center mt">إجابات المساعد للاستئناس، وراجع أهل العلم في المسائل الشرعية</p>
       <div class="chat-input">

@@ -39,7 +39,7 @@ const main = document.getElementById('app');
 const nav = document.getElementById('tabs');
 let cleanup = null, seq = 0;
 
-export function go(path) { location.hash = '#/' + path.replace(/^#?\/?/, ''); }
+export function go(path) { const h = '#/' + path.replace(/^#?\/?/, ''); if (location.hash === h) route(); else location.hash = h; }
 window.noorGo = go;
 
 function parse() {
@@ -63,7 +63,9 @@ async function route() {
     if (my !== seq) return;
     main.classList.remove('enter'); void main.offsetWidth; main.classList.add('enter');
     main.innerHTML = '';
-    cleanup = await mod.default.render(main, { id, q });
+    const c = await mod.default.render(main, { id, q });
+    if (my !== seq) { if (typeof c === 'function') { try { c(); } catch (e) {} } return; }
+    cleanup = c;
     window.scrollTo(0, 0);
   } catch (e) {
     console.error(e);
@@ -94,6 +96,15 @@ function init() {
   import('./core/platform.js').then(async ({ isNative }) => {
     if (!isNative()) return;
     try { const { StatusBar, Style } = await import('@capacitor/status-bar'); await StatusBar.setStyle({ style: Style.Dark }); await StatusBar.setBackgroundColor({ color: '#06120d' }); } catch (e) {}
+    try {
+      const { App } = await import('@capacitor/app');
+      App.addListener('backButton', ({ canGoBack }) => {
+        const s = document.querySelector('.sheet-wrap.open');
+        if (s && s.close) return s.close();
+        const c = document.querySelector('.celebrate'); if (c) return c.remove();
+        if (canGoBack && location.hash && location.hash !== '#/home') history.back(); else App.exitApp();
+      });
+    } catch (e) {}
   });
   import('./core/prayer.js').then(p => p.refreshSchedule && p.refreshSchedule()).catch(() => {});
   const sp = document.getElementById('splash');

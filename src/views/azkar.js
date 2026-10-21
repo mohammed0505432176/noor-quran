@@ -43,7 +43,7 @@ function quranHtml(q) {
 // ---------- index ----------
 function renderIndex(el) {
   const sug = suggested();
-  el.innerHTML = `<main class="view">${header('الأذكار', { back: 'home' })}
+  el.innerHTML = `<div>${header('الأذكار', { back: 'home' })}
     <p class="muted small mb">حصن المسلم، أذكار اليوم بنقرة واحدة.</p>
     <div class="grid-2">${CATEGORIES.map(c => {
       const done = isDone(c.id);
@@ -53,7 +53,7 @@ function renderIndex(el) {
         <span class="muted small">${N(AZKAR[c.id].length)} ذكراً</span>
         <div class="mt small ${done ? 'gold' : 'muted'}">${done ? icon('check', 16) + ' تم اليوم' : c.id === sug ? 'الأنسب الآن' : 'لم يكتمل بعد'}</div>
       </button>`;
-    }).join('')}</div></main>`;
+    }).join('')}</div></div>`;
 }
 
 // ---------- list ----------
@@ -63,13 +63,13 @@ function renderList(el, cat) {
   let rem = loadProgress(cat);
   let alive = true;
 
-  el.innerHTML = `<main class="view">${header(meta.title, {
+  el.innerHTML = `<div>${header(meta.title, {
     back: 'azkar',
     actions: `<button class="icon-btn" id="zk-reset" aria-label="إعادة" title="إعادة">${icon('repeat')}</button>`
   })}
     <div class="progress mb" aria-hidden="true"><i id="zk-bar" style="width:0%"></i></div>
     <div class="muted small mb" id="zk-sum"></div>
-    <div id="zk-list"><div class="card empty muted">جارٍ التحميل…</div></div></main>`;
+    <div id="zk-list"><div class="card empty muted">جارٍ التحميل…</div></div></div>`;
 
   const listEl = el.querySelector('#zk-list');
   const bar = el.querySelector('#zk-bar');

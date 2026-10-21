@@ -96,13 +96,16 @@ export const totalRead = () => Object.keys(S.read).length;
 export function surahReadCount(s) { const p = s + ':'; let c = 0; for (const k in S.read) if (k.startsWith(p)) c++; return c; }
 
 /** Mark an ayah as read today. Returns { counted, goalHit }. Same ayah counts once per day. */
-const readToday = new Set(JSON.parse(sessionStorage.getItem('noor.rt') || '[]'));
+// Per-day dedupe of counted ayahs, persisted so reopening the app doesn't recount.
+const RT_KEY = () => 'noor.rt.' + today();
+let readToday = new Set(); let rtDay = '';
+function loadRT() { const k = RT_KEY(); if (rtDay === k) return; rtDay = k; try { readToday = new Set(JSON.parse(localStorage.getItem(k) || '[]')); } catch (e) { readToday = new Set(); } try { for (const key of Object.keys(localStorage)) if (key.startsWith('noor.rt.') && key !== k) localStorage.removeItem(key); } catch (e) {} }
 export function markRead(s, a) {
   const k = s + ':' + a, t = today();
-  const tk = t + '|' + k;
-  if (readToday.has(tk)) return { counted: false, goalHit: false };
-  readToday.add(tk);
-  try { sessionStorage.setItem('noor.rt', JSON.stringify([...readToday].slice(-2000))); } catch (e) {}
+  loadRT();
+  if (readToday.has(k)) return { counted: false, goalHit: false };
+  readToday.add(k);
+  try { localStorage.setItem(RT_KEY(), JSON.stringify([...readToday])); } catch (e) {}
   if (!S.read[k]) S.read[k] = t;
   const d = todayRec(); d.a++;
   addPoints(2, 'read');
@@ -193,6 +196,11 @@ export function updateSettings(patch) { deepMerge(S.settings, patch); save(); }
 export function exportData() { return JSON.stringify(S); }
 export function importData(json) {
   const d = JSON.parse(json); if (!d || d.v !== 1) throw new Error('bad file');
+  const int = x => Math.max(0, Math.min(10000, parseInt(x, 10) || 0));
+  d.bookmarks = (Array.isArray(d.bookmarks) ? d.bookmarks : []).map(b => ({ s: int(b.s), a: int(b.a), at: +b.at || 0 })).filter(b => b.s >= 1 && b.s <= 114 && b.a >= 1);
+  d.last = d.last ? { s: Math.min(114, Math.max(1, int(d.last.s))), a: Math.max(1, int(d.last.a)) } : null;
+  d.rec = (Array.isArray(d.rec) ? d.rec : []).map(r => ({ d: String(r.d || '').slice(0, 10), s: int(r.s), from: int(r.from), to: int(r.to), acc: int(r.acc), miss: (Array.isArray(r.miss) ? r.miss : []).map(String).slice(0, 30) }));
+  d.reviews = (Array.isArray(d.reviews) ? d.reviews : []).map(r => ({ id: String(r.id).replace(/[^\w-]/g, ''), s: int(r.s), from: int(r.from), to: int(r.to), box: int(r.box), due: String(r.due || '').slice(0, 10), added: String(r.added || '').slice(0, 10), last: r.last ? String(r.last).slice(0, 10) : null }));
   Object.keys(S).forEach(k => delete S[k]); Object.assign(S, deepMerge(DEFAULTS(), d)); save();
 }
 export function resetAll() { Object.keys(S).forEach(k => delete S[k]); Object.assign(S, DEFAULTS()); save(); }

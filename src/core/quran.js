@@ -7,7 +7,7 @@ export const SURAH_COUNT = 114;
 
 export function loadQuran() {
   if (Q) return Promise.resolve(Q);
-  return (loading ||= fetch(import.meta.env.BASE_URL + 'quran.json').then(r => r.json()).then(d => (Q = d)));
+  return (loading ||= fetch(import.meta.env.BASE_URL + 'quran.json').then(r => { if (!r.ok) throw new Error('quran ' + r.status); return r.json(); }).then(d => (Q = d)).catch(e => { loading = null; throw e; }));
 }
 export const isLoaded = () => !!Q;
 

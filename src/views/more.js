@@ -14,11 +14,12 @@ const TILES = [
 ];
 
 async function shareApp() {
-  const text = 'حمّل تطبيق نور للقرآن';
+  const text = 'حمّل تطبيق نور للقرآن الكريم 🌙';
+  const url = 'https://github.com/mohammed0505432176/noor-quran/releases/latest';
   try {
-    if (navigator.share) { await navigator.share({ title: 'نور', text, url: location.href }); return; }
+    if (navigator.share) { await navigator.share({ title: 'نور', text, url }); return; }
   } catch (e) { if (e && e.name === 'AbortError') return; }
-  try { await navigator.clipboard.writeText(`${text} ${location.href}`); toast('تم نسخ رابط التطبيق'); }
+  try { await navigator.clipboard.writeText(`${text} ${url}`); toast('تم نسخ رابط التطبيق'); }
   catch (e) { toast('تعذرت المشاركة'); }
 }
 

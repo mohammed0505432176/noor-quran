@@ -16,7 +16,7 @@ export default {
     const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const curTarget = () => (st.prayer ? PRAYER_SEQ[st.step].t : st.target);
 
-    el.innerHTML = `<main class="view">${header('المسبحة', { back: 'more' })}
+    el.innerHTML = `<div>${header('المسبحة', { back: 'more' })}
       <div class="row mb" id="tb-phrases" style="justify-content:center">${PHRASES.map((p, i) => `<button class="chip" data-p="${i}">${esc(p)}</button>`).join('')}</div>
       <div class="seg mb" id="tb-targets" style="justify-content:center">
         ${TARGETS.map(t => `<button data-t="${t}">${t ? N(t) : '∞'}</button>`).join('')}
@@ -38,7 +38,7 @@ export default {
         <div class="stat"><b id="tb-total">${N(S.tasbeeh)}</b><span>إجمالي التسبيحات</span></div>
         <div class="stat"><b id="tb-goal"></b><span>هدف الجلسة</span></div>
       </div>
-      <button class="btn ghost block" id="tb-reset">${icon('repeat', 18)} إعادة الجلسة</button></main>`;
+      <button class="btn ghost block" id="tb-reset">${icon('repeat', 18)} إعادة الجلسة</button></div>`;
 
     const btn = el.querySelector('#tb-btn');
     const ring = el.querySelector('#tb-ring');

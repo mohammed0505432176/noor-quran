@@ -81,15 +81,19 @@ jobs:
           java-version: '21'
 
       - name: Decode keystore
-        run: base64 -d android-signing/release.keystore.b64 > "$RUNNER_TEMP/noor.keystore"
+        env:
+          KS_B64: ${{ secrets.NOOR_KEYSTORE_B64 }}
+        run: |
+          # Prefer a keystore stored in repo secrets; fall back to the bundled family key.
+          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/noor.keystore"; else base64 -d android-signing/release.keystore.b64 > "$RUNNER_TEMP/noor.keystore"; fi
 
       - name: Build release APK
         working-directory: android
         env:
           NOOR_KEYSTORE: ${{ runner.temp }}/noor.keystore
-          NOOR_STORE_PASSWORD: noorQuran2026
+          NOOR_STORE_PASSWORD: ${{ secrets.NOOR_STORE_PASSWORD || 'noorQuran2026' }}
           NOOR_KEY_ALIAS: noor
-          NOOR_KEY_PASSWORD: noorQuran2026
+          NOOR_KEY_PASSWORD: ${{ secrets.NOOR_KEY_PASSWORD || 'noorQuran2026' }}
           NOOR_VERSION_CODE: ${{ github.run_number }}
           NOOR_VERSION_NAME: 1.0.${{ github.run_number }}
         run: |
@@ -98,7 +102,9 @@ jobs:
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle.log" | tee -a "$RUNNER_TEMP/build.log"
 
       - name: Rename APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk "Noor-Quran-${VERSION}.apk"
+        run: |
+          test -f android/app/build/outputs/apk/release/app-release.apk || { echo "signed APK missing" | tee -a "$RUNNER_TEMP/build.log"; ls -R android/app/build/outputs/apk | tee -a "$RUNNER_TEMP/build.log"; exit 1; }
+          cp android/app/build/outputs/apk/release/app-release.apk "Noor-Quran-${VERSION}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -133,4 +139,4 @@ jobs:
           else
             { echo "فشل البناء في التشغيل رقم ${{ github.run_number }} قبل الوصول إلى Gradle (لا يوجد سجل)."; echo; echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > "$RUNNER_TEMP/issue.md"
           fi
-          gh issue create --repo "${{ github.repository }}" --title "Build failed #${{ github.run_number }}" --body-file "$RUNNER_TEMP/issue.md"
+          gh issue create --repo "${{ github.repository }}" --title "Build failed #${{ github.run_number }}" --body-file "$RUNNER_TEMP/issue.md" || true

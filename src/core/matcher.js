@@ -40,6 +40,49 @@ function similar(a, b) {
   return similarity(a, b) >= th || (sa.length > 2 && sb.length > 2 && similarity(sa, sb) >= th);
 }
 
+// ---- opener stripping (isti'adha / basmala) ----
+const noAl = w => (w.length > 3 && w.startsWith('ال') ? w.slice(2) : w);
+function isW(w, ref) {
+  const a = noAl(w), b = noAl(ref);
+  if (a === b) return true;
+  return b.length >= 4 && similarity(a, b) >= 0.75;
+}
+
+/** Length of an isti'adha at words[i] (0 if none): اعوذ بالله [من] [الشيطان] [الرجيم]. */
+function istiadhaLen(W, i) {
+  if (!(W[i] && isW(W[i], 'اعوذ') && W[i + 1] && isW(W[i + 1], 'بالله'))) return 0;
+  let j = i + 2;
+  if (W[j] === 'من') j++;
+  if (W[j] && isW(W[j], 'شيطن')) j++;
+  if (W[j] && isW(W[j], 'رجيم')) j++;
+  return j - i;
+}
+/** Length of a basmala at words[i] (0 if none): بسم الله [الرحمن] [الرحيم]. */
+function basmalaLen(W, i) {
+  if (!(W[i] === 'بسم' && W[i + 1] && isW(W[i + 1], 'الله'))) return 0;
+  let j = i + 2;
+  if (W[j] && isW(W[j], 'رحمن')) j++;
+  if (W[j] && isW(W[j], 'رحيم')) j++;
+  return j - i;
+}
+
+/**
+ * Remove isti'adha / basmala openers (repeated, any order) from the START of a transcript.
+ * keepBasmala: keep one basmala (passage starts at 1:1). Returns normalized text.
+ */
+export function stripOpeners(text, keepBasmala = false) {
+  const W = norm(text || '').split(' ').filter(Boolean);
+  let i = 0, kept = null;
+  while (i < W.length) {
+    const a = istiadhaLen(W, i);
+    if (a) { i += a; continue; }
+    const b = basmalaLen(W, i);
+    if (b) { if (keepBasmala && !kept) kept = W.slice(i, i + b); i += b; continue; }
+    break;
+  }
+  return (kept || []).concat(W.slice(i)).join(' ');
+}
+
 export function createMatcher(expectedWords) {
   const display = expectedWords.slice();
   const E = display.map(w => norm(w));
@@ -61,7 +104,8 @@ export function createMatcher(expectedWords) {
       for (let d = 1; d <= 3 && j + d < T.length; d++) if (similar(E[p], T[j + d])) { noise = true; break; }
       if (noise) continue;
       // skipped word(s): current transcript word matches expected p+1 or p+2
-      for (let k = 1; k <= 2 && p + k < n; k++) {
+      const maxSkip = t.length >= 3 ? 4 : 2;
+      for (let k = 1; k <= maxSkip && p + k < n; k++) {
         if (similar(E[p + k], t)) {
           for (let q = p; q < p + k; q++) st[q] = 'bad';
           st[p + k] = 'ok';

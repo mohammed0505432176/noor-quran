@@ -49,6 +49,7 @@ async function startNative({ onText, onState, onError }) {
 
   async function begin() {
     if (!active || starting) return;
+    commit(); emitText();
     starting = true;
     try {
       await SR.start({ language: LANG, partialResults: true, popup: false, maxResults: 1 });
@@ -59,9 +60,8 @@ async function startNative({ onText, onState, onError }) {
   }
   function scheduleRestart() {
     if (!active) return;
-    commit(); emitText();
     clearTimeout(restartTimer);
-    restartTimer = setTimeout(begin, 250);
+    restartTimer = setTimeout(begin, 700);
   }
 
   try {
@@ -84,7 +84,7 @@ async function startNative({ onText, onState, onError }) {
   const watchdog = setInterval(async () => {
     if (!active || starting) return;
     try { const r = await SR.isListening(); if (r && r.listening === false) scheduleRestart(); } catch (e) {}
-  }, 2500);
+  }, 1000);
 
   return function stop() {
     if (!active) return;

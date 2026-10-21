@@ -3,7 +3,7 @@ import { esc, $, $$, toast, icon, ayahMark, header, N } from '../ui.js';
 import { S, addRecitation, addReview, dueReviews } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/quran.js';
 import { words as splitWords } from '../core/arabic.js';
-import { createMatcher } from '../core/matcher.js';
+import { createMatcher, stripOpeners } from '../core/matcher.js';
 import { speechSupport, startListening } from '../core/speech.js';
 import { haptic } from '../core/platform.js';
 
@@ -121,6 +121,8 @@ export default {
       const hst = new Array(total).fill('pending');   // hide-mode states
       const forced = new Set();                         // hinted words (always bad)
       let finished = false, listening = false, support = 'native';
+      let base = '', lastFull = '', sess = 0;               // base = transcript of earlier mic sessions
+      const keepBasmala = s === 1 && from === 1;
       if (mode === 'voice') support = await speechSupport();
       if (!alive) return;
 
@@ -182,22 +184,24 @@ export default {
         if (micEl) micEl.classList.toggle('live', on);
         if (statusEl) statusEl.textContent = on ? 'أسمعك… اقرأ الآن' : 'اضغط على الميكروفون وابدأ التسميع';
       }
-      function stopListeningNow() { if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; } setListening(false); }
+      function stopListeningNow() { base = lastFull; if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; } setListening(false); }
 
       async function toggleMic() {
         if (finished) return;
         if (listening) { stopListeningNow(); return; }
         setListening(true);
         haptic('light');
+        const my = ++sess;
         try {
           const stop = await startListening({
             onText: text => {
-              if (finished) return;
-              mres = matcher.update(text);
+              if (finished || my !== sess || !listening) return;
+              lastFull = (base ? base + ' ' : '') + text;
+              mres = matcher.update(stripOpeners(lastFull, keepBasmala));
               const ptr = paint();
               if (ptr === -1 && !finished) setTimeout(() => { if (alive && !finished) finish(); }, 700);
             },
-            onState: st => { if (st === 'stopped' && !stopMic) setListening(false); },
+            onState: st => { if (st === 'stopped' && !stopMic) { base = lastFull; setListening(false); } },
             onError: err => {
               stopListeningNow();
               toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : err === 'unsupported' ? 'التعرف على الصوت غير متاح هنا' : 'تعذر تشغيل الميكروفون، حاول مجدداً');

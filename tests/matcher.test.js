@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { createMatcher, similarity, levenshtein } from '../src/core/matcher.js';
+import { createMatcher, stripOpeners, similarity, levenshtein } from '../src/core/matcher.js';
 
 const A2 = 'ٱلْحَمْدُ لِلَّهِ رَبِّ ٱلْعَـٰلَمِينَ'.split(' ');
 const A3 = 'ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ مَـٰلِكِ يَوْمِ ٱلدِّينِ'.split(' ');
@@ -79,4 +79,30 @@ test('finish marks the rest bad', () => {
   assert.deepEqual(f.states, ['ok', 'ok', 'bad', 'bad', 'bad']);
   assert.equal(f.acc, 40);
   assert.equal(f.missed.length, 3);
+});
+
+const A112 = 'قُلْ هُوَ ٱللَّهُ أَحَدٌ ٱللَّهُ ٱلصَّمَدُ لَمْ يَلِدْ وَلَمْ يُولَدْ وَلَمْ يَكُن لَّهُۥ كُفُوًا أَحَدٌۢ'.split(' ');
+
+test('stripOpeners removes isti\'adha and basmala', () => {
+  assert.equal(stripOpeners('أعوذ بالله من الشيطان الرجيم بسم الله الرحمن الرحيم قل هو الله احد', false), 'قل هو الله احد');
+  assert.equal(stripOpeners('بسم الله اعوذ بالله من الشيطان قل هو', false), 'قل هو');
+  assert.equal(stripOpeners('اعوذ بالله من الشيطان بسم الله الرحيم الحمد لله', false), 'الحمد لله');
+  assert.equal(stripOpeners('قل هو الله احد', false), 'قل هو الله احد');
+});
+
+test('stripOpeners keeps basmala when keepBasmala', () => {
+  assert.equal(stripOpeners('اعوذ بالله من الشيطان الرجيم بسم الله الرحمن الرحيم الحمد لله', true), 'بسم الله الرحمن الرحيم الحمد لله');
+});
+
+test('112:1-4 after basmala scores 100% through stripOpeners', () => {
+  const m = createMatcher(A112);
+  const r = m.update(stripOpeners('بسم الله الرحمن الرحيم قل هو الله احد الله الصمد لم يلد ولم يولد ولم يكن له كفوا احد', false));
+  assert.equal(r.acc, 100);
+});
+
+test('skipping a 3-word chunk marks them bad and continues', () => {
+  const m = createMatcher(['لَمْ', 'يَلِدْ', 'وَلَمْ', 'يُولَدْ', 'وَلَمْ', 'يَكُن', 'لَّهُۥ', 'كُفُوًا', 'أَحَدٌ']);
+  const r = m.update('لم يلد ولم يولد كفوا احد');
+  assert.deepEqual(r.states, ['ok', 'ok', 'ok', 'ok', 'bad', 'bad', 'bad', 'ok', 'ok']);
+  assert.equal(r.pointer, 9);
 });

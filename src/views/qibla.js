@@ -18,7 +18,7 @@ export default {
           <div class="compass-needle" id="needle" style="transform:rotate(${q}deg)"></div>
         </div>
         <h2 class="gold mt">اتجاه القبلة: ${esc(N(Math.round(q)))}° من الشمال</h2>
-        <p class="muted">المسافة إلى مكة المكرمة: ${esc(N(km.toLocaleString('en')))} كم${cfg.city ? ' · ' + esc(cfg.city) : ''}</p>
+        <p class="muted">المسافة إلى مكة المكرمة: ${esc(km.toLocaleString('ar-EG', { maximumFractionDigits: 0 }))} كم${cfg.city ? ' · ' + esc(cfg.city) : ''}</p>
         <p class="muted small" id="msg">${needsPerm ? '' : 'جارٍ قراءة البوصلة…'}</p>
         ${needsPerm ? '<button class="btn" id="en">تفعيل البوصلة</button>' : ''}
       </div>`;

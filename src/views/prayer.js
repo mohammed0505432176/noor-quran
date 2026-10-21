@@ -15,6 +15,7 @@ function countdown(ms) {
 export default {
   async render(el) {
     let timer = null;
+    let alive = true;
     const web = !isNative();
 
     function draw() {
@@ -60,12 +61,17 @@ export default {
       const nx = nextPrayer(now, currentConfig());
       const left = nx.time - now;
       cd.textContent = countdown(left);
-      if (left <= 1000) setTimeout(draw, 1200);
+      if (left <= 1000) setTimeout(() => { if (alive) draw(); }, 1200);
     }
 
     async function resched(msg) {
       const r = await refreshSchedule();
-      if (msg) toast(r.error ? 'تعذر جدولة التنبيهات' : r.web ? 'تم الحفظ. التنبيه على الويب يعمل أثناء فتح التطبيق فقط' : 'تم ضبط التنبيهات للأيام السبعة القادمة');
+      if (!msg) return;
+      if (!S.settings.prayer.notify) return toast('تم الحفظ. تنبيهات الأذان متوقفة حالياً');
+      if (r.denied) return toast('فعّل الإذن بالإشعارات من إعدادات الجوال');
+      if (r.error) return toast('تعذر جدولة التنبيهات');
+      if (!r.scheduled) return toast(currentConfig().known ? 'لا توجد تنبيهات لضبطها الآن' : 'حدّد موقعك أولاً لضبط التنبيهات');
+      toast(r.web ? 'تم الحفظ. التنبيه على الويب يعمل أثناء فتح التطبيق فقط' : 'تم ضبط التنبيهات للأيام السبعة القادمة');
     }
 
     function wire() {
@@ -90,6 +96,7 @@ export default {
       $('#loc', el).onclick = async () => {
         toast('جارٍ تحديد موقعك…');
         const r = await ensureLocation(true);
+        if (!alive) return;
         draw();
         toast(r.ok ? 'تم تحديث موقعك' + (r.city ? ': ' + r.city : '') : r.fallback ? 'تعذر تحديد موقعك، نستخدم الرياض ويمكنك تغييره لاحقاً' : 'تعذر تحديث الموقع');
         resched(false);
@@ -106,7 +113,12 @@ export default {
     draw();
     timer = setInterval(tick, 1000);
     // first visit: try to get the real location in the background
-    if (typeof S.settings.prayer.lat !== 'number') ensureLocation().then(r => { if (r.fallback) toast('تعذر تحديد موقعك، نستخدم الرياض. اضغط «تحديث موقعي» لتغييره'); draw(); }).catch(() => {});
-    return () => clearInterval(timer);
+    if (typeof S.settings.prayer.lat !== 'number') ensureLocation().then(r => {
+      if (!alive) return;
+      if (r.fallback) toast('تعذر تحديد موقعك، نستخدم الرياض. اضغط «تحديث موقعي» لتغييره');
+      draw();
+      if (S.settings.prayer.notify) refreshSchedule();
+    }).catch(() => {});
+    return () => { alive = false; clearInterval(timer); };
   }
 };
