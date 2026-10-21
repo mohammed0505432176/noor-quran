@@ -7,7 +7,11 @@
 //   GROQ_API_KEY        Groq (fast chat + Whisper large-v3 speech-to-text)           ← already set (Ibrahim)
 //   OPENROUTER_API_KEY  OpenRouter ":free" models                                    ← already set (Ibrahim)
 //   CEREBRAS_API_KEY    Cerebras (optional, very fast free tier)
-//   MISTRAL_API_KEY     Mistral La Plateforme (optional, free experiment tier)
+//   MISTRAL_API_KEY     Mistral La Plateforme (optional, free "Experiment" tier, phone verification)
+//   NVIDIA_API_KEY      NVIDIA NIM / build.nvidia.com (optional, free key, ~40 req/min, DeepSeek/Qwen/Llama/Kimi)
+//   CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN  Workers AI (optional, 10k neurons/day free: chat + Whisper STT)
+//   COHERE_API_KEY      Cohere trial key (optional, 1,000 calls/month — last resort)
+//   (GitHub Models was retired by GitHub on 2026-07-30, so it is intentionally not supported.)
 // Pollinations (keyless) is the last-resort fallback for chat.
 //
 // Auth: verify_jwt = true. The app signs in anonymously (Supabase Auth) and sends the user's JWT; the
@@ -31,11 +35,19 @@ const GROQ_KEY = env("GROQ_API_KEY");
 const OPENROUTER_KEY = env("OPENROUTER_API_KEY");
 const CEREBRAS_KEY = env("CEREBRAS_API_KEY");
 const MISTRAL_KEY = env("MISTRAL_API_KEY");
+const NVIDIA_KEY = env("NVIDIA_API_KEY");
+const CF_ACCOUNT = env("CLOUDFLARE_ACCOUNT_ID");
+const CF_TOKEN = env("CLOUDFLARE_API_TOKEN");
+const CF_KEY = CF_ACCOUNT && CF_TOKEN ? CF_TOKEN : "";
+const COHERE_KEY = env("COHERE_API_KEY");
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const GROQ_BASE = "https://api.groq.com/openai/v1";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const CEREBRAS_BASE = "https://api.cerebras.ai/v1";
 const MISTRAL_BASE = "https://api.mistral.ai/v1";
+const NVIDIA_BASE = "https://integrate.api.nvidia.com/v1";
+const CF_BASE = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai`;
+const COHERE_BASE = "https://api.cohere.ai/compatibility/v1";
 const list = (k: string, d: string[]) => (env(k) ? env(k).split(",").map((s) => s.trim()).filter(Boolean) : d);
 
 // Daily per-user limits (generous for a family, but stops a leaked token from draining the free quotas).
@@ -160,6 +172,30 @@ async function geminiGenerate(mode: "fast" | "smart" | "audio", payload: unknown
   return null;
 }
 
+// ---------- model discovery for OpenAI-compatible catalogs (cached 6h) ----------
+const catalogs = new Map<string, { ids: string[]; at: number }>();
+async function discover(tag: string, base: string, key: string, prefs: RegExp[], fallback: string[], max = 3): Promise<string[]> {
+  if (!key) return [];
+  const c = catalogs.get(tag);
+  if (!c || Date.now() - c.at > 6 * 3600_000) {
+    let ids: string[] = [];
+    try {
+      const r = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) });
+      if (r.ok) ids = ((await r.json())?.data ?? []).map((m: any) => String(m?.id ?? "")).filter(Boolean);
+      else await r.body?.cancel();
+    } catch { /* keep fallback */ }
+    const bad = /(embed|rerank|guard|reward|vision|vl\b|clip|parse|ocr|safety|retriever|audio|tts|asr|nemoretriever|coder)/i;
+    const picked: string[] = [];
+    for (const p of prefs) {
+      const hit = ids.filter((id) => p.test(id) && !bad.test(id)).sort((a, b) => b.localeCompare(a))[0];
+      if (hit && !picked.includes(hit)) picked.push(hit);
+      if (picked.length >= max) break;
+    }
+    catalogs.set(tag, { ids: picked.length ? picked : fallback, at: picked.length || !ids.length ? Date.now() : Date.now() - 6 * 3600_000 + 600_000 });
+  }
+  return catalogs.get(tag)!.ids;
+}
+
 // ---------- OpenAI-compatible providers ----------
 type Msg = { role: string; content: string };
 async function compatChat(base: string, key: string, models: string[], messages: Msg[], extra: Record<string, string>, tag: string, budgetMs: number) {
@@ -221,9 +257,14 @@ async function chat(body: any) {
   const chain: [string, string, string[], Record<string, string>, string, number][] = [
     ["groq", GROQ_BASE, list("GROQ_CHAT_MODELS", ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3-32b"]), {}, GROQ_KEY, 30_000],
     ["cerebras", CEREBRAS_BASE, list("CEREBRAS_CHAT_MODELS", ["gpt-oss-120b", "llama-3.3-70b", "qwen-3-32b"]), {}, CEREBRAS_KEY, 25_000],
+    ["nvidia", NVIDIA_BASE, env("NVIDIA_CHAT_MODELS") ? list("NVIDIA_CHAT_MODELS", []) : await discover("nvidia", NVIDIA_BASE, NVIDIA_KEY,
+      [/deepseek-v3/i, /qwen3/i, /kimi-k2/i, /llama-4-maverick|llama-3\.3-70b/i, /gemma-?4|gemma-3-27b/i],
+      ["deepseek-ai/deepseek-v3.1", "qwen/qwen3-235b-a22b", "meta/llama-3.3-70b-instruct"]), {}, NVIDIA_KEY, 30_000],
     ["openrouter", OPENROUTER_BASE, list("OPENROUTER_CHAT_MODELS", ["openai/gpt-oss-120b:free", "deepseek/deepseek-chat-v3.1:free", "meta-llama/llama-3.3-70b-instruct:free"]),
       { "HTTP-Referer": "https://github.com/mohammed0505432176/noor-quran", "X-Title": "Noor Quran" }, OPENROUTER_KEY, 30_000],
     ["mistral", MISTRAL_BASE, list("MISTRAL_CHAT_MODELS", ["mistral-medium-latest", "mistral-small-latest"]), {}, MISTRAL_KEY, 25_000],
+    ["cloudflare", CF_BASE + "/v1", list("CLOUDFLARE_CHAT_MODELS", ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-4-scout-17b-16e-instruct"]), {}, CF_KEY, 25_000],
+    ["cohere", COHERE_BASE, list("COHERE_CHAT_MODELS", ["command-a-03-2025", "command-r-plus-08-2024"]), {}, COHERE_KEY, 25_000],
   ];
   for (const [id, base, models, extra, key, budget] of chain) {
     const r = await compatChat(base, key, models, messages, extra, id + ":", budget);
@@ -281,6 +322,23 @@ async function transcribe(body: any) {
         return json(200, { text, provider: "groq", model });
       } catch { coolFor("stt:" + model, 15_000); }
     }
+  }
+  if (CF_KEY && !cooling("stt:cf")) {
+    try {
+      const r = await fetch(`${CF_BASE}/run/@cf/openai/whisper-large-v3-turbo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${CF_KEY}` },
+        body: JSON.stringify({ audio: body.audio, language: "ar", task: "transcribe", ...(prompt ? { initial_prompt: prompt } : {}) }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        let text = String(d?.result?.text ?? "").replace(/\s+/g, " ").trim();
+        if (JUNK.test(text)) text = "";
+        return json(200, { text, provider: "cloudflare", model: "whisper-large-v3-turbo" });
+      }
+      await r.body?.cancel(); coolFor("stt:cf", r.status === 429 ? 60_000 : 20_000);
+    } catch { coolFor("stt:cf", 15_000); }
   }
   const g = await geminiGenerate("audio", {
     contents: [{ role: "user", parts: [
@@ -441,8 +499,8 @@ Deno.serve(async (req) => {
       case "status":
         return json(200, {
           ok: true,
-          providers: { gemini: !!GEMINI_KEY, groq: !!GROQ_KEY, cerebras: !!CEREBRAS_KEY, openrouter: !!OPENROUTER_KEY, mistral: !!MISTRAL_KEY, pollinations: true },
-          stt: !!(GROQ_KEY || GEMINI_KEY), sttEngine: GROQ_KEY ? "whisper-large-v3" : GEMINI_KEY ? "gemini" : null,
+          providers: { gemini: !!GEMINI_KEY, groq: !!GROQ_KEY, cerebras: !!CEREBRAS_KEY, nvidia: !!NVIDIA_KEY, openrouter: !!OPENROUTER_KEY, mistral: !!MISTRAL_KEY, cloudflare: !!CF_KEY, cohere: !!COHERE_KEY, pollinations: true },
+          stt: !!(GROQ_KEY || CF_KEY || GEMINI_KEY), sttEngine: GROQ_KEY ? "whisper-large-v3" : CF_KEY ? "whisper-large-v3-turbo" : GEMINI_KEY ? "gemini" : null,
           tajweed: !!GEMINI_KEY, limits: DAILY,
         });
       case "chat": return await chat(body);

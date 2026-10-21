@@ -11,12 +11,15 @@ const seg = (id, items, cur) => `<div class="seg" id="${id}">${items.map(([v, t]
 const PROVIDERS = [
   ['gemini', 'Gemini', 'فهم الصوت وتقييم التجويد والمحادثة'],
   ['groq', 'Groq', 'Whisper لتسميع دقيق + محادثة سريعة'],
+  ['nvidia', 'NVIDIA NIM', 'DeepSeek وQwen وLlama وKimi مجاناً'],
   ['cerebras', 'Cerebras', 'محادثة فائقة السرعة'],
   ['openrouter', 'OpenRouter', 'نماذج مجانية متعددة'],
   ['mistral', 'Mistral', 'محادثة'],
+  ['cloudflare', 'Cloudflare AI', 'محادثة + Whisper احتياطي للتسميع'],
+  ['cohere', 'Cohere', 'احتياطي أخير (١٠٠٠ طلب شهرياً)'],
   ['pollinations', 'Pollinations', 'احتياطي بلا مفتاح']
 ];
-const STT_NAMES = { 'whisper-large-v3': 'Whisper large-v3', gemini: 'Gemini' };
+const STT_NAMES = { 'whisper-large-v3': 'Whisper large-v3', 'whisper-large-v3-turbo': 'Whisper turbo (Cloudflare)', gemini: 'Gemini' };
 
 /** Status card body for a cloudStatus() result (never throws; r may be { ok:false }). */
 function statusHtml(r) {
@@ -35,12 +38,16 @@ function statusHtml(r) {
 }
 
 const ADD_PROVIDER_HTML = `<h3>إضافة مزود جديد</h3>
-  <p class="muted small">أضف مفتاحاً مجانياً لتفعيل مزود إضافي. المفتاح يُحفظ في خادم نور فقط، ولا يُخزَّن داخل التطبيق.</p>
+  <p class="muted small">كل مزود يتفعّل بإضافة مفتاحه المجاني في خادم نور فقط — لا يُخزَّن داخل التطبيق ولا يلزم تحديثه.</p>
   <ol style="padding-inline-start:1.3rem;line-height:1.9;margin:.6rem 0">
-    <li>احصل على مفتاح مجاني من <span dir="ltr">cloud.cerebras.ai</span> أو <span dir="ltr">console.mistral.ai</span></li>
-    <li>افتح <span dir="ltr">supabase.com/dashboard</span> ثم المشروع <b dir="ltr">ibrahim-assistant</b>، واختر Edge Functions ثم Secrets</li>
-    <li>أضف السر <b dir="ltr">CEREBRAS_API_KEY</b> أو <b dir="ltr">MISTRAL_API_KEY</b> مع المفتاح</li>
-    <li>يتفعّل المزود تلقائياً خلال دقيقة، ولا يلزم تحديث التطبيق</li>
+    <li>احصل على المفتاح (كلها بلا بطاقة):<br>
+      <b>NVIDIA</b>: <span dir="ltr">build.nvidia.com</span> → Get API Key → السر <b dir="ltr">NVIDIA_API_KEY</b><br>
+      <b>Cloudflare</b>: <span dir="ltr">dash.cloudflare.com</span> → AI → Workers AI → Use REST API → أنشئ Token وانسخ Account ID → السران <b dir="ltr">CLOUDFLARE_API_TOKEN</b> و<b dir="ltr">CLOUDFLARE_ACCOUNT_ID</b><br>
+      <b>Mistral</b>: <span dir="ltr">console.mistral.ai</span> (خطة Experiment) → السر <b dir="ltr">MISTRAL_API_KEY</b><br>
+      <b>Cohere</b>: <span dir="ltr">dashboard.cohere.com</span> → API Keys (Trial) → السر <b dir="ltr">COHERE_API_KEY</b></li>
+    <li>افتح <span dir="ltr">supabase.com/dashboard</span> ثم المشروع <b dir="ltr">ibrahim-assistant</b> ← Edge Functions ← Secrets ← Add new secret</li>
+    <li>اكتب اسم السر كما هو بالأحرف الكبيرة والصق المفتاح، ثم Save</li>
+    <li>يتفعّل خلال دقيقة؛ اضغط «تحديث الحالة» هنا للتأكد</li>
   </ol>
   <button class="btn ghost block mt" id="ai-add-ok">حسناً</button>`;
 
