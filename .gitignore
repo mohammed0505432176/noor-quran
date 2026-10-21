@@ -1,0 +1,8 @@
+node_modules
+dist
+android
+.router
+*.keystore
+public/quran.json
+public/icon-192.png
+public/icon-512.png

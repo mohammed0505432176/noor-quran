@@ -1,0 +1,9 @@
+{
+  "appId": "app.noor.quran",
+  "appName": "نور",
+  "webDir": "dist",
+  "android": { "backgroundColor": "#06120d", "allowMixedContent": false },
+  "plugins": {
+    "LocalNotifications": { "smallIcon": "ic_stat_noor", "iconColor": "#D9B765" }
+  }
+}

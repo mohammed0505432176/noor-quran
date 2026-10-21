@@ -1,0 +1,136 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          set -o pipefail
+          npm ci 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Install image tooling
+        run: |
+          set -o pipefail
+          npm i --no-save sharp @capacitor/assets@3 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Generate icon PNGs
+        run: |
+          set -o pipefail
+          node scripts/svg-to-png.mjs 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Build web
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: dist/
+
+      - name: Add Android platform
+        run: |
+          set -o pipefail
+          npx cap add android 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Generate Android icons and splash
+        run: |
+          set -o pipefail
+          npx capacitor-assets generate --android --iconBackgroundColor '#06120d' --iconBackgroundColorDark '#06120d' --splashBackgroundColor '#06120d' --splashBackgroundColorDark '#06120d' 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Sync Capacitor
+        run: |
+          set -o pipefail
+          npx cap sync android 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Patch Android project
+        run: |
+          set -o pipefail
+          node scripts/patch-android.mjs 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Decode keystore
+        run: base64 -d android-signing/release.keystore.b64 > "$RUNNER_TEMP/noor.keystore"
+
+      - name: Build release APK
+        working-directory: android
+        env:
+          NOOR_KEYSTORE: ${{ runner.temp }}/noor.keystore
+          NOOR_STORE_PASSWORD: noorQuran2026
+          NOOR_KEY_ALIAS: noor
+          NOOR_KEY_PASSWORD: noorQuran2026
+          NOOR_VERSION_CODE: ${{ github.run_number }}
+          NOOR_VERSION_NAME: 1.0.${{ github.run_number }}
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle.log" | tee -a "$RUNNER_TEMP/build.log"
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk "Noor-Quran-${VERSION}.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Noor-Quran-apk
+          path: Noor-Quran-${{ env.VERSION }}.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: نور 1.0.${{ github.run_number }}
+          make_latest: true
+          files: Noor-Quran-${{ env.VERSION }}.apk
+          body: |
+            ## تطبيق نور - الإصدار 1.0.${{ github.run_number }}
+
+            ### طريقة التثبيت على أندرويد
+            1. حمّل ملف APK من الأسفل (Noor-Quran-1.0.${{ github.run_number }}.apk).
+            2. افتح الملف، وإذا طلب الجهاز فاسمح بالتثبيت من مصادر غير معروفة لهذا المتصفح أو مدير الملفات.
+            3. اضغط تثبيت ثم افتح التطبيق.
+
+            للآيفون: افتح النسخة الويب في Safari ثم مشاركة ثم "إضافة إلى الشاشة الرئيسية".
+
+      - name: Report build failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f "$RUNNER_TEMP/build.log" ]; then
+            { echo "فشل البناء في التشغيل رقم ${{ github.run_number }}."; echo; echo "آخر 150 سطر من سجل Gradle:"; echo '```'; grep -iE "error|failed|exception|what went wrong" "$RUNNER_TEMP/build.log" | head -40; echo "-----"; tail -n 120 "$RUNNER_TEMP/build.log"; echo '```'; echo; echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > "$RUNNER_TEMP/issue.md"
+          else
+            { echo "فشل البناء في التشغيل رقم ${{ github.run_number }} قبل الوصول إلى Gradle (لا يوجد سجل)."; echo; echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > "$RUNNER_TEMP/issue.md"
+          fi
+          gh issue create --repo "${{ github.repository }}" --title "Build failed #${{ github.run_number }}" --body-file "$RUNNER_TEMP/issue.md"

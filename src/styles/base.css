@@ -1,0 +1,105 @@
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--ink);
+  background-color: var(--bg);
+  background-image: radial-gradient(120% 60% at 50% -10%, rgba(217, 183, 101, 0.16), transparent 65%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cg fill='none' stroke='%23d9b765' stroke-width='1' opacity='0.5'%3E%3Cpath d='M40 6l8 14 15-5-5 15 14 8-14 8 5 15-15-5-8 14-8-14-15 5 5-15-14-8 14-8-5-15 15 5z'/%3E%3Ccircle cx='40' cy='40' r='7'/%3E%3C/g%3E%3C/svg%3E");
+  opacity: var(--pattern-op);
+  pointer-events: none;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; padding: 0; }
+a { color: var(--gold); text-decoration: none; }
+img, svg { max-width: 100%; }
+h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 700; line-height: 1.35; margin: 0 0 .4em; }
+p { margin: 0 0 .8em; }
+
+.view {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: calc(var(--safe-t) + 14px) 16px calc(var(--tabbar-h) + var(--safe-b) + 24px);
+}
+.view.enter { animation: view-enter .45s cubic-bezier(.2, .7, .2, 1) both; }
+@keyframes view-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+.muted { color: var(--muted); }
+.gold { color: var(--gold); }
+.center { text-align: center; }
+.mt { margin-top: 16px; }
+.mb { margin-bottom: 16px; }
+.small { font-size: .85rem; }
+.quran { font-family: var(--font-quran); }
+.spacer { flex: 1; }
+
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 8px; }
+
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: radial-gradient(circle at 50% 40%, #12402f 0%, #0a2219 45%, #040d09 100%);
+  color: var(--gold-2);
+  transition: opacity .6s ease, visibility .6s;
+}
+#splash.hide { opacity: 0; visibility: hidden; pointer-events: none; }
+.splash-orn {
+  position: absolute;
+  width: min(78vw, 360px);
+  aspect-ratio: 1;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='none' stroke='%23d9b765' stroke-width='1.2'%3E%3Crect x='42' y='42' width='116' height='116'/%3E%3Crect x='42' y='42' width='116' height='116' transform='rotate(45 100 100)'/%3E%3Ccircle cx='100' cy='100' r='84' stroke-dasharray='2 5'/%3E%3Ccircle cx='100' cy='100' r='94' opacity='.5'/%3E%3Ccircle cx='100' cy='100' r='50' opacity='.6'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+  opacity: .75;
+  animation: spin 60s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.splash-basmala, .splash-name { position: relative; text-align: center; }
+.splash-basmala {
+  font-family: var(--font-quran);
+  font-size: clamp(22px, 6vw, 30px);
+  background: linear-gradient(180deg, #f6e4aa, #c89d44);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.splash-name {
+  font-family: var(--font-display);
+  font-size: clamp(64px, 20vw, 96px);
+  line-height: 1;
+  font-weight: 700;
+  background: linear-gradient(180deg, #fbeab5, #c79a3a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 6px 18px rgba(217, 183, 101, .35));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .splash-orn { animation: none; }
+}
