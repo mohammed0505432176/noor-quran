@@ -22,6 +22,7 @@ const DEFAULTS = () => ({
   bookmarks: [],   // [{ s, a, at }]
   rec: [],         // recitation history [{ d, s, from, to, acc, miss: [words] }] newest first
   reviews: [],     // spaced repetition [{ id, s, from, to, box, due, added, last }]
+  wm: {},          // per-word recitation history 's:a:w' -> { n, k, d, ok } (w 1-based within ayah)
   tasbeeh: 0,
   badges: {}       // badgeId -> 'YYYY-MM-DD' unlocked
 });
@@ -145,6 +146,65 @@ export function addRecitation({ s, from, to, acc, miss = [] }) {
   return p;
 }
 
+// ---- per-word mistake history ----
+const WM_MAX = 5000;
+/** items: [{ a, w, kind }] kind 'ok' | 'skip' | 'wrong' | 'hint'. Saves once. */
+export function recordWords(s, items) {
+  const wm = (S.wm ||= {});
+  for (const it of items || []) {
+    const key = s + ':' + it.a + ':' + it.w;
+    if (it.kind === 'ok') { const e = wm[key]; if (e) e.ok = Math.min(99, e.ok + 1); continue; }
+    if (it.kind !== 'skip' && it.kind !== 'wrong' && it.kind !== 'hint') continue;
+    const e = wm[key] || (wm[key] = { n: 0, k: '', d: '', ok: 0 });
+    e.n = Math.min(9999, e.n + 1); e.k = it.kind; e.d = today(); e.ok = 0;
+  }
+  let keys = Object.keys(wm);
+  if (keys.length > WM_MAX) {
+    for (const k of keys) if (wm[k].ok >= 3) delete wm[k];
+    keys = Object.keys(wm);
+    if (keys.length > WM_MAX) {
+      keys.sort((x, y) => wm[x].d.localeCompare(wm[y].d));
+      for (const k of keys.slice(0, keys.length - WM_MAX)) delete wm[k];
+    }
+  }
+  save();
+}
+function activeWords() {
+  const out = [];
+  for (const key of Object.keys(S.wm || {})) {
+    const e = S.wm[key]; if (!e || e.ok >= 3) continue;
+    const [s, a, w] = key.split(':').map(Number);
+    out.push({ s, a, w, n: e.n, k: e.k, d: e.d });
+  }
+  return out;
+}
+export function weakWords(limit = 30) {
+  return activeWords().sort((x, y) => y.n - x.n || y.d.localeCompare(x.d)).slice(0, limit).map(({ s, a, w, n, k }) => ({ s, a, w, n, k }));
+}
+export function weakAyahs(limit = 10) {
+  const g = new Map();
+  for (const x of activeWords()) {
+    const key = x.s + ':' + x.a;
+    const o = g.get(key) || { s: x.s, a: x.a, n: 0, words: [] };
+    o.n += x.n; o.words.push(x.w); g.set(key, o);
+  }
+  return [...g.values()].map(o => ({ ...o, words: o.words.sort((p, q) => p - q) })).sort((x, y) => y.n - x.n).slice(0, limit);
+}
+export function ayahMistakeMap(s, a) {
+  const out = {}, p = s + ':' + a + ':';
+  for (const key of Object.keys(S.wm || {})) {
+    if (!key.startsWith(p)) continue;
+    const e = S.wm[key]; if (e && e.ok < 3) out[+key.slice(p.length)] = e.n;
+  }
+  return out;
+}
+/** Nth newest recitation of the same range (skip = how many matching entries to pass), or null. */
+export function lastAttempt(s, from, to, skip = 0) {
+  let i = skip;
+  for (const r of S.rec) if (r.s === s && r.from === from && r.to === to && i-- === 0) return r;
+  return null;
+}
+
 // ---- spaced repetition review (Leitner boxes) ----
 const BOX_DAYS = [0, 1, 3, 7, 14, 30, 60];
 export function addReview(s, from, to) {
@@ -209,6 +269,20 @@ export function importData(json) {
   d.last = d.last ? { s: Math.min(114, Math.max(1, int(d.last.s))), a: Math.max(1, int(d.last.a)) } : null;
   d.rec = (Array.isArray(d.rec) ? d.rec : []).map(r => ({ d: String(r.d || '').slice(0, 10), s: int(r.s), from: int(r.from), to: int(r.to), acc: int(r.acc), miss: (Array.isArray(r.miss) ? r.miss : []).map(String).slice(0, 30) }));
   d.reviews = (Array.isArray(d.reviews) ? d.reviews : []).map(r => ({ id: String(r.id).replace(/[^\w-]/g, ''), s: int(r.s), from: int(r.from), to: int(r.to), box: int(r.box), due: String(r.due || '').slice(0, 10), added: String(r.added || '').slice(0, 10), last: r.last ? String(r.last).slice(0, 10) : null }));
+  const wm = {};
+  if (d.wm && typeof d.wm === 'object' && !Array.isArray(d.wm)) {
+    let count = 0;
+    for (const key of Object.keys(d.wm)) {
+      if (count >= 5000) break;
+      const e = d.wm[key];
+      if (!/^\d{1,3}:\d{1,3}:\d{1,3}$/.test(key) || !e || typeof e !== 'object') continue;
+      const [ks, ka, kw] = key.split(':').map(Number);
+      if (ks < 1 || ks > 114 || ka < 1 || ka > 286 || kw < 1 || kw > 200) continue;
+      count++;
+      wm[key] ={ n: Math.min(9999, int(e.n)), k: ['skip', 'wrong', 'hint'].includes(e.k) ? e.k : 'wrong', d: String(e.d || '').slice(0, 10), ok: Math.min(99, int(e.ok)) };
+    }
+  }
+  d.wm = wm;
   // an imported file must not redirect the AI to another server: keep this device's AI settings
   const keepAi = S.settings && S.settings.ai ? JSON.parse(JSON.stringify(S.settings.ai)) : null;
   if (d.settings && typeof d.settings === 'object') delete d.settings.ai;

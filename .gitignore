@@ -6,3 +6,6 @@ dist
 public/quran.json
 public/icon-192.png
 public/icon-512.png
+__pycache__/
+*.pyc
+.router/

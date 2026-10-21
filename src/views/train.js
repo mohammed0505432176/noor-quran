@@ -1,5 +1,5 @@
 // Training center: next-ayah quiz, talqin (listen & repeat), my mistakes, daily challenge, first-words.
-import { S, today, addReview } from '../core/store.js';
+import { S, today, addReview, weakAyahs } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/quran.js';
 import { words } from '../core/arabic.js';
 import * as audio from '../core/audio.js';
@@ -7,6 +7,8 @@ import { haptic } from '../core/platform.js';
 import { esc, icon, toast, header, N } from '../ui.js';
 
 const ROUNDS = 10;
+// Skip weak-ayah entries whose surah/ayah do not exist (ayah() throws or returns undefined).
+const validWeakAyah = x => { try { return !!ayah(x.s, x.a); } catch { return false; } };
 const rnd = n => Math.floor(Math.random() * n);
 const rangeTxt = (f, t) => (f === t ? `الآية ${N(f)}` : `الآيات ${N(f)}–${N(t)}`);
 const goUrl = (s, f, t, extra) => `recite/${s}?from=${f}&to=${t}${extra ? '&' + extra : ''}`;
@@ -69,7 +71,7 @@ export default {
     // ================= HOME =================
     function home() {
       killAudio();
-      const groups = mistakeGroups().slice(0, 8), cloud = topMissed(), dt = dailyTarget(), done = dailyDone(dt);
+      const weak = weakAyahs(6).filter(validWeakAyah), groups = mistakeGroups().slice(0, 8), cloud = topMissed(), dt = dailyTarget(), done = dailyDone(dt);
       el.innerHTML = `${header('مركز التدريب', { back: 'more' })}
         <p class="muted small">تمارين متنوعة لتثبيت الحفظ وتقوية الربط بين الآيات.</p>
 
@@ -104,6 +106,11 @@ export default {
           <button class="btn block" data-act="first">${icon('eye', 16)} ابدأ</button>
         </div>
 
+        ${weak.length ? `<div class="section-title">مواضع ضعفي</div><div class="list">${weak.map(x => { const ws = words(ayah(x.s, x.a)); return `<div class="list-item" data-go="${goUrl(x.s, x.a, x.a, 'display=first')}">
+            <div class="li-main"><b>سورة ${esc(surahName(x.s))}</b> <span class="muted small">· آية ${esc(N(x.a))}</span>
+              <div class="li-sub">${(x.words || []).map(w => ws[w - 1]).filter(Boolean).map(w => `<span class="chip quran">${esc(w)}</span>`).join(' ')}</div></div>
+            <div class="li-end"><b class="gold">${N(x.n)}</b></div></div>`; }).join('')}</div>
+        <p class="muted small">تختفي الكلمة من القائمة بعد تسميعها صحيحة ٣ مرات متتالية</p>` : ''}
         <div class="section-title">أخطائي</div>
         ${groups.length ? `<div class="list">${groups.map((r, i) => `<div class="list-item" data-go="${goUrl(r.s, r.from, r.to, 'mode=ai')}">
             <div class="li-main"><b>${esc(surahName(r.s))}</b> <span class="muted small">${rangeTxt(r.from, r.to)}</span>

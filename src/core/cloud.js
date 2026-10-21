@@ -4,7 +4,7 @@
 //   status({force}) -> { ok, providers:{gemini,groq,cerebras,openrouter,mistral,pollinations}, stt, sttEngine, tajweed, limits } | null (offline/unreachable)
 //   cloudChat(messages, { mode:'fast'|'smart', signal }) -> { text, provider, model }      (throws CloudError)
 //   transcribe(blob|base64, { mime, prompt, signal, fast })   -> { text, provider, model }      (throws CloudError)
-//   tajweedReview(blob, { s, from, to, text, signal })  -> { score, summary, mistakes[], tajweed[], advice[], provider }
+//   tajweedReview(blob, { s, from, to, text, signal, detected[] })  -> { score, summary, mistakes[], tajweed[], advice[], plan[], provider }
 //   CloudError has .code: 'offline' | 'auth' | 'rate_limited' | 'daily_limit' | 'no_provider' | 'bad_audio' | 'server' | 'timeout' | 'aborted'
 
 export const SUPABASE_URL = 'https://xdrrrquzxoinqwknfrgt.supabase.co';
@@ -133,9 +133,9 @@ export async function transcribe(audio, { mime = 'audio/wav', prompt = '', signa
   return call('transcribe', { audio: b64, mime: (audio && audio.type) || mime, prompt: String(prompt).slice(0, 600), ...(fast ? { fast: true } : {}) }, { signal, timeout: 30000 });
 }
 
-export async function tajweedReview(blob, { s, from, to, text, signal } = {}) {
+export async function tajweedReview(blob, { s, from, to, text, signal, detected = [] } = {}) {
   const b64 = await blobToBase64(blob);
-  return call('tajweed', { audio: b64, mime: blob.type || 'audio/wav', s, from, to, text: String(text).slice(0, 6000) }, { signal, timeout: 120000 });
+  return call('tajweed', { audio: b64, mime: blob.type || 'audio/wav', s, from, to, text: String(text).slice(0, 6000), detected: (Array.isArray(detected) ? detected : []).slice(0, 40) }, { signal, timeout: 120000 });
 }
 
 export const ERROR_TEXT = {

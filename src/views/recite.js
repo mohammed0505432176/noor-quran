@@ -1,6 +1,8 @@
 // Tasmee' (recitation checking): voice mode with live word matching, or hide-and-recall mode.
 import { esc, $, $$, toast, icon, ayahMark, header, N } from '../ui.js';
-import { S, addRecitation, addReview, dueReviews } from '../core/store.js';
+import { S, addRecitation, addReview, dueReviews, recordWords, lastAttempt, ayahMistakeMap } from '../core/store.js';
+import { analyzeMistakes } from '../core/feedback.js';
+import { wrongRuns, findSimilar } from '../core/mutashabih.js';
 import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/quran.js';
 import { words as splitWords } from '../core/arabic.js';
 import { createMatcher, createLockedTracker, stripOpeners } from '../core/matcher.js';
@@ -22,6 +24,8 @@ const DISPLAYS = ['hidden', 'first', 'full'];
 const MAX_REVIEW_SECS = 240;
 
 const MISTAKE_KIND = { missing: 'نقص', wrong: 'خطأ', extra: 'زيادة', harakah: 'حركة' };
+// per-word verdicts from feedback.js
+const KIND_LABEL = { skip: 'محذوفة', wrong: 'مبدّلة', hint: 'تلقين' };
 function loadMode() {
   try {
     // v1.3: instant on-device mode became the default — reset choices saved by older versions once.
@@ -121,6 +125,25 @@ export default {
     if (DISPLAYS.includes(q.display)) cfg.display = q.display;
     normalizeCfg();
 
+
+    /** Play one word (1-based w within ayah a) from quran.com word audio, falling back to the whole ayah. */
+    function playWordAt(s, a, w) {
+      try { stopReciter(); } catch (e) {}
+      if (resAudio && !resAudio.paused) { try { resAudio.pause(); } catch (e) {} }
+      if (wAudio) { try { wAudio.pause(); } catch (e) {} }
+      const myGen = gen;
+      let fell = false;
+      const fallback = () => {
+        if (fell || !alive || gen !== myGen) return; fell = true;
+        try { playAyah(s, a); } catch (e) { toast('تعذر تشغيل الصوت'); }
+      };
+      try {
+        wAudio = new Audio(wordAudioUrl(s, a, w));
+        wAudio.onerror = fallback;
+        const pr = wAudio.play();
+        if (pr && pr.catch) pr.catch(fallback);
+      } catch (e) { fallback(); }
+    }
 
     // ---------------- setup screen ----------------
     const aiReady = () => navigator.onLine && recorderSupported() && !!(cloud && cloud.stt);
@@ -268,6 +291,11 @@ export default {
 
       { const hd = $('.page-head', el); if (hd) hd.classList.add('sticky-head'); }
       const spans = $$('.word', el);
+      // words the user got wrong in earlier sessions get a faint marker, so they recite them with extra care
+      groups.forEach(g => {
+        const mm = ayahMistakeMap(s, g.a);
+        for (const w in mm) { const sp = spans[g.start + (+w) - 1]; if (sp && g.start + (+w) - 1 < g.end) sp.classList.add('w-weak'); }
+      });
       const shown = new Array(total).fill(null);
       const pageEl = $('#rc-page', el);
       const scoreEl = $('#rc-score', el), progEl = $('#rc-prog', el), micEl = $('#rc-mic', el), statusEl = $('#rc-status', el);
@@ -487,20 +515,7 @@ export default {
       // ----- word audio (hints / mistakes) -----
       function playWord(i) {
         const g = groupOf[i]; if (!g) return;
-        const a = g.a, w = i - g.start + 1;
-        try { stopReciter(); } catch (e) {}
-        if (wAudio) { try { wAudio.pause(); } catch (e) {} }
-        let fell = false;
-        const fallback = () => {
-          if (fell || !isLive()) return; fell = true;
-          try { playAyah(s, a); } catch (e) { toast('تعذر تشغيل الصوت'); }
-        };
-        try {
-          wAudio = new Audio(wordAudioUrl(s, a, w));
-          wAudio.onerror = fallback;
-          const pr = wAudio.play();
-          if (pr && pr.catch) pr.catch(fallback);
-        } catch (e) { fallback(); }
+        playWordAt(s, g.a, i - g.start + 1);
       }
 
       function hint() {
@@ -548,17 +563,48 @@ export default {
       function finalize() {
         finished = true;
         if (pageEl) pageEl.classList.remove('rc-busy');
-        let st;
-        if (voiceLike) st = tracker.apply(raw, { final: true }).states.map(x => (x === 'ok' ? 'ok' : 'bad'));
-        else st = hst.map(x => (x === 'ok' ? 'ok' : 'bad'));
+        const pre = voiceLike ? tracker.apply(raw, { final: true }).states : hst.slice();
+        // words after the last one reached (session ended early) are not mistakes: they are only left out
+        let reached = -1;
+        pre.forEach((x, i) => { if (x !== 'pending' || forced.has(i)) reached = i; });
+        let st = pre.map(x => (x === 'ok' ? 'ok' : 'bad'));
         try { matcher.finish(); } catch (e) { /* ignore */ }
         st = st.map((x, i) => (forced.has(i) ? 'bad' : x));
         const ok = st.filter(x => x === 'ok').length;
         const acc = total ? Math.round(100 * ok / total) : 0;
         const missed = flat.filter((_, i) => st[i] === 'bad').map(x => x.w);
+        // detailed verdict per word: skipped / substituted (with what was heard) / hinted, plus inserted words
+        let analysis = { words: st.map((x, i) => ({ i, kind: x === 'ok' ? 'ok' : forced.has(i) ? 'hint' : 'skip', heard: '' })), extras: [] };
+        try {
+          const heard = voiceLike ? stripOpeners(lastFull, keepBasmala) : '';
+          // hide mode: only words actually revealed (tapped / hinted) count as «كُشفت»
+          const hinted = voiceLike ? forced : new Set(pre.map((x, i) => (x === 'bad' || forced.has(i) ? i : -1)).filter(i => i >= 0));
+          analysis = analyzeMistakes(flat.map(x => x.w), heard, st, hinted);
+        } catch (e) { /* keep the simple verdict */ }
+        analysis.words.forEach(x => { if (x.i > reached && x.kind !== 'ok') { x.kind = 'unreached'; x.heard = ''; } });
+        analysis.extras = analysis.extras.filter(x => x.after < reached);
+        try {
+          recordWords(s, analysis.words.filter(x => x.kind !== 'unreached').map(x => ({ a: flat[x.i].a, w: x.i - groupOf[x.i].start + 1, kind: x.kind })));
+        } catch (e) { /* ignore */ }
+        // drifted into a similar ayah elsewhere (mutashabihat)?
+        const similar = [];
+        try {
+          for (const run of wrongRuns(analysis.words).slice(0, 3)) {
+            const at = { s, a: flat[run.from].a };
+            const hits = findSimilar(run.heard, at);
+            if (hits.length) similar.push({ at, heard: run.heard, hits });
+            if (similar.length >= 3) break;
+          }
+        } catch (e) { /* ignore */ }
+        const ayahStats = groups.map(g => {
+          let okN = 0;
+          for (let k = g.start; k < g.end; k++) if (st[k] === 'ok') okN++;
+          return { a: g.a, ok: okN, n: g.end - g.start, acc: g.end > g.start ? Math.round(100 * okN / (g.end - g.start)) : 100 };
+        });
         const pts = addRecitation({ s, from, to, acc, miss: missed });
+        const prev = lastAttempt(s, from, to, 1);
         haptic('heavy');
-        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs });
+        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar, prev, hideMode: !voiceLike });
       }
 
       if (noVoice) { $('#rc-tohide', el).onclick = () => { cfg.mode = 'hide'; startSession(); }; }
@@ -619,13 +665,66 @@ export default {
           <div class="card"><b class="gold">${esc(rule)}</b>${items.map(x => `
             <div class="mt" style="border-inline-start:3px solid ${sevColor(x.severity)};padding-inline-start:10px"><span class="quran">${esc(x.word)}</span>${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ''}</div>`).join('')}</div>`).join('')}` : ''}
         ${advice.length ? `<h2 class="section-title">نصيحة</h2><div class="card">${advice.map(a => `<p>${esc(a)}</p>`).join('')}</div>` : ''}
+        ${arr(r && r.plan).length ? `<h2 class="section-title">خطة العلاج</h2><div class="card"><ol class="rc-plan">${arr(r.plan).map(p => `<li>${esc(p)}</li>`).join('')}</ol></div>` : ''}
         ${!mistakes.length && !groupsMap.size ? '<div class="card"><p class="center">لم تُرصد ملاحظات، بارك الله فيك</p></div>' : ''}`;
     }
 
-    function showResult({ acc, missed, pts, blob, secs }) {
+    /** Detailed feedback: change vs last attempt, mistake counts, ayah map, per-ayah mistakes, mutashabihat. */
+    function feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode }) {
+      const bad = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached');
+      const unreached = analysis.words.length - analysis.words.filter(x => x.kind !== 'unreached').length;
+      const count = k => bad.filter(x => x.kind === k).length;
+      const label = k => (hideMode && k === 'hint' ? 'كُشفت' : KIND_LABEL[k] || k);
+      let html = '';
+      if (prev) {
+        const d = acc - prev.acc;
+        html += `<div class="rc-delta ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${d > 0 ? '▲ تحسّنت ' + N(d) + '٪' : d < 0 ? '▼ أقل بـ ' + N(-d) + '٪' : '= نفس الدقة'} عن محاولتك السابقة (${N(prev.acc)}٪)</div>`;
+      }
+      if (bad.length || analysis.extras.length) {
+        const stat = (n, t, cls) => `<div class="rc-stat ${cls}"><b>${N(n)}</b><span>${t}</span></div>`;
+        html += `<div class="rc-stats">${hideMode
+          ? stat(count('hint'), 'كلمات كُشفت', 'hint')
+          : stat(count('skip'), 'محذوفة', 'skip') + stat(count('wrong'), 'مبدّلة', 'wrong') + stat(count('hint'), 'تلقين', 'hint') + stat(analysis.extras.length, 'زيادة', 'extra')}</div>`;
+      }
+      if (ayahStats.length > 1) {
+        html += `<h2 class="section-title">خريطة الآيات</h2><div class="card"><div class="rc-amap">${ayahStats.map(x =>
+          `<button class="rc-acell" data-ayah="${x.a}" style="--c:${accColor(x.acc)}" aria-label="آية ${N(x.a)}: ${N(x.acc)}٪"><span>${N(x.a)}</span><small>${N(x.acc)}٪</small></button>`).join('')}</div>
+          <p class="muted small mt">اضغط على آية لتسميعها وحدها</p></div>`;
+      }
+      if (similar.length) {
+        html += `<div class="card rc-similar"><b class="gold">تنبيه متشابهات</b>${similar.map(m => `
+          <p class="mt">في الآية ${N(m.at.a)} انتقلت إلى موضع مشابه: «${esc(m.heard.join(' '))}» — وهي من ${m.hits.map(h => `<span class="chip">${esc(surahName(h.s))} ${N(h.a)}</span>`).join(' ')}</p>`).join('')}
+          <p class="muted small">ركّز على الكلمة التي يفترق فيها الموضعان، وسمّعهما متتاليين.</p></div>`;
+      }
+      if (bad.length) {
+        const byAyah = new Map();
+        bad.forEach(x => { const a = flat[x.i].a; if (!byAyah.has(a)) byAyah.set(a, []); byAyah.get(a).push(x); });
+        html += `<h2 class="section-title">ملاحظات التسميع</h2>${[...byAyah].map(([a, items]) => `
+          <div class="card rc-mist">
+            <div class="row"><b class="gold">الآية ${N(a)}</b><span class="muted small">${N(items.length)} ${items.length > 2 ? 'ملاحظات' : 'ملاحظة'}</span></div>
+            ${items.map(x => `<button class="rc-mrow k-${x.kind}" data-i="${x.i}" data-w="${x.i - groupOf[x.i].start + 1}" data-a="${a}">
+              <span class="quran rc-mword">${esc(flat[x.i].w)}</span>
+              <span class="rc-mkind">${esc(label(x.kind))}</span>
+              ${x.kind === 'wrong' && x.heard ? `<span class="muted small">قلتَ: «${esc(x.heard)}»</span>` : ''}
+              <span class="rc-mplay">${icon('play', 14)}</span>
+            </button>`).join('')}
+          </div>`).join('')}`;
+      }
+      if (unreached) html += `<p class="muted small center mt">لم تصل إلى ${N(unreached)} كلمة في آخر المقطع، فلم تُحتسب في ملاحظاتك (لكنها تُنقص الدقة).</p>`;
+      if (analysis.extras.length) {
+        html += `<div class="card"><b class="gold">كلمات زائدة لم ترد في النص</b><div class="row mt">${analysis.extras.slice(0, 12).map(x =>
+          `<span class="chip">${esc(x.heard)}${x.after >= 0 ? ` <small class="muted">بعد «${esc(flat[x.after].w)}»</small>` : ''}</span>`).join('')}</div></div>`;
+      }
+      return html;
+    }
+
+    function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false }) {
       const { s, from, to } = cfg;
       const rg = gen;
       const msg = acc >= 90 ? 'ما شاء الله، تسميع متقن' : acc >= 70 ? 'جيد جداً، راجع الكلمات الحمراء' : 'التكرار طريق الإتقان';
+      const badAyahs = ayahStats.filter(x => x.ok < x.n).map(x => x.a);
+      const retry = badAyahs.length && (badAyahs[0] !== from || badAyahs[badAyahs.length - 1] !== to) ? { from: badAyahs[0], to: badAyahs[badAyahs.length - 1] } : null;
+      const detected = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached').slice(0, 40).map(x => ({ word: flat[x.i] ? flat[x.i].w : '', kind: x.kind, heard: x.heard || '' }));
       const tooLong = secs > MAX_REVIEW_SECS;
       if (blob) { try { resUrl = URL.createObjectURL(blob); } catch (e) { resUrl = null; } }
       let recId = null, pendingTj = null;
@@ -644,7 +743,9 @@ export default {
           <h2 class="mt">${esc(msg)}</h2>
           <p class="muted small">${esc(surahName(s))} · الآيات ${N(from)}–${N(to)} · +${N(pts)} نقطة</p>
         </div>
-        ${missed.length ? `<h2 class="section-title">الكلمات التي تحتاج مراجعة</h2><div class="card"><div class="row">${missed.map(w => `<span class="chip quran">${esc(w)}</span>`).join('')}</div></div>` : ''}
+        ${feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode })}
+        ${!analysis.words.length && missed.length ? `<h2 class="section-title">الكلمات التي تحتاج مراجعة</h2><div class="card"><div class="row">${missed.map(w => `<span class="chip quran">${esc(w)}</span>`).join('')}</div></div>` : ''}
+        ${retry ? `<button class="btn block mt" id="rc-retry">${icon('repeat', 18)} أعد الآيات التي أخطأت فيها (${N(retry.from)}–${N(retry.to)})</button>` : ''}
         <div class="card mt">
           ${resUrl ? `<div class="center muted small mb">استمع لتلاوتك وقارنها بالقارئ</div>
           <div class="seg" role="group" aria-label="قارن بالقارئ">
@@ -664,6 +765,13 @@ export default {
         <button class="btn ghost block mt" id="rc-new">تسميع جديد</button>`;
       $('#rc-again', el).onclick = startSession;
       $('#rc-new', el).onclick = showSetup;
+      const retryBtn = $('#rc-retry', el);
+      if (retryBtn) retryBtn.onclick = () => { cfg.from = retry.from; cfg.to = retry.to; startSession(); };
+      $$('.rc-acell', el).forEach(b => b.onclick = () => { cfg.from = cfg.to = +b.dataset.ayah; startSession(); });
+      $$('.rc-mrow', el).forEach(b => b.onclick = () => {
+        playWordAt(s, +b.dataset.a, +b.dataset.w);
+        const i = +b.dataset.i; if (flat[i]) toast('الصواب: ' + flat[i].w);
+      });
       $('#rc-rev', el).onclick = e => {
         const r = addReview(s, from, to);
         toast(r ? 'أُضيف المقطع إلى المراجعة' : 'المقطع موجود في المراجعة مسبقاً');
@@ -700,7 +808,7 @@ export default {
           box.innerHTML = '<div class="card center"><p class="muted">يستمع الذكاء إلى تلاوتك ويحلل التجويد… قد يستغرق ذلك دقيقة</p><button class="btn ghost sm" id="rc-tjx">إلغاء</button></div>';
           $('#rc-tjx', box).onclick = () => { ctl.abort(); idle(); };
           try {
-            const r = await tajweedReview(blob, { s, from, to, text, signal: ctl.signal });
+            const r = await tajweedReview(blob, { s, from, to, text, signal: ctl.signal, detected });
             if (ctl.signal.aborted || gen !== rg) return;
             box.innerHTML = renderTajweed(r);
             const sc = Number(r && r.score);

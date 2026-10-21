@@ -11,6 +11,8 @@
 //   NVIDIA_API_KEY      NVIDIA NIM / build.nvidia.com (optional, free key, ~40 req/min, DeepSeek/Qwen/Llama/Kimi)
 //   CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN  Workers AI (optional, 10k neurons/day free: chat + Whisper STT)
 //   COHERE_API_KEY      Cohere trial key (optional, 1,000 calls/month — last resort)
+//   QURAN_ASR_URL + QURAN_ASR_TOKEN  Quran-tuned Whisper on your own free Hugging Face Space (see hf-space/README.md)
+//                       — tried first for recitation; more accurate on tilawa than whisper-large-v3
 //   (GitHub Models was retired by GitHub on 2026-07-30, so it is intentionally not supported.)
 // Pollinations (keyless) is the last-resort fallback for chat.
 //
@@ -40,6 +42,8 @@ const CF_ACCOUNT = env("CLOUDFLARE_ACCOUNT_ID");
 const CF_TOKEN = env("CLOUDFLARE_API_TOKEN");
 const CF_KEY = CF_ACCOUNT && CF_TOKEN ? CF_TOKEN : "";
 const COHERE_KEY = env("COHERE_API_KEY");
+const QURAN_ASR_URL = env("QURAN_ASR_URL");
+const QURAN_ASR_TOKEN = env("QURAN_ASR_TOKEN");
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const GROQ_BASE = "https://api.groq.com/openai/v1";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
@@ -306,6 +310,26 @@ async function transcribe(body: any) {
   if (!a) return json(400, { error: "bad_audio" });
   if (a.bytes.length < 1500) return json(200, { text: "", provider: "none" });
   const prompt = String(body.prompt ?? "").slice(0, 600);
+  if (QURAN_ASR_URL && !cooling("stt:quran")) {
+    const form = new FormData();
+    form.append("file", new Blob([a.bytes as BlobPart], { type: a.mime }), "chunk." + extFor(a.mime));
+    if (prompt) form.append("prompt", prompt);
+    try {
+      const r = await fetch(QURAN_ASR_URL, {
+        method: "POST", body: form,
+        headers: QURAN_ASR_TOKEN ? { Authorization: `Bearer ${QURAN_ASR_TOKEN}` } : {},
+        // short: the client gives a request ~30s in total and Groq must still have time to answer
+        signal: AbortSignal.timeout(body.fast === true ? 7_000 : 14_000),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        let text = String(d?.text ?? "").replace(/\s+/g, " ").trim();
+        if (JUNK.test(text)) text = "";
+        return json(200, { text, provider: "quran", model: String(d?.model ?? "quran-whisper").slice(0, 80) });
+      }
+      await r.body?.cancel(); coolFor("stt:quran", r.status === 503 ? 120_000 : 30_000); // 503 = the free Space is waking up
+    } catch { coolFor("stt:quran", 120_000); } // timeout / network: the Space is asleep or busy, use Groq for a while
+  }
   if (GROQ_KEY) {
     // fast=true (live chunks): turbo first for lower latency; otherwise the most accurate model first.
     const sttModels = list("GROQ_STT_MODELS", ["whisper-large-v3", "whisper-large-v3-turbo"]);
@@ -365,14 +389,24 @@ async function tajweed(body: any) {
   if (!a) return json(400, { error: "bad_audio" });
   if (!GEMINI_KEY) return json(503, { error: "no_provider" });
   const ref = String(body.text ?? "").slice(0, 6000);
+  // client-detected mistakes: Arabic letters/marks only (no room for injected instructions), known kinds only
+  const clip = (x: unknown, n: number) => String(x ?? "").replace(/[^؀-ۿݐ-ݿࢠ-ࣿ ]/g, "").replace(/\s+/g, " ").trim().slice(0, n);
+  const KIND_AR: Record<string, string> = { skip: "محذوفة", wrong: "مبدّلة", hint: "احتاج تلقيناً" };
+  const detected = (Array.isArray(body.detected) ? body.detected : []).slice(0, 40)
+    .map((m: any) => ({ word: clip(m?.word, 40), kind: String(m?.kind ?? ""), heard: clip(m?.heard, 40) }))
+    .filter((m: any) => m.word && Object.hasOwn(KIND_AR, m.kind));
+  const detectedTxt = detected.length
+    ? "\nأخطاء الحفظ التي رصدها المطابق الآلي (تحقق منها بالاستماع ولا تكررها إن لم تسمعها):\n" +
+      detected.map((m: any) => `- «${m.word}» : ${KIND_AR[m.kind]}${m.heard ? ` (قال: ${m.heard})` : ""}`).join("\n") + "\n"
+    : "";
   const where = `سورة رقم ${Number(body.s) | 0} من الآية ${Number(body.from) | 0} إلى ${Number(body.to) | 0}`;
   const prompt = `أنت شيخ مُقرئ متقن لرواية حفص عن عاصم، تستمع لتلاوة طالب (${where}).
 النص الصحيح للمقطع:
 «${ref}»
-
+${detectedTxt}
 استمع للتسجيل بدقة وقيّمه مقارنةً بالنص. لا تخترع أخطاء لم تسمعها، وإذا كان الصوت غير واضح فاذكر ذلك صراحة وخفّض الدرجة.
 أعد JSON فقط بهذا الشكل:
-{"score":0-100,"summary":"جملة أو جملتان","mistakes":[{"word":"الكلمة من النص","kind":"missing|wrong|extra|harakah","note":"ماذا قال الطالب وما الصواب"}],"tajweed":[{"word":"الكلمة","rule":"اسم الحكم مثل: المد المتصل، الغنة، الإخفاء، الإدغام، القلقلة، مخارج الحروف، الوقف","note":"ملاحظة قصيرة عملية","severity":"high|medium|low"}],"advice":["نصيحة عملية 1","نصيحة 2"]}
+{"score":0-100,"summary":"جملة أو جملتان","mistakes":[{"word":"الكلمة من النص","kind":"missing|wrong|extra|harakah","note":"ماذا قال الطالب وما الصواب"}],"tajweed":[{"word":"الكلمة","rule":"اسم الحكم مثل: المد المتصل، الغنة، الإخفاء، الإدغام، القلقلة، مخارج الحروف، الوقف","note":"ملاحظة قصيرة عملية","severity":"high|medium|low"}],"advice":["نصيحة عملية 1","نصيحة 2"],"plan":["خطوة علاجية عملية لتثبيت المواضع الضعيفة 1","خطوة 2"]}
 اجعل الملاحظات مختصرة وبالعربية الفصحى، وبحد أقصى 12 ملاحظة تجويد.`;
   const g = await geminiGenerate("audio", {
     contents: [{ role: "user", parts: [{ inlineData: { mimeType: a.mime, data: body.audio } }, { text: prompt }] }],
@@ -391,6 +425,7 @@ async function tajweed(body: any) {
     mistakes: arr(out.mistakes).slice(0, 30).map((m: any) => ({ word: str(m.word, 60), kind: str(m.kind, 20), note: str(m.note) })),
     tajweed: arr(out.tajweed).slice(0, 12).map((m: any) => ({ word: str(m.word, 60), rule: str(m.rule, 60), note: str(m.note), severity: ["high", "medium", "low"].includes(m.severity) ? m.severity : "medium" })),
     advice: arr(out.advice).slice(0, 5).map((x: unknown) => str(x)),
+    plan: arr(out.plan).slice(0, 5).map((x: unknown) => str(x)),
   });
 }
 
@@ -521,8 +556,8 @@ Deno.serve(async (req) => {
       case "status":
         return json(200, {
           ok: true,
-          providers: { gemini: !!GEMINI_KEY, groq: !!GROQ_KEY, cerebras: !!CEREBRAS_KEY, nvidia: !!NVIDIA_KEY, openrouter: !!OPENROUTER_KEY, mistral: !!MISTRAL_KEY, cloudflare: !!CF_KEY, cohere: !!COHERE_KEY, pollinations: true },
-          stt: !!(GROQ_KEY || CF_KEY || GEMINI_KEY), sttEngine: GROQ_KEY ? "whisper-large-v3" : CF_KEY ? "whisper-large-v3-turbo" : GEMINI_KEY ? "gemini" : null,
+          providers: { gemini: !!GEMINI_KEY, groq: !!GROQ_KEY, cerebras: !!CEREBRAS_KEY, nvidia: !!NVIDIA_KEY, openrouter: !!OPENROUTER_KEY, mistral: !!MISTRAL_KEY, cloudflare: !!CF_KEY, cohere: !!COHERE_KEY, quran: !!QURAN_ASR_URL, pollinations: true },
+          stt: !!(QURAN_ASR_URL || GROQ_KEY || CF_KEY || GEMINI_KEY), sttEngine: QURAN_ASR_URL ? "quran-whisper" : GROQ_KEY ? "whisper-large-v3" : CF_KEY ? "whisper-large-v3-turbo" : GEMINI_KEY ? "gemini" : null,
           tajweed: !!GEMINI_KEY, limits: DAILY,
         });
       case "chat": return await chat(body);

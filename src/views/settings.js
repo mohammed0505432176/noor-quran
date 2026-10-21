@@ -19,7 +19,7 @@ const PROVIDERS = [
   ['cohere', 'Cohere', 'احتياطي أخير (١٠٠٠ طلب شهرياً)'],
   ['pollinations', 'Pollinations', 'احتياطي بلا مفتاح']
 ];
-const STT_NAMES = { 'whisper-large-v3': 'Whisper large-v3', 'whisper-large-v3-turbo': 'Whisper turbo (Cloudflare)', gemini: 'Gemini' };
+const STT_NAMES = { 'whisper-large-v3': 'Whisper large-v3', 'whisper-large-v3-turbo': 'Whisper turbo (Cloudflare)', gemini: 'Gemini', 'quran-whisper': 'Whisper المتخصص بالقرآن' };
 
 /** Status card body for a cloudStatus() result (never throws; r may be { ok:false }). */
 function statusHtml(r) {
