@@ -1,6 +1,6 @@
 node_modules
 dist
-android
+/android
 .router
 *.keystore
 public/quran.json
