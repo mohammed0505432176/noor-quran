@@ -27,3 +27,10 @@ pinned: false
 - الـ Spaces المجانية تنام بعد 48 ساعة من عدم الاستخدام؛ عند أول طلب تستيقظ خلال دقيقة أو أكثر، وخلال ذلك يتحول التطبيق تلقائياً إلى Groq Whisper.
 - اختيارياً: لتجربة نموذج آخر أضف متغير `MODEL_ID=tarteel-ai/whisper-base-ar-quran` (Variables). ولتسريع الإقلاع غيّر أيضاً قيمة `ARG MODEL_ID` في Dockerfile ليُحمَّل أثناء البناء.
 - اختبار: `curl -H "Authorization: Bearer TOKEN" -F file=@a.wav https://<user>-<space>.hf.space/transcribe`
+
+## Model revision pinning
+
+Set `MODEL_REVISION` (env var, and Docker build ARG of the same name) to a specific
+commit SHA of the model repo instead of the default `main`, so a later change to the
+upstream repo cannot alter what you run. The model is always loaded with
+`use_safetensors=True` (no pickle weights).

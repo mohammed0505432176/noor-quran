@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="noor_w_title">نور · مواقيت الصلاة</string>
+    <string name="noor_w_desc">مواقيت الصلاة</string>
+    <string name="noor_w_empty">افتح نور لتحديد موقعك</string>
+    <string name="noor_w_stale">افتح نور لتحديث المواقيت</string>
+    <string name="noor_w_left">باقي %1$s</string>
+    <string name="noor_w_fajr">الفجر</string>
+    <string name="noor_w_sunrise">الشروق</string>
+    <string name="noor_w_dhuhr">الظهر</string>
+    <string name="noor_w_jumua">الجمعة</string>
+    <string name="noor_w_asr">العصر</string>
+    <string name="noor_w_maghrib">المغرب</string>
+    <string name="noor_w_isha">العشاء</string>
+    <string name="noor_w_am">ص</string>
+    <string name="noor_w_pm">م</string>
+</resources>

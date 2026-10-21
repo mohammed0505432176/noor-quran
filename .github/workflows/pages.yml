@@ -29,6 +29,22 @@ jobs:
       - name: Generate icons
         run: npm i --no-save sharp@0.35.5 && node scripts/svg-to-png.mjs
       - run: npm run build
+      - name: Bundle on-device Quran model
+        run: |
+          set -euo pipefail
+          mkdir -p dist/models
+          R=https://github.com/yazinsai/tilawa/releases/download
+          curl -fsSL --retry 5 -o dist/models/zipformer_a0w_ep1_a05.int8.onnx "$R/zipformer-a0w-ep1-a0.5/zipformer_a0w_ep1_a05.int8.onnx"
+          curl -fsSL --retry 5 -o dist/models/zipformer_quran.json "$R/v0.3.0/zipformer_quran.json"
+          curl -fsSL --retry 5 -o dist/models/NPL-1.2.txt "$R/zipformer-a0w-ep1-a0.5/NPL-1.2.txt"
+          [ "$(stat -c %s dist/models/zipformer_a0w_ep1_a05.int8.onnx)" = 69246033 ] || { echo "onnx size mismatch"; exit 1; }
+          [ "$(stat -c %s dist/models/zipformer_quran.json)" = 5453439 ] || { echo "json size mismatch"; exit 1; }
+          {
+            echo "zipformer_a0w_ep1_a05.int8.onnx and zipformer_quran.json are Derivatives of Quran-Lab's zipformer_p-arabic-v3 (Muno459 / Quran-Lab) via Tilawa (yazinsai/tilawa), licensed under the Quran-Lab No-Profit License 1.2 (NPL-1.2.txt)."
+            echo "Used free of charge in the Noor app. Automatic recitation feedback can be wrong and does not replace a qualified teacher."
+            echo "Source: https://github.com/yazinsai/tilawa"
+          } > dist/models/NOTICE.txt
+          sha256sum dist/models/zipformer_a0w_ep1_a05.int8.onnx dist/models/zipformer_quran.json
       - run: npm test
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:

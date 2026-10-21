@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from transformers import pipeline
 
 MODEL_ID = os.environ.get("MODEL_ID", "deepdml/whisper-base-ar-quran-mix-norm")
+MODEL_REVISION = os.environ.get("MODEL_REVISION", "main")  # pin to a commit SHA in production
 API_TOKEN = os.environ.get("API_TOKEN", "")
 ALLOW_ANON = os.environ.get("ALLOW_ANON") == "1"  # explicit opt-in to run without a token
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB upload limit
@@ -23,7 +24,13 @@ SR = 16000
 torch.set_num_threads(int(os.environ.get("NUM_THREADS", "2")))
 app = FastAPI(title="Noor Quran ASR")
 lock = threading.Lock()  # one inference at a time on the small CPU
-asr = pipeline("automatic-speech-recognition", model=MODEL_ID, device="cpu")  # loaded at startup
+asr = pipeline(
+    "automatic-speech-recognition",
+    model=MODEL_ID,
+    revision=MODEL_REVISION,
+    device="cpu",
+    model_kwargs={"use_safetensors": True},
+)  # loaded at startup
 _skip_generate_kwargs = False  # set when the model lacks lang_to_id in its generation_config
 
 
@@ -93,6 +100,13 @@ def transcribe(
     data = file.file.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="file too large (max 10 MB)")
+    try:  # cheap pre-decode duration check for formats soundfile can open
+        if sf.info(io.BytesIO(data)).duration > MAX_SECONDS:
+            raise HTTPException(status_code=413, detail=f"audio too long (max {MAX_SECONDS} s)")
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # unsupported by soundfile (webm/m4a...): post-decode check below
     try:
         audio = decode_audio(data)
     except Exception:

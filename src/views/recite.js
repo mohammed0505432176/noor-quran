@@ -12,10 +12,11 @@ import { startRecorder, recorderSupported } from '../core/recorder.js';
 import { cloudStatus, transcribe, tajweedReview } from '../core/cloud.js';
 import { playRange, playAyah, stop as stopReciter } from '../core/audio.js';
 import * as recordings from '../core/recordings.js';
+import { engineSupported, engineCached, downloadEngine, openEngine, mapVerdicts, ENGINE_MB } from '../core/quran-engine.js';
 import '../styles/recite.css';
 
 const MODE_KEY = 'noor.recite.mode';
-const MODES = ['device', 'ai', 'hide'];
+const MODES = ['quran', 'device', 'ai', 'hide'];
 const FS_KEY = 'noor.recite.fs';
 const FS_MIN = 26, FS_MAX = 52;
 // Whisper chunking tuned for latency (shorter chunks, quicker cut after a pause)
@@ -25,11 +26,14 @@ const MAX_REVIEW_SECS = 240;
 
 const MISTAKE_KIND = { missing: 'نقص', wrong: 'خطأ', extra: 'زيادة', harakah: 'حركة' };
 // per-word verdicts from feedback.js
-const KIND_LABEL = { skip: 'محذوفة', wrong: 'مبدّلة', hint: 'تلقين' };
+const KIND_LABEL = { skip: 'محذوفة', wrong: 'مبدّلة', hint: 'تلقين', vowel: 'حركة', repeat: 'تكرار' };
+// on-device engine issues -> feedback kinds
+const ISSUE_KIND = { possible_omission: 'skip', possible_substitution: 'wrong', possible_vowel: 'vowel', possible_repetition: 'repeat', possible_skipped_ayah: 'skip', unclear_ayah: 'wrong' };
 function loadMode() {
   try {
     // v1.3: instant on-device mode became the default — reset choices saved by older versions once.
-    if (localStorage.getItem('noor.recite.modev') !== '3') { localStorage.removeItem(MODE_KEY); localStorage.setItem('noor.recite.modev', '3'); }
+    // v1.6: the on-device Quran engine becomes the default once downloaded — reset older saved choices once.
+    if (localStorage.getItem('noor.recite.modev') !== '4') { localStorage.removeItem(MODE_KEY); localStorage.setItem('noor.recite.modev', '4'); }
     const m = localStorage.getItem(MODE_KEY); return MODES.includes(m) ? m : null;
   } catch (e) { return null; }
 }
@@ -55,7 +59,7 @@ function firstLetter(w) {
   const m = /[\u0621-\u064A\u0671]/.exec(w || '');
   return m ? m[0] + '\u0640' : '…';
 }
-const MODE_TITLE = { ai: 'تسميع دقيق', device: 'تسميع فوري', hide: 'اختبار الحفظ' };
+const MODE_TITLE = { quran: 'التسميع القرآني', ai: 'تسميع دقيق', device: 'تسميع فوري', hide: 'اختبار الحفظ' };
 
 function parseQuery(q) {
   if (!q) return {};
@@ -97,6 +101,7 @@ export default {
     let setupTok = 0;
     let cloud = null;            // last cloudStatus()
     let wAudio = null;           // word-by-word audio for hints / mistakes
+    let activeEngine = null;     // on-device Quran engine with a running session
     const cleanup = () => {
       alive = false; gen++; setupTok++;
       if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; }
@@ -106,6 +111,8 @@ export default {
       if (wAudio) { try { wAudio.pause(); wAudio.removeAttribute('src'); wAudio.load(); } catch (e) {} wAudio = null; }
       if (resAudio) { try { resAudio.pause(); resAudio.removeAttribute('src'); resAudio.load(); } catch (e) {} resAudio = null; }
       if (resUrl) { try { URL.revokeObjectURL(resUrl); } catch (e) {} resUrl = null; }
+      // leaving mid-session: abandon the on-device engine session so it never feeds a later one
+      if (activeEngine) { try { activeEngine.cancel(); } catch (e) {} activeEngine = null; }
     };
 
     el.innerHTML = header('التسميع') + '<div class="card empty"><p class="muted">جارٍ التحميل…</p></div>';
@@ -176,10 +183,12 @@ export default {
           </div>
           <p class="muted small" id="rc-max">عدد آيات السورة: ${N(ayahCount(cfg.s))}</p>
           <div class="row mt" id="rc-mode">
+            ${engineSupported() ? modeChip('quran', 'القرآني ✨') : ''}
             ${modeChip('device', 'فوري')}
             ${modeChip('ai', 'دقيق (Whisper)')}
             ${modeChip('hide', 'اختبار الحفظ (إخفاء)')}
           </div>
+          <div class="mt" id="rc-eng"></div>
           <div class="mt" id="rc-cloud">${chipHtml()}</div>
           <p class="muted small mt">عرض النص</p>
           <div class="row" id="rc-disp">
@@ -201,9 +210,50 @@ export default {
       };
       fromI.max = toI.max = ayahCount(cfg.s);
       fromI.onchange = toI.onchange = () => { readInputs(); fromI.value = cfg.from; toI.value = cfg.to; };
+      const markMode = () => $$('#rc-mode button', el).forEach(x => x.classList.toggle('active', x.dataset.mode === cfg.mode));
       $$('#rc-mode button', el).forEach(b => b.onclick = () => {
         cfg.mode = userMode = b.dataset.mode; saveMode(cfg.mode);
-        $$('#rc-mode button', el).forEach(x => x.classList.toggle('active', x === b));
+        markMode(); engineCard();
+      });
+
+      // on-device Quran engine: one-time download card, then it becomes the default mode
+      let engReady = false, dl = false;
+      function engineCard() {
+        const box = $('#rc-eng', el); if (!box || !engineSupported()) return;
+        if (engReady) {
+          box.innerHTML = cfg.mode === 'quran' ? '<span class="chip active small">المحرك القرآني جاهز ويعمل بلا إنترنت ✓</span>' : '';
+          return;
+        }
+        if (dl) return;
+        box.innerHTML = `<div class="rc-engcard">
+          <b class="gold">محرك التسميع القرآني</b>
+          <p class="small">نموذج ذكاء مدرّب على تلاوة القرآن يعمل على جهازك بلا إنترنت: يستمع بلا انقطاع ويكشف الكلمة المحذوفة والمبدّلة وأخطاء الحركات والتكرار وتخطّي الآيات.</p>
+          <button class="btn block sm" id="rc-engdl">${icon('download', 16)} تحميل المحرك (${N(ENGINE_MB)} ميغابايت — مرة واحدة)</button>
+        </div>`;
+        $('#rc-engdl', box).onclick = async () => {
+          dl = true;
+          box.innerHTML = '<div class="rc-engcard"><b class="gold">جارٍ تحميل المحرك…</b><div class="progress mt"><i id="rc-engp" style="width:0%"></i></div><p class="muted small mt" id="rc-engt">٠٪</p></div>';
+          try {
+            await downloadEngine(p => {
+              const bar = $('#rc-engp', el), t = $('#rc-engt', el);
+              if (bar) bar.style.width = Math.round(p * 100) + '%';
+              if (t) t.textContent = N(Math.round(p * 100)) + '٪';
+            });
+            engReady = true; dl = false;
+            if (!userMode || cfg.mode !== 'hide') { cfg.mode = userMode = 'quran'; saveMode('quran'); }
+            if (alive && tok === setupTok) { markMode(); engineCard(); toast('تم تحميل المحرك القرآني ✓'); }
+          } catch (e) {
+            dl = false;
+            if (alive && tok === setupTok) { engineCard(); toast('تعذّر التحميل، تحقق من الإنترنت وحاول مجدداً (يكمل من حيث توقف)'); }
+          }
+        };
+      }
+      if (engineSupported()) engineCached().then(ok => {
+        engReady = ok;
+        if (!alive || tok !== setupTok) return;
+        if (ok && !userMode) { cfg.mode = 'quran'; markMode(); }
+        if (!ok && cfg.mode === 'quran') { cfg.mode = 'device'; markMode(); }
+        engineCard();
       });
       $$('#rc-disp button', el).forEach(b => b.onclick = () => {
         cfg.display = b.dataset.display;
@@ -232,8 +282,11 @@ export default {
         if (!isLive()) return;
         if (!aiReady()) { toast('الوضع الدقيق غير متاح الآن — سيُستخدم الفوري'); mode = 'device'; }
       }
+      if (mode === 'quran' && !(engineSupported() && await engineCached())) { toast('حمّل المحرك القرآني أولاً — سيُستخدم الفوري'); mode = 'device'; }
+      if (!isLive()) return;
       const voiceLike = mode !== 'hide';
-      let engine = mode === 'ai' ? 'ai' : 'device';       // may fall back ai -> device mid-session
+      // may fall back ai/quran -> device mid-session
+      let engine = mode === 'ai' ? 'ai' : mode === 'quran' ? 'quran' : 'device';
       const disp = mode === 'hide' && cfg.display === 'full' ? 'hidden' : cfg.display;
       const { flat, groups } = buildRange(s, from, to);
       const total = flat.length;
@@ -251,6 +304,10 @@ export default {
       // AI engine state
       let rec = null, starting = false, aiState = 'idle', chain = Promise.resolve(), inflight = 0, fails = 0;
       let aiText = '', recBlob = null, recSecs = 0, allDone = false;
+      // on-device Quran engine state
+      let qe = null, qVerdicts = [];
+      const qIssues = new Map();                        // flat index -> feedback kind (from the engine's correction rules)
+      const qVowel = new Set();                         // words read with a vowel (haraka) slip
       if (engine === 'device' && voiceLike) support = await speechSupport();
       if (!isLive()) return;
       if (engine === 'ai') aiCtl = new AbortController();
@@ -490,6 +547,87 @@ export default {
         if (autoStart) toggleMic();
       }
 
+      // ----- on-device Quran engine (continuous mic, no gaps between ayahs) -----
+      function applyQuran(words) {
+        // the engine drops its tracker once the passage is complete: an empty list must not erase the page
+        if (!words.length && qVerdicts.length) words = qVerdicts;
+        qVerdicts = words;
+        const m = mapVerdicts(words, groups);
+        const st = new Array(total).fill('pending');
+        for (const [i, v] of m) {
+          st[i] = v.st === 'ok' || v.st === 'unsure' ? 'ok' : v.st === 'pending' ? 'pending' : 'bad';
+          if (v.vowel > 0 && st[i] === 'ok') qVowel.add(i);
+        }
+        for (const [i, k] of qIssues) if (k !== 'vowel' && k !== 'repeat') st[i] = 'bad';
+        // the worker already accumulates settled verdicts: no locking here, so a later correction can still turn a word red
+        raw = st;
+        mres = { states: st.slice() };
+        const ptr = paint();
+        if (ptr === -1 && !finished) setTimeout(() => { if (isLive() && !finished) finish(); }, 900);
+      }
+      function onQuranIssue(issue) {
+        const kind = ISSUE_KIND[issue.kind]; if (!kind) return;
+        const n = issue.kind === 'possible_skipped_ayah' || issue.kind === 'unclear_ayah' ? Math.max(1, issue.words | 0) : 1;
+        const items = [];
+        for (let k = 0; k < n; k++) items.push({ a: issue.a, w: issue.w + k, st: 'wrong' });
+        for (const i of mapVerdicts(items, groups).keys()) { if (!qIssues.has(i) || kind !== 'vowel') qIssues.set(i, kind); if (kind === 'vowel') qVowel.add(i); }
+        if (kind !== 'vowel' && kind !== 'repeat') haptic('light');
+        applyQuran(qVerdicts);
+      }
+      async function toggleQuran() {
+        if (finished || ending || starting) return;
+        if (aiState === 'rec') { rec.pause(); aiState = 'paused'; listening = false; micEl.classList.remove('live'); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); setLevel(0); return; }
+        if (aiState === 'paused') { rec.resume(); aiState = 'rec'; setListening(true); return; }
+        starting = true;
+        setStatus('جارٍ تجهيز المحرك القرآني…');
+        // the recorder starts first, inside the user's tap (an AudioContext created later may stay suspended);
+        // audio captured while the engine loads is buffered and handed over once it is ready
+        let r = null, early = [], earlyLen = 0, live = false;
+        const fallback = async msg => {
+          if (!isLive() || engine !== 'quran' || finished || ending) return;
+          toast(msg);
+          engine = 'device'; aiState = 'idle';
+          const old = rec || r; rec = null; recCtl = null;
+          if (old) old.stop().catch(() => {});
+          if (qe) { try { qe.cancel(); } catch (e) {} } qe = null; activeEngine = null;
+          setListening(false);
+          support = await speechSupport();
+          if (isLive() && support !== 'none') toggleMic();
+        };
+        try {
+          r = await startRecorder({ onPcm: pcm => {
+            if (finished || aiState === 'paused') return;
+            if (live && qe) { qe.pcm(pcm); return; }
+            if (earlyLen < 16000 * 20) { early.push(new Float32Array(pcm)); earlyLen += pcm.length; }
+          }, onLevel: setLevel, onError: err => {
+            if (!isLive() || engine !== 'quran') return;
+            toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : 'تعذر تسجيل الصوت');
+            setListening(false); aiState = 'idle';
+          } });
+          if (!r) { starting = false; return; }        // onError already explained why
+          if (!isLive() || engine !== 'quran' || ending) { starting = false; r.stop().catch(() => {}); return; }
+          rec = r; recCtl = r; aiState = 'rec';
+          setListening(true);
+          qe = await openEngine();
+          if (!isLive() || engine !== 'quran' || ending) { starting = false; return; }
+          qe.start(s, from, to, {
+            onVerdicts: w => { if (isLive() && !finished) applyQuran(w); },
+            onIssue: i => { if (isLive() && !finished) onQuranIssue(i); },
+            onError: () => fallback('توقف المحرك القرآني — تحوّلنا إلى الفوري'),
+            onSlow: () => { if (isLive() && !finished) toast('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); }
+          });
+          activeEngine = qe;
+          for (const b of early) qe.pcm(b);
+          early = []; earlyLen = 0; live = true;
+          setStatus('أسمعك… اقرأ الآن');
+        } catch (e) {
+          starting = false;
+          await fallback('تعذّر تشغيل المحرك القرآني — سيُستخدم الفوري');
+          return;
+        }
+        starting = false;
+      }
+
       async function toggleAi() {
         if (finished || ending || starting) return;
         if (aiState === 'rec') { rec.pause(); aiState = 'paused'; listening = false; micEl.classList.remove('live'); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); setLevel(0); return; }
@@ -554,6 +692,14 @@ export default {
           await Promise.race([chain, new Promise(res => setTimeout(res, 8000))]);
           if (!isLive()) return;
           if (aiCtl) { try { aiCtl.abort(); } catch (e) {} aiCtl = null; }
+        } else if (engine === 'quran' && (rec || qe)) {
+          const r = rec; rec = null;
+          if (micEl) micEl.disabled = true;
+          setListening(false);
+          setStatus('جارٍ إكمال التحليل…');
+          if (r) { try { recBlob = await r.stop(); } catch (e) { /* ignore */ } recSecs = r.elapsed(); recCtl = null; }
+          if (!isLive()) return;
+          if (qe) { const w = await qe.stop(); activeEngine = null; if (!isLive()) return; if (w.length) applyQuran(w); }
         } else {
           stopListeningNow();
         }
@@ -563,7 +709,8 @@ export default {
       function finalize() {
         finished = true;
         if (pageEl) pageEl.classList.remove('rc-busy');
-        const pre = voiceLike ? tracker.apply(raw, { final: true }).states : hst.slice();
+        // the on-device engine's states are final as they are (engine corrections must not be locked away)
+        const pre = engine === 'quran' ? raw.slice() : voiceLike ? tracker.apply(raw, { final: true }).states : hst.slice();
         // words after the last one reached (session ended early) are not mistakes: they are only left out
         let reached = -1;
         pre.forEach((x, i) => { if (x !== 'pending' || forced.has(i)) reached = i; });
@@ -579,7 +726,17 @@ export default {
           const heard = voiceLike ? stripOpeners(lastFull, keepBasmala) : '';
           // hide mode: only words actually revealed (tapped / hinted) count as «كُشفت»
           const hinted = voiceLike ? forced : new Set(pre.map((x, i) => (x === 'bad' || forced.has(i) ? i : -1)).filter(i => i >= 0));
-          analysis = analyzeMistakes(flat.map(x => x.w), heard, st, hinted);
+          if (engine === 'quran') {
+            // the engine judged every word acoustically: use its verdicts and correction rules directly
+            const m = mapVerdicts(qVerdicts, groups);
+            analysis = { words: st.map((x, i) => {
+              if (forced.has(i)) return { i, kind: 'hint', heard: '' };
+              const iss = qIssues.get(i);
+              if (x === 'ok') return { i, kind: iss === 'vowel' || iss === 'repeat' ? iss : qVowel.has(i) ? 'vowel' : 'ok', heard: '' };
+              const v = m.get(i);
+              return { i, kind: iss && iss !== 'vowel' && iss !== 'repeat' ? iss : v && v.st === 'wrong' ? 'wrong' : 'skip', heard: '' };
+            }), extras: [] };
+          } else analysis = analyzeMistakes(flat.map(x => x.w), heard, st, hinted);
         } catch (e) { /* keep the simple verdict */ }
         analysis.words.forEach(x => { if (x.i > reached && x.kind !== 'ok') { x.kind = 'unreached'; x.heard = ''; } });
         analysis.extras = analysis.extras.filter(x => x.after < reached);
@@ -608,7 +765,7 @@ export default {
       }
 
       if (noVoice) { $('#rc-tohide', el).onclick = () => { cfg.mode = 'hide'; startSession(); }; }
-      if (micEl) micEl.onclick = () => (engine === 'ai' ? toggleAi() : toggleMic());
+      if (micEl) micEl.onclick = () => (engine === 'ai' ? toggleAi() : engine === 'quran' ? toggleQuran() : toggleMic());
       $('#rc-hint', el).onclick = hint;
       const okBtn = $('#rc-ok', el); if (okBtn) okBtn.onclick = markNextAyah;
       $('#rc-end', el).onclick = () => { finish(); };
@@ -684,7 +841,9 @@ export default {
         const stat = (n, t, cls) => `<div class="rc-stat ${cls}"><b>${N(n)}</b><span>${t}</span></div>`;
         html += `<div class="rc-stats">${hideMode
           ? stat(count('hint'), 'كلمات كُشفت', 'hint')
-          : stat(count('skip'), 'محذوفة', 'skip') + stat(count('wrong'), 'مبدّلة', 'wrong') + stat(count('hint'), 'تلقين', 'hint') + stat(analysis.extras.length, 'زيادة', 'extra')}</div>`;
+          : stat(count('skip'), 'محذوفة', 'skip') + stat(count('wrong'), 'مبدّلة', 'wrong') + stat(count('hint'), 'تلقين', 'hint')
+            + (count('vowel') ? stat(count('vowel'), 'حركات', 'vowel') : '') + (count('repeat') ? stat(count('repeat'), 'تكرار', 'extra') : '')
+            + (analysis.extras.length ? stat(analysis.extras.length, 'زيادة', 'extra') : '')}</div>`;
       }
       if (ayahStats.length > 1) {
         html += `<h2 class="section-title">خريطة الآيات</h2><div class="card"><div class="rc-amap">${ayahStats.map(x =>
@@ -711,6 +870,7 @@ export default {
           </div>`).join('')}`;
       }
       if (unreached) html += `<p class="muted small center mt">لم تصل إلى ${N(unreached)} كلمة في آخر المقطع، فلم تُحتسب في ملاحظاتك (لكنها تُنقص الدقة).</p>`;
+      if (!hideMode) html += '<p class="muted small center mt">الملاحظات آلية وقد تخطئ، ولا تغني عن التلقّي من معلّم متقن.</p>';
       if (analysis.extras.length) {
         html += `<div class="card"><b class="gold">كلمات زائدة لم ترد في النص</b><div class="row mt">${analysis.extras.slice(0, 12).map(x =>
           `<span class="chip">${esc(x.heard)}${x.after >= 0 ? ` <small class="muted">بعد «${esc(flat[x.after].w)}»</small>` : ''}</span>`).join('')}</div></div>`;

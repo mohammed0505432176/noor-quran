@@ -109,3 +109,9 @@
 .rc-mplay { margin-inline-start: auto; color: var(--gold); display: inline-flex; }
 .rc-plan { margin: 0; padding-inline-start: 1.2em; }
 .rc-plan li + li { margin-top: 6px; }
+
+/* on-device Quran engine download card */
+.rc-engcard { padding: 12px 14px; border-radius: 16px; background: var(--gold-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 35%, transparent); }
+.rc-engcard p { margin: 6px 0 10px; }
+.rc-stat.vowel b { color: var(--gold); }
+.rc-mrow.k-vowel, .rc-mrow.k-repeat { border-inline-start-color: var(--gold); }

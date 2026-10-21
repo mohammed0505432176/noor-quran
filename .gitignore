@@ -9,3 +9,5 @@ public/icon-512.png
 __pycache__/
 *.pyc
 .router/
+public/ort/
+public/models/

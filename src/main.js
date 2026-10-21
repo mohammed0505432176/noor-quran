@@ -95,12 +95,15 @@ function init() {
   applyTheme();
   loadQuran().catch(() => toast('تعذر تحميل نص المصحف'));
   route();
+  const openWidgetRoute = () => import('./core/widget.js').then(w => w.consumeWidgetRoute()).then(r => { if (r === 'prayer') go('prayer'); }).catch(() => {});
+  openWidgetRoute();
   // Native extras: status bar + reschedule prayer alerts on launch
   import('./core/platform.js').then(async ({ isNative }) => {
     if (!isNative()) return;
     try { const { StatusBar, Style } = await import('@capacitor/status-bar'); await StatusBar.setStyle({ style: Style.Dark }); await StatusBar.setBackgroundColor({ color: '#06120d' }); } catch (e) {}
     try {
       const { App } = await import('@capacitor/app');
+      App.addListener('resume', openWidgetRoute);
       App.addListener('backButton', ({ canGoBack }) => {
         const s = document.querySelector('.sheet-wrap.open');
         if (s && s.close) return s.close();
@@ -110,6 +113,7 @@ function init() {
     } catch (e) {}
   });
   import('./core/prayer.js').then(p => p.refreshSchedule && p.refreshSchedule()).catch(() => {});
+  import('./core/widget.js').then(w => w.updatePrayerWidget()).catch(() => {});
   import('./core/family.js').then(f => f.startFamilySync && f.startFamilySync()).catch(() => {});
   const sp = document.getElementById('splash');
   if (sp) setTimeout(() => { sp.classList.add('hide'); setTimeout(() => sp.remove(), 700); }, 1300);

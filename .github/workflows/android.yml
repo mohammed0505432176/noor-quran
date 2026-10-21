@@ -15,9 +15,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      VERSION: 1.5.${{ github.run_number }}
+      VERSION: 1.6.${{ github.run_number }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -80,6 +82,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # SECURITY: the bundled fallback key is public; set NOOR_KEYSTORE_B64 / NOOR_STORE_PASSWORD / NOOR_KEY_PASSWORD secrets, then delete this fallback (see SECURITY.md).
       - name: Decode keystore
         env:
           KS_B64: ${{ secrets.NOOR_KEYSTORE_B64 }}
@@ -95,7 +98,7 @@ jobs:
           NOOR_KEY_ALIAS: noor
           NOOR_KEY_PASSWORD: ${{ secrets.NOOR_KEY_PASSWORD || 'noorQuran2026' }}
           NOOR_VERSION_CODE: ${{ github.run_number }}
-          NOOR_VERSION_NAME: 1.5.${{ github.run_number }}
+          NOOR_VERSION_NAME: 1.6.${{ github.run_number }}
         run: |
           set -o pipefail
           chmod +x gradlew
@@ -112,25 +115,36 @@ jobs:
           name: Noor-Quran-apk
           path: Noor-Quran-${{ env.VERSION }}.apk
 
+      - name: Certificate fingerprint
+        run: |
+          BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          CERT_SHA256=$("$BT/apksigner" verify --print-certs "Noor-Quran-${VERSION}.apk" | grep -m1 'SHA-256 digest' | sed 's/.*: //')
+          if [ -z "$CERT_SHA256" ]; then echo "empty certificate fingerprint" >&2; exit 1; fi
+          echo "CERT_SHA256=$CERT_SHA256" >> "$GITHUB_ENV"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: v1.5.${{ github.run_number }}
-          name: نور 1.5.${{ github.run_number }}
+          tag_name: v1.6.${{ github.run_number }}
+          name: نور 1.6.${{ github.run_number }}
           make_latest: true
           files: Noor-Quran-${{ env.VERSION }}.apk
           body: |
-            ## تطبيق نور - الإصدار 1.5.${{ github.run_number }}
+            ## تطبيق نور - الإصدار 1.6.${{ github.run_number }}
 
             ### طريقة التثبيت على أندرويد
-            1. حمّل ملف APK من الأسفل (Noor-Quran-1.5.${{ github.run_number }}.apk).
+            1. حمّل ملف APK من الأسفل (Noor-Quran-1.6.${{ github.run_number }}.apk).
             2. افتح الملف، وإذا طلب الجهاز فاسمح بالتثبيت من مصادر غير معروفة لهذا المتصفح أو مدير الملفات.
             3. اضغط تثبيت ثم افتح التطبيق.
             ### إذا لم يتثبّت التطبيق
             - **«التطبيق غير مثبّت» أو «تعارض مع حزمة موجودة»**: احذف نسخة نور القديمة من الجهاز (خصوصاً إن ثبّتّها من مصدر آخر) ثم ثبّت من جديد.
             - **حماية Play (Play Protect) أوقفت التثبيت**: اضغط «مزيد من التفاصيل» ثم «التثبيت على أي حال».
-            - **لم يكتمل التنزيل**: حجم الملف الصحيح نحو ٦٫٧ ميغابايت؛ إن كان أصغر فأعد التنزيل عبر Chrome.
+            - **لم يكتمل التنزيل**: حجم الملف الصحيح هو المكتوب بجانبه في صفحة الإصدار (نحو ٢٠ ميغابايت)؛ إن كان أصغر فأعد التنزيل عبر Chrome.
             - **الجهاز قديم**: يتطلب أندرويد ٦ أو أحدث.
+
+            ### التحقق من أصالة التطبيق
+            بصمة شهادة التوقيع (SHA-256) للنسخ الرسمية:
+            `${{ env.CERT_SHA256 }}`
 
             للآيفون: افتح النسخة الويب في Safari ثم مشاركة ثم "إضافة إلى الشاشة الرئيسية".
 
@@ -139,9 +153,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -f "$RUNNER_TEMP/build.log" ]; then
-            { echo "فشل البناء في التشغيل رقم ${{ github.run_number }}."; echo; echo "آخر 150 سطر من سجل Gradle:"; echo '```'; grep -iE "error|failed|exception|what went wrong" "$RUNNER_TEMP/build.log" | head -40; echo "-----"; tail -n 120 "$RUNNER_TEMP/build.log"; echo '```'; echo; echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > "$RUNNER_TEMP/issue.md"
-          else
-            { echo "فشل البناء في التشغيل رقم ${{ github.run_number }} قبل الوصول إلى Gradle (لا يوجد سجل)."; echo; echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > "$RUNNER_TEMP/issue.md"
-          fi
+          { echo "فشل البناء في التشغيل رقم ${{ github.run_number }}."; echo; echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > "$RUNNER_TEMP/issue.md"
           gh issue create --repo "${{ github.repository }}" --title "Build failed #${{ github.run_number }}" --body-file "$RUNNER_TEMP/issue.md" || true

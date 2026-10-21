@@ -75,8 +75,8 @@ export default {
               <b id="g-val" style="font-size:1.6rem;min-width:3ch;text-align:center">${N(s.goal)}</b>
               <button class="icon-btn" id="g-plus" aria-label="زيادة">${icon('plus')}</button></div></div>
           <div class="field"><label for="s-font">حجم خط المصحف: <span id="f-val">${N(s.fontSize)}</span></label>
-            <input type="range" id="s-font" min="22" max="44" step="1" value="${s.fontSize}" style="width:100%">
-            <p class="quran center" id="f-prev" style="font-size:${s.fontSize}px;line-height:2">${PREVIEW}</p></div>
+            <input type="range" id="s-font" min="22" max="44" step="1" value="${esc(String(s.fontSize))}" style="width:100%">
+            <p class="quran center" id="f-prev" style="font-size:${esc(String(s.fontSize))}px;line-height:2">${PREVIEW}</p></div>
           <div class="field"><label for="s-rec">القارئ</label>
             <select class="select" id="s-rec">${reciters.map(r => `<option value="${esc(r.id)}"${r.id === s.reciter ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
           <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح']], s.theme)}</div></div>

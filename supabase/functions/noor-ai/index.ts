@@ -74,6 +74,7 @@ function userId(req: Request): string | null {
   try {
     const p = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=")));
     if (p?.role !== "authenticated" || typeof p?.sub !== "string") return null;
+    if (typeof p?.exp !== "number" || p.exp <= Date.now() / 1000) return null;
     return /^[0-9a-f-]{36}$/i.test(p.sub) ? p.sub : null;
   } catch { return null; }
 }
@@ -162,25 +163,120 @@ async function geminiCandidates(mode: "fast" | "smart" | "audio"): Promise<strin
   l = [...new Set(l)];
   return [...l.filter((m) => !cooling("gem:" + m)), ...l.filter((m) => cooling("gem:" + m))].slice(0, 4);
 }
-async function geminiGenerate(mode: "fast" | "smart" | "audio", payload: unknown, budgetMs: number) {
+// Thinking control: newest models think by default (30 s+ for a one-liner), so cap it per call.
+function withThinking(payload: any, m: string, mode: "fast" | "smart" | "audio", on: boolean) {
+  if (!on) return payload;
+  const deep = mode !== "fast";
+  const thinkingConfig = ver(m) >= 3 ? { thinkingLevel: deep ? "low" : "minimal" } : { thinkingBudget: deep ? 1024 : 0 };
+  const gc = { ...(payload?.generationConfig ?? {}), thinkingConfig };
+  // thinking tokens count against maxOutputTokens: leave room so short outputs (transcripts) are never cut off
+  if (deep && typeof gc.maxOutputTokens === "number") gc.maxOutputTokens += 2048;
+  return { ...payload, generationConfig: gc };
+}
+async function geminiGenerate(mode: "fast" | "smart" | "audio", payload: any, budgetMs: number) {
   if (!GEMINI_KEY) return null;
   const start = Date.now();
   for (const m of await geminiCandidates(mode)) {
-    const left = budgetMs - (Date.now() - start);
-    if (left < 3000) break;
-    try {
-      const r = await fetch(`${GEMINI_BASE}/models/${m}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(Math.min(left, mode === "audio" ? 90_000 : 40_000)),
-      });
-      if (!r.ok) { await r.body?.cancel(); coolFor("gem:" + m, r.status === 429 ? 60_000 : r.status === 404 ? 6 * 3600_000 : 20_000); continue; }
-      const d = await r.json();
-      const text = (d?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("").trim();
-      if (text) return { text, model: m };
-      coolFor("gem:" + m, 10_000);
-    } catch { coolFor("gem:" + m, 15_000); }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const left = budgetMs - (Date.now() - start);
+      if (left < 3000) return null;
+      try {
+        const r = await fetch(`${GEMINI_BASE}/models/${m}:generateContent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
+          body: JSON.stringify(withThinking(payload, m, mode, attempt === 0)),
+          signal: AbortSignal.timeout(Math.min(left, mode === "audio" ? 90_000 : 40_000)),
+        });
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          if (r.status === 400 && attempt === 0 && /thinking/i.test(t)) continue; // model rejects thinkingConfig: retry once without it
+          coolFor("gem:" + m, r.status === 429 ? 60_000 : r.status === 404 ? 6 * 3600_000 : 20_000); break;
+        }
+        const d = await r.json();
+        const text = (d?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("").trim();
+        if (text) return { text, model: m };
+        coolFor("gem:" + m, 10_000); break;
+      } catch { coolFor("gem:" + m, 15_000); break; }
+    }
+  }
+  return null;
+}
+
+// ---------- SSE helpers (streaming chat) ----------
+type St = { sent: boolean };
+async function readSse(body: ReadableStream<Uint8Array>, onData: (d: string) => void) {
+  const reader = body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop() ?? "";
+    for (const ln of lines) if (ln.startsWith("data:")) onData(ln.slice(5).trim());
+  }
+  if (buf.startsWith("data:")) onData(buf.slice(5).trim());
+}
+// Removes <think>...</think> from a chunked stream (tags may be split across chunks).
+function thinkFilter() {
+  let buf = "", inT = false;
+  return (chunk: string, flush = false): string => {
+    buf += chunk;
+    let out = "";
+    for (;;) {
+      if (inT) {
+        const i = buf.indexOf("</think>");
+        if (i < 0) { buf = buf.slice(-8); return out; }
+        buf = buf.slice(i + 8); inT = false;
+      } else {
+        const i = buf.indexOf("<think>");
+        if (i >= 0) { out += buf.slice(0, i); buf = buf.slice(i + 7); inT = true; continue; }
+        let keep = 0;
+        if (!flush) for (let k = Math.min(6, buf.length); k > 0; k--) if ("<think>".startsWith(buf.slice(-k))) { keep = k; break; }
+        out += buf.slice(0, buf.length - keep); buf = buf.slice(buf.length - keep);
+        return out;
+      }
+    }
+  };
+}
+// Abort guard: firstMs until the first delta, then a generous cap for the rest of the stream.
+function guard(firstMs: number) {
+  const ctl = new AbortController();
+  let t = setTimeout(() => ctl.abort(), firstMs);
+  return { signal: ctl.signal, first() { clearTimeout(t); t = setTimeout(() => ctl.abort(), 60_000); }, clear() { clearTimeout(t); } };
+}
+async function streamGemini(mode: "fast" | "smart", payload: any, budgetMs: number, st: St, emit: (t: string) => void) {
+  if (!GEMINI_KEY) return null;
+  const start = Date.now();
+  for (const m of await geminiCandidates(mode)) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const left = budgetMs - (Date.now() - start);
+      if (left < 3000) return null;
+      const g = guard(left);
+      try {
+        const r = await fetch(`${GEMINI_BASE}/models/${m}:streamGenerateContent?alt=sse`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
+          body: JSON.stringify(withThinking(payload, m, mode, attempt === 0)),
+          signal: g.signal,
+        });
+        if (!r.ok || !r.body) {
+          const t = await r.text().catch(() => "");
+          if (r.status === 400 && attempt === 0 && /thinking/i.test(t)) { g.clear(); continue; }
+          coolFor("gem:" + m, r.status === 429 ? 60_000 : r.status === 404 ? 6 * 3600_000 : 20_000); g.clear(); break;
+        }
+        await readSse(r.body, (data) => {
+          try {
+            const d = JSON.parse(data);
+            const t = (d?.candidates?.[0]?.content?.parts ?? []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("");
+            if (t) { if (!st.sent) g.first(); emit(t); }
+          } catch { /* ignore malformed line */ }
+        });
+        g.clear();
+        if (st.sent) return { model: m };
+        coolFor("gem:" + m, 10_000); break;
+      } catch { g.clear(); if (st.sent) return { model: m }; coolFor("gem:" + m, 15_000); break; }
+    }
   }
   return null;
 }
@@ -211,7 +307,7 @@ async function discover(tag: string, base: string, key: string, prefs: RegExp[],
 
 // ---------- OpenAI-compatible providers ----------
 type Msg = { role: string; content: string };
-async function compatChat(base: string, key: string, models: string[], messages: Msg[], extra: Record<string, string>, tag: string, budgetMs: number) {
+async function compatChat(base: string, key: string, models: string[], messages: Msg[], extra: Record<string, string>, tag: string, budgetMs: number, effort = false) {
   if (!key) return null;
   const start = Date.now();
   for (const model of models) {
@@ -222,7 +318,7 @@ async function compatChat(base: string, key: string, models: string[], messages:
       const r = await fetch(`${base}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...extra },
-        body: JSON.stringify({ model, messages, temperature: 0.4, max_tokens: 1800 }),
+        body: JSON.stringify({ model, messages, temperature: 0.4, max_tokens: 1800, ...(effort && /gpt-oss/i.test(model) ? { reasoning_effort: "low" } : {}) }),
         signal: AbortSignal.timeout(Math.min(left, 35_000)),
       });
       if (!r.ok) { await r.body?.cancel(); coolFor(tag + model, r.status === 429 ? 60_000 : r.status === 404 ? 6 * 3600_000 : 20_000); continue; }
@@ -230,6 +326,36 @@ async function compatChat(base: string, key: string, models: string[], messages:
       const text = String(d?.choices?.[0]?.message?.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
       if (text) return { text, model };
     } catch { coolFor(tag + model, 15_000); }
+  }
+  return null;
+}
+async function streamCompat(base: string, key: string, models: string[], messages: Msg[], extra: Record<string, string>, tag: string, budgetMs: number, effort: boolean, st: St, emit: (t: string) => void) {
+  if (!key) return null;
+  const start = Date.now();
+  for (const model of models) {
+    const left = budgetMs - (Date.now() - start);
+    if (left < 3000) break;
+    if (cooling(tag + model)) continue;
+    const g = guard(left);
+    try {
+      const r = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...extra },
+        body: JSON.stringify({ model, messages, temperature: 0.4, max_tokens: 1800, stream: true, ...(effort && /gpt-oss/i.test(model) ? { reasoning_effort: "low" } : {}) }),
+        signal: g.signal,
+      });
+      if (!r.ok || !r.body) { await r.body?.cancel(); coolFor(tag + model, r.status === 429 ? 60_000 : r.status === 404 ? 6 * 3600_000 : 20_000); g.clear(); continue; }
+      const filt = thinkFilter();
+      const push = (t: string) => { if (t) { if (!st.sent) g.first(); emit(t); } };
+      await readSse(r.body, (data) => {
+        if (data === "[DONE]") return;
+        try { push(filt(String(JSON.parse(data)?.choices?.[0]?.delta?.content ?? ""))); } catch { /* ignore malformed line */ }
+      });
+      push(filt("", true));
+      g.clear();
+      if (st.sent) return { model };
+      coolFor(tag + model, 10_000);
+    } catch { g.clear(); if (st.sent) return { model }; coolFor(tag + model, 15_000); }
   }
   return null;
 }
@@ -261,35 +387,82 @@ async function chat(body: any) {
   const system = NOOR_SYSTEM;
   const convo = messages.filter((m) => m.role !== "system");
   messages = [{ role: "system", content: NOOR_SYSTEM }, ...convo];
-  const g = await geminiGenerate(mode, {
+  const pb = mode === "smart" ? 30_000 : 15_000; // per-provider budget
+  const gpayload = {
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents: convo.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
     generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
-  }, 45_000);
-  if (g) return json(200, { text: g.text, provider: "gemini", model: g.model });
-  const chain: [string, string, string[], Record<string, string>, string, number][] = [
-    ["groq", GROQ_BASE, list("GROQ_CHAT_MODELS", ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3-32b"]), {}, GROQ_KEY, 30_000],
-    ["cerebras", CEREBRAS_BASE, list("CEREBRAS_CHAT_MODELS", ["gpt-oss-120b", "llama-3.3-70b", "qwen-3-32b"]), {}, CEREBRAS_KEY, 25_000],
-    ["nvidia", NVIDIA_BASE, env("NVIDIA_CHAT_MODELS") ? list("NVIDIA_CHAT_MODELS", []) : await discover("nvidia", NVIDIA_BASE, NVIDIA_KEY,
+  };
+  type Models = string[] | (() => Promise<string[]>);
+  const specs: [string, string, Models, Record<string, string>, string, boolean][] = [
+    ["groq", GROQ_BASE, list("GROQ_CHAT_MODELS", ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3-32b"]), {}, GROQ_KEY, true],
+    ["cerebras", CEREBRAS_BASE, list("CEREBRAS_CHAT_MODELS", ["gpt-oss-120b", "llama-3.3-70b", "qwen-3-32b"]), {}, CEREBRAS_KEY, true],
+    ["nvidia", NVIDIA_BASE, () => env("NVIDIA_CHAT_MODELS") ? Promise.resolve(list("NVIDIA_CHAT_MODELS", [])) : discover("nvidia", NVIDIA_BASE, NVIDIA_KEY,
       [/deepseek-v3/i, /qwen3/i, /kimi-k2/i, /llama-4-maverick|llama-3\.3-70b/i, /gemma-?4|gemma-3-27b/i],
-      ["deepseek-ai/deepseek-v3.1", "qwen/qwen3-235b-a22b", "meta/llama-3.3-70b-instruct"]), {}, NVIDIA_KEY, 30_000],
+      ["deepseek-ai/deepseek-v3.1", "qwen/qwen3-235b-a22b", "meta/llama-3.3-70b-instruct"]), {}, NVIDIA_KEY, true],
     ["openrouter", OPENROUTER_BASE, list("OPENROUTER_CHAT_MODELS", ["openai/gpt-oss-120b:free", "deepseek/deepseek-chat-v3.1:free", "meta-llama/llama-3.3-70b-instruct:free"]),
-      { "HTTP-Referer": "https://github.com/mohammed0505432176/noor-quran", "X-Title": "Noor Quran" }, OPENROUTER_KEY, 30_000],
-    ["mistral", MISTRAL_BASE, list("MISTRAL_CHAT_MODELS", ["mistral-medium-latest", "mistral-small-latest"]), {}, MISTRAL_KEY, 25_000],
-    ["cloudflare", CF_BASE + "/v1", list("CLOUDFLARE_CHAT_MODELS", ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-4-scout-17b-16e-instruct"]), {}, CF_KEY, 25_000],
-    ["cohere", COHERE_BASE, list("COHERE_CHAT_MODELS", ["command-a-03-2025", "command-r-plus-08-2024"]), {}, COHERE_KEY, 25_000],
+      { "HTTP-Referer": "https://github.com/mohammed0505432176/noor-quran", "X-Title": "Noor Quran" }, OPENROUTER_KEY, true],
+    ["mistral", MISTRAL_BASE, list("MISTRAL_CHAT_MODELS", ["mistral-medium-latest", "mistral-small-latest"]), {}, MISTRAL_KEY, true],
+    ["cloudflare", CF_BASE + "/v1", list("CLOUDFLARE_CHAT_MODELS", ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-4-scout-17b-16e-instruct"]), {}, CF_KEY, false],
+    ["cohere", COHERE_BASE, list("COHERE_CHAT_MODELS", ["command-a-03-2025", "command-r-plus-08-2024"]), {}, COHERE_KEY, false],
   ];
-  for (const [id, base, models, extra, key, budget] of chain) {
-    const r = await compatChat(base, key, models, messages, extra, id + ":", budget);
-    if (r) return json(200, { text: r.text, provider: id, model: r.model });
+  type Plain = { text: string; model: string } | null;
+  type Att = { id: string; plain: () => Promise<Plain>; stream: (st: St, emit: (t: string) => void) => Promise<{ model: string } | null> };
+  const one = (plain: () => Promise<Plain>) => async (_st: St, emit: (t: string) => void) => { const r = await plain(); if (!r) return null; emit(r.text); return { model: r.model }; };
+  const comp: Att[] = specs.map(([id, base, models, extra, key, canStream]) => {
+    const resolve = async () => (typeof models === "function" ? await models() : models);
+    const plain = async () => (key ? compatChat(base, key, await resolve(), messages, extra, id + ":", pb, id === "groq") : null);
+    return { id, plain, stream: canStream ? async (st, emit) => (key ? streamCompat(base, key, await resolve(), messages, extra, id + ":", pb, id === "groq", st, emit) : null) : one(plain) };
+  });
+  const gem: Att = { id: "gemini", plain: () => geminiGenerate(mode, gpayload, pb), stream: (st, emit) => streamGemini(mode, gpayload, pb, st, emit) };
+  const poll: Att = { id: "pollinations", plain: () => pollinations(messages), stream: one(() => pollinations(messages)) };
+  const order: Att[] = mode === "fast" ? [comp[0], gem, ...comp.slice(1), poll] : [gem, comp[0], ...comp.slice(1), poll];
+
+  if (body.stream === true) {
+    const enc = new TextEncoder();
+    const rs = new ReadableStream<Uint8Array>({
+      async start(ctl) {
+        const send = (o: unknown) => { try { ctl.enqueue(enc.encode(`data: ${typeof o === "string" ? o : JSON.stringify(o)}\n\n`)); } catch { /* client went away */ } };
+        const st: St = { sent: false };
+        // SSE comment keepalive until the first delta so the client's first-byte/inactivity timers stay alive
+        const ping = () => { try { ctl.enqueue(enc.encode(": ping\n\n")); } catch { /* client went away */ } };
+        let pinger: ReturnType<typeof setInterval> | null = null;
+        const stopPing = () => { if (pinger !== null) { clearInterval(pinger); pinger = null; } };
+        ping();
+        pinger = setInterval(ping, 8000);
+        const emit = (t: string) => { if (!t) return; stopPing(); st.sent = true; send({ choices: [{ delta: { content: t } }] }); };
+        try {
+          let ok = false;
+          for (const a of order) {
+            const r = await a.stream(st, emit);
+            if (r || st.sent) { send({ provider: a.id, model: r?.model ?? "" }); ok = true; break; }
+          }
+          if (!ok) send({ error: "no_provider" });
+        } catch (e) {
+          console.error("noor-ai chat stream", e);
+          if (!st.sent) send({ error: "no_provider" });
+        }
+        stopPing();
+        send("[DONE]");
+        try { ctl.close(); } catch { /* already closed */ }
+      },
+    });
+    return new Response(rs, { status: 200, headers: { ...CORS, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
   }
-  const p = await pollinations(messages);
-  if (p) return json(200, { text: p.text, provider: "pollinations", model: p.model });
+
+  for (const a of order) {
+    const r = await a.plain();
+    if (r) return json(200, { text: r.text, provider: a.id, model: r.model });
+  }
   return json(503, { error: "no_provider" });
 }
 
 // ---------- audio ----------
 const MAX_AUDIO_B64 = 12 * 1024 * 1024; // ~9 MB of audio
+// Arabic letters + Quranic marks (U+0600-06FF, 0750-077F, 08A0-08FF; includes the Arabic comma) + '.' + spaces only
+function arabicOnly(x: unknown, n: number): string {
+  return String(x ?? "").replace(/[^؀-ۿݐ-ݿࢠ-ࣿ. ]/g, "").replace(/\s+/g, " ").trim().slice(0, n);
+}
 function decodeAudio(body: any): { bytes: Uint8Array; mime: string } | null {
   const b64 = typeof body.audio === "string" ? body.audio : "";
   if (!b64 || b64.length > MAX_AUDIO_B64) return null;
@@ -309,7 +482,7 @@ async function transcribe(body: any) {
   const a = decodeAudio(body);
   if (!a) return json(400, { error: "bad_audio" });
   if (a.bytes.length < 1500) return json(200, { text: "", provider: "none" });
-  const prompt = String(body.prompt ?? "").slice(0, 600);
+  const prompt = arabicOnly(body.prompt, 600);
   if (QURAN_ASR_URL && !cooling("stt:quran")) {
     const form = new FormData();
     form.append("file", new Blob([a.bytes as BlobPart], { type: a.mime }), "chunk." + extFor(a.mime));
@@ -388,12 +561,11 @@ async function tajweed(body: any) {
   const a = decodeAudio(body);
   if (!a) return json(400, { error: "bad_audio" });
   if (!GEMINI_KEY) return json(503, { error: "no_provider" });
-  const ref = String(body.text ?? "").slice(0, 6000);
-  // client-detected mistakes: Arabic letters/marks only (no room for injected instructions), known kinds only
-  const clip = (x: unknown, n: number) => String(x ?? "").replace(/[^؀-ۿݐ-ݿࢠ-ࣿ ]/g, "").replace(/\s+/g, " ").trim().slice(0, n);
-  const KIND_AR: Record<string, string> = { skip: "محذوفة", wrong: "مبدّلة", hint: "احتاج تلقيناً" };
+  // reference text and client-detected mistakes: Arabic letters/marks only (no room for injected instructions), known kinds only
+  const ref = arabicOnly(body.text, 6000);
+  const KIND_AR: Record<string, string> = { skip: "محذوفة", wrong: "مبدّلة", hint: "احتاج تلقيناً", vowel: "خطأ في الحركة", repeat: "تكرار" };
   const detected = (Array.isArray(body.detected) ? body.detected : []).slice(0, 40)
-    .map((m: any) => ({ word: clip(m?.word, 40), kind: String(m?.kind ?? ""), heard: clip(m?.heard, 40) }))
+    .map((m: any) => ({ word: arabicOnly(m?.word, 40), kind: String(m?.kind ?? ""), heard: arabicOnly(m?.heard, 40) }))
     .filter((m: any) => m.word && Object.hasOwn(KIND_AR, m.kind));
   const detectedTxt = detected.length
     ? "\nأخطاء الحفظ التي رصدها المطابق الآلي (تحقق منها بالاستماع ولا تكررها إن لم تسمعها):\n" +
@@ -533,8 +705,27 @@ Deno.serve(async (req) => {
   if (!uid) return json(401, { error: "unauthorized" });
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > MAX_AUDIO_B64 + 64 * 1024) return json(413, { error: "too_large" });
+  // bounded read: Content-Length can be absent/forged (chunked), so cap the stream itself
+  const limit = MAX_AUDIO_B64 + 64 * 1024;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  if (req.body) {
+    const reader = req.body.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > limit) { try { await reader.cancel(); } catch { /* ignore */ } return json(413, { error: "too_large" }); }
+        chunks.push(value);
+      }
+    } catch { return json(400, { error: "bad_json" }); }
+  }
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.length; }
   let body: any;
-  try { body = await req.json(); } catch { return json(400, { error: "bad_json" }); }
+  try { body = JSON.parse(new TextDecoder().decode(buf)); } catch { return json(400, { error: "bad_json" }); }
   const action = String(body?.action ?? "");
   if (!(action in DAILY)) return json(400, { error: "unknown_action" });
   if (burst(uid, action)) return json(429, { error: "rate_limited", retry: 60 });

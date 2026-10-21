@@ -32,8 +32,9 @@ export function recorderSupported() {
 
 const wavBlob = bytes => new Blob([bytes], { type: 'audio/wav' });
 
-/** vad (optional): { minSpeechMs, silenceMs, maxMs } overrides for chunk cutting (lower = lower latency). */
-export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLevel = () => {}, onError = () => {}, vad = null } = {}) {
+/** vad (optional): { minSpeechMs, silenceMs, maxMs } overrides for chunk cutting (lower = lower latency).
+ *  onPcm (optional): receives every block of continuous 16 kHz mono Float32 PCM (no gaps, no VAD) for streaming engines. */
+export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLevel = () => {}, onError = () => {}, vad = null, onPcm = null } = {}) {
   // chunkMs is kept for API compatibility; chunk boundaries now follow pauses in speech.
   void chunkMs;
   if (!recorderSupported()) { onError('unsupported'); return null; }
@@ -94,6 +95,7 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
     }
     const pcm = ds.push(input);
     if (!pcm.length) return;
+    if (onPcm) { try { onPcm(pcm); } catch (e) { /* consumer error must not break recording */ } }
     if (fullLen < FULL_CAP_SECONDS * TARGET_RATE) {
       const p = floatToPcm16(pcm);
       full.push(p); fullLen += p.length;

@@ -1,7 +1,7 @@
 // Patches the generated android/ project (after `npx cap add android` + `npx cap sync android`).
 // Idempotent: safe to run many times. Node builtins only.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { dirname, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,6 +32,34 @@ function read(file) {
     missing.forEach((n) => log('manifest: added permission ' + n));
   }
   if (!xml.includes('android:label="@string/app_name"')) fail('anchor android:label="@string/app_name" not found in manifest');
+  if (xml.includes('android:allowBackup="true"')) {
+    xml = xml.replace('android:allowBackup="true"', 'android:allowBackup="false"');
+    log('manifest: set allowBackup=false');
+  }
+  // home-screen prayer times widget (receiver class: scripts/android/PrayerWidget.java)
+  if (!xml.includes('android:name=".PrayerWidget"')) {
+    if (!xml.includes('</application>')) fail('anchor </application> not found in AndroidManifest.xml');
+    const receiver = `<receiver
+            android:name=".PrayerWidget"
+            android:exported="true"
+            android:label="مواقيت الصلاة">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/noor_widget_info" />
+        </receiver>
+    `;
+    xml = xml.replace(/([ \t]*)<\/application>/, (m, ind) => ind + '    ' + receiver + m.trimStart());
+    log('manifest: added PrayerWidget receiver');
+  }
   writeFileSync(file, xml);
 }
 
@@ -110,32 +138,72 @@ function read(file) {
   else log('ic_stat_noor.xml unchanged');
 }
 
-// ---------- native continuous speech plugin (NoorSpeech) ----------
+// ---------- native plugins (NoorSpeech, NoorWidget) + prayer widget ----------
 {
   const dir = p('app/src/main/java/app/noor/quran');
   const main = resolve(dir, 'MainActivity.java');
-  const src = read(resolve(root, 'scripts/android/NoorSpeechPlugin.java'));
-  const dst = resolve(dir, 'NoorSpeechPlugin.java');
-  if (!existsSync(dst) || readFileSync(dst, 'utf8') !== src) { writeFileSync(dst, src); log('wrote NoorSpeechPlugin.java'); }
+  for (const name of ['NoorSpeechPlugin.java', 'NoorWidgetPlugin.java', 'PrayerWidget.java']) {
+    const src = read(resolve(root, 'scripts/android', name));
+    const dst = resolve(dir, name);
+    if (!existsSync(dst) || readFileSync(dst, 'utf8') !== src) { writeFileSync(dst, src); log('wrote ' + name); }
+  }
   const act = read(main);
-  if (!act.includes('registerPlugin(NoorSpeechPlugin.class)')) {
+  const plugins = ['NoorSpeechPlugin', 'NoorWidgetPlugin'];
+  if (!plugins.every((c) => act.includes('registerPlugin(' + c + '.class)')) || !act.includes('onNewIntent')) {
     if (!/class MainActivity extends BridgeActivity/.test(act)) fail('MainActivity anchor not found');
-    if (/onCreate\s*\(/.test(act)) fail('MainActivity already has onCreate; add registerPlugin manually');
+    // an onCreate we did not write (no NoorSpeech registration) means a hand-edited activity: do not clobber it
+    if (/onCreate\s*\(/.test(act) && !act.includes('registerPlugin(NoorSpeechPlugin.class)')) fail('MainActivity already has a custom onCreate; add registerPlugin calls manually');
     writeFileSync(main, `package app.noor.quran;
 
+import android.content.Intent;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(NoorSpeechPlugin.class);
+${plugins.map((c) => '        registerPlugin(' + c + '.class);').join('\n')}
         super.onCreate(savedInstanceState);
+        saveRoute(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        saveRoute(intent);
+    }
+
+    private static void saveRoute(Intent intent) {
+        if (intent == null) return;
+        String r = intent.getStringExtra("route");
+        if ("prayer".equals(r)) NoorWidgetPlugin.pendingRoute = r;
     }
 }
 `);
-    log('MainActivity: registered NoorSpeechPlugin');
+    log('MainActivity: registered ' + plugins.join(', '));
   }
+}
+
+// ---------- widget resources (scripts/android/res/** -> app/src/main/res/**) ----------
+{
+  const srcRoot = resolve(root, 'scripts/android/res');
+  if (!existsSync(srcRoot)) fail('missing directory: ' + srcRoot);
+  const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(resolve(d, e.name)) : [resolve(d, e.name)]);
+  const files = walk(srcRoot);
+  if (!files.length) fail('no resources found in ' + srcRoot);
+  let n = 0;
+  for (const src of files) {
+    const rel = relative(srcRoot, src);
+    const dst = p('app/src/main/res', rel);
+    const buf = readFileSync(src);
+    if (existsSync(dst) && readFileSync(dst).equals(buf)) continue;
+    mkdirSync(dirname(dst), { recursive: true });
+    writeFileSync(dst, buf);
+    log('wrote res/' + rel.split(sep).join('/'));
+    n++;
+  }
+  if (!n) log('widget resources unchanged');
 }
 
 log('done');

@@ -3,6 +3,7 @@
 // CONTRACT:
 //   status({force}) -> { ok, providers:{gemini,groq,cerebras,openrouter,mistral,pollinations}, stt, sttEngine, tajweed, limits } | null (offline/unreachable)
 //   cloudChat(messages, { mode:'fast'|'smart', signal }) -> { text, provider, model }      (throws CloudError)
+//   cloudChatStream(messages, { mode, signal, onDelta(fullTextSoFar) }) -> { text, provider, model }   (SSE; throws CloudError)
 //   transcribe(blob|base64, { mime, prompt, signal, fast })   -> { text, provider, model }      (throws CloudError)
 //   tajweedReview(blob, { s, from, to, text, signal, detected[] })  -> { score, summary, mistakes[], tajweed[], advice[], plan[], provider }
 //   CloudError has .code: 'offline' | 'auth' | 'rate_limited' | 'daily_limit' | 'no_provider' | 'bad_audio' | 'server' | 'timeout' | 'aborted'
@@ -115,6 +116,94 @@ export async function cloudStatus(opts) {
 
 export function cloudChat(messages, { mode = 'fast', signal } = {}) {
   return call('chat', { messages, mode }, { signal, timeout: 60000 });
+}
+
+/** Streaming chat (SSE). onDelta(fullTextSoFar) fires as tokens arrive. First byte within 20 s, whole answer within 90 s. */
+export async function cloudChatStream(messages, { mode = 'fast', signal, onDelta } = {}, retried = false) {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new CloudError('offline');
+  const ctl = new AbortController();
+  let first = setTimeout(() => ctl.abort('timeout'), 20000);
+  let idle = null; // inactivity timer (30 s), armed on the first received chunk of any kind (pings included)
+  const total = setTimeout(() => ctl.abort('timeout'), 90000);
+  const onAbort = () => ctl.abort('aborted');
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+  const abortErr = () => new CloudError(ctl.signal.reason === 'aborted' ? 'aborted' : 'timeout');
+  try {
+    let token;
+    try {
+      token = await Promise.race([
+        ensureSession(),
+        new Promise((_, rej) => ctl.signal.addEventListener('abort', () => rej(abortErr()), { once: true }))
+      ]);
+    } catch (e) { throw e instanceof CloudError ? e : new CloudError('offline'); }
+    let r;
+    try {
+      r = await fetch(FN_URL, {
+        method: 'POST', signal: ctl.signal,
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json', apikey: ANON_KEY, Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ action: 'chat', messages, mode, stream: true })
+      });
+    } catch (e) {
+      if (ctl.signal.aborted) throw abortErr();
+      throw new CloudError('offline');
+    }
+    if (r.status === 401 && !retried) {
+      await ensureSession(true).catch(() => {});
+      return cloudChatStream(messages, { mode, signal, onDelta }, true);
+    }
+    if (!r.ok) {
+      let d = null; try { d = await r.json(); } catch (e) {}
+      const code = d && d.error;
+      throw new CloudError(r.status === 429 ? (code === 'daily_limit' ? 'daily_limit' : 'rate_limited')
+        : code === 'no_provider' ? 'no_provider' : (r.status === 401 ? 'auth' : 'server'));
+    }
+    const type = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
+    if (!/event-stream/i.test(type) || !r.body || !r.body.getReader) {
+      // old backend (plain JSON): behave like cloudChat
+      let d = null; try { d = await r.json(); } catch (e) {}
+      const t = d && typeof d.text === 'string' ? d.text : '';
+      if (!t) throw new CloudError('server');
+      if (onDelta) onDelta(t);
+      return { text: t, provider: d.provider, model: d.model };
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', text = '', provider, model, err = null, gotByte = false, done = false;
+    const line = ln => {
+      if (!ln.startsWith('data:')) return; // also skips ':' comment lines (keepalive pings)
+      const data = ln.slice(5).trim();
+      if (!data) return;
+      if (data === '[DONE]') { done = true; return; }
+      let j; try { j = JSON.parse(data); } catch (e) { return; }
+      if (j.error) { err = j.error; return; }
+      if (j.provider) { provider = j.provider; model = j.model; return; }
+      const c = j.choices && j.choices[0];
+      const t = c && c.delta && c.delta.content;
+      if (t) { text += t; if (onDelta) onDelta(text); }
+    };
+    try {
+      while (!done) {
+        const { done: end, value } = await reader.read();
+        if (!gotByte) { gotByte = true; clearTimeout(first); }
+        if (end) break;
+        clearTimeout(idle); idle = setTimeout(() => ctl.abort('timeout'), 30000);
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split(/\r?\n/);
+        buf = lines.pop();
+        for (const ln of lines) line(ln.trim());
+      }
+      if (buf) line(buf.trim());
+    } catch (e) {
+      if (!text) { if (ctl.signal.aborted) throw abortErr(); throw new CloudError('offline'); }
+      // connection dropped after some text arrived: keep what we have
+    }
+    if (!text.trim()) throw new CloudError(err === 'no_provider' || !err ? 'no_provider' : 'server');
+    return { text, provider, model };
+  } finally {
+    clearTimeout(first); clearTimeout(idle); clearTimeout(total);
+    if (signal) signal.removeEventListener('abort', onAbort);
+    try { ctl.abort('done'); } catch (e) {}
+  }
 }
 
 /** Blob → base64 (no data: prefix). */

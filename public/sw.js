@@ -10,7 +10,7 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== AUDIO).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== AUDIO && k !== 'noor-models-v1').map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -41,6 +41,7 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.origin !== location.origin) return;
+  if (url.pathname.includes('/models/') || url.pathname.includes('/ort/')) return;
   if (req.mode === 'navigate') {
     e.respondWith(
       fetch(req).then(res => {

@@ -2,6 +2,7 @@ import { esc, $, $$, toast, icon, header, N } from '../ui.js';
 import { S, updateSettings } from '../core/store.js';
 import { isNative } from '../core/platform.js';
 import { PRAYERS, METHODS, timesFor, nextPrayer, formatTime, currentConfig, ensureLocation, refreshSchedule } from '../core/prayer.js';
+import { updatePrayerWidget } from '../core/widget.js';
 
 const pad = n => String(n).padStart(2, '0');
 const hijri = d => new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { day: 'numeric', month: 'long', year: 'numeric' }).format(d);
@@ -50,8 +51,13 @@ export default {
           <div class="field mt"><label>المذهب (العصر)</label><div class="seg" id="pd"><button data-v="shafi" class="${p.madhab !== 'hanafi' ? 'active' : ''}">شافعي/جمهور</button><button data-v="hanafi" class="${p.madhab === 'hanafi' ? 'active' : ''}">حنفي</button></div></div>
           <div class="row mt"><button class="btn ghost" id="loc">${icon('compass', 18)} تحديث موقعي</button><button class="btn ghost" id="tst">${icon('bell', 18)} تجربة التنبيه</button></div>
           ${web ? '<p class="muted small mt">للتنبيه حتى والتطبيق مغلق ثبّت نسخة الأندرويد</p>' : ''}
-        </div>`;
+        </div>
+        ${web ? '' : `<div class="card mt">
+          <div class="section-title">ويدجت الشاشة الرئيسية</div>
+          <p class="muted small">أضف ويدجت مواقيت الصلاة إلى الشاشة الرئيسية: اضغط مطولاً على الشاشة ← الأدوات (Widgets) ← نور</p>
+        </div>`}`;
       wire();
+      updatePrayerWidget(); // keep the home-screen widget in sync with the times shown here
       tick();
     }
 
@@ -65,6 +71,7 @@ export default {
     }
 
     async function resched(msg) {
+      updatePrayerWidget();
       const r = await refreshSchedule();
       if (!msg) return;
       if (!S.settings.prayer.notify) return toast('تم الحفظ. تنبيهات الأذان متوقفة حالياً');

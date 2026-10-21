@@ -1,6 +1,6 @@
 // AI assistant core: OpenAI-compatible chat (streaming), tafsir fetch, ayah explanation, hifz plan.
 import { S } from './store.js';
-import { cloudChat } from './cloud.js';
+import { cloudChat, cloudChatStream } from './cloud.js';
 import { loadQuran, ayah as ayahText, surahName } from './quran.js';
 
 // Verified 2026-10-21 against https://github.com/pollinations/pollinations/blob/master/APIDOCS.md :
@@ -45,11 +45,23 @@ export async function chat(messages, { signal, onDelta, mode = 'fast' } = {}) {
   const ai = (S.settings && S.settings.ai) || {};
   const provider = ai.provider || 'auto';
   if (provider === 'auto') {
+    const msgs = [{ role: 'system', content: SYSTEM }, ...messages];
+    const label = r => CLOUD_NAMES[String((r && r.provider) || '').toLowerCase()] || (r && r.provider) || 'السحابة';
     try {
-      const r = await cloudChat([{ role: 'system', content: SYSTEM }, ...messages], { signal, mode });
+      const r = await cloudChatStream(msgs, { signal, mode, onDelta });
       const text = ((r && r.text) || '').trim();
       if (!text) throw new Error('empty');
-      lastLabel = CLOUD_NAMES[String(r.provider || '').toLowerCase()] || r.provider || 'السحابة';
+      lastLabel = label(r);
+      return text;
+    } catch (e) {
+      if (signal && signal.aborted) throw abortErr();
+      /* streaming failed: try the plain JSON endpoint, then the free one */
+    }
+    try {
+      const r = await cloudChat(msgs, { signal, mode });
+      const text = ((r && r.text) || '').trim();
+      if (!text) throw new Error('empty');
+      lastLabel = label(r);
       if (onDelta) onDelta(text);
       return text;
     } catch (e) {

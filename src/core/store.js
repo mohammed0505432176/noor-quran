@@ -148,13 +148,14 @@ export function addRecitation({ s, from, to, acc, miss = [] }) {
 
 // ---- per-word mistake history ----
 const WM_MAX = 5000;
-/** items: [{ a, w, kind }] kind 'ok' | 'skip' | 'wrong' | 'hint'. Saves once. */
+const MISTAKE_KINDS = ['skip', 'wrong', 'hint', 'vowel', 'repeat'];
+/** items: [{ a, w, kind }] kind 'ok' | 'skip' | 'wrong' | 'hint' | 'vowel' | 'repeat'. Saves once. */
 export function recordWords(s, items) {
   const wm = (S.wm ||= {});
   for (const it of items || []) {
     const key = s + ':' + it.a + ':' + it.w;
     if (it.kind === 'ok') { const e = wm[key]; if (e) e.ok = Math.min(99, e.ok + 1); continue; }
-    if (it.kind !== 'skip' && it.kind !== 'wrong' && it.kind !== 'hint') continue;
+    if (!MISTAKE_KINDS.includes(it.kind)) continue;
     const e = wm[key] || (wm[key] = { n: 0, k: '', d: '', ok: 0 });
     e.n = Math.min(9999, e.n + 1); e.k = it.kind; e.d = today(); e.ok = 0;
   }
@@ -279,13 +280,19 @@ export function importData(json) {
       const [ks, ka, kw] = key.split(':').map(Number);
       if (ks < 1 || ks > 114 || ka < 1 || ka > 286 || kw < 1 || kw > 200) continue;
       count++;
-      wm[key] ={ n: Math.min(9999, int(e.n)), k: ['skip', 'wrong', 'hint'].includes(e.k) ? e.k : 'wrong', d: String(e.d || '').slice(0, 10), ok: Math.min(99, int(e.ok)) };
+      wm[key] ={ n: Math.min(9999, int(e.n)), k: MISTAKE_KINDS.includes(e.k) ? e.k : 'wrong', d: String(e.d || '').slice(0, 10), ok: Math.min(99, int(e.ok)) };
     }
   }
   d.wm = wm;
   // an imported file must not redirect the AI to another server: keep this device's AI settings
   const keepAi = S.settings && S.settings.ai ? JSON.parse(JSON.stringify(S.settings.ai)) : null;
   if (d.settings && typeof d.settings === 'object') delete d.settings.ai;
+  if (d.settings && typeof d.settings === 'object') {
+    d.settings.fontSize = Math.min(52, Math.max(18, int(d.settings.fontSize) || 30));
+    d.settings.goal = Math.min(1000, Math.max(1, int(d.settings.goal) || 10));
+    d.settings.theme = ['auto', 'dark', 'light'].includes(d.settings.theme) ? d.settings.theme : 'dark';
+    if (!(typeof d.settings.reciter === 'string' && /^[\w.-]{1,60}$/.test(d.settings.reciter))) delete d.settings.reciter;
+  }
   Object.keys(S).forEach(k => delete S[k]); Object.assign(S, deepMerge(DEFAULTS(), d));
   if (keepAi) S.settings.ai = keepAi;
   save();
