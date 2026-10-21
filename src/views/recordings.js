@@ -2,6 +2,7 @@
 import { esc, $, $$, toast, icon, header, N, sheet } from '../ui.js';
 import { loadQuran, surahName } from '../core/quran.js';
 import { playRange, stop as stopReciter } from '../core/audio.js';
+import { isNative } from '../core/platform.js';
 import * as recordings from '../core/recordings.js';
 
 const accColor = a => (a >= 90 ? 'var(--ok)' : a >= 70 ? 'var(--gold)' : 'var(--bad)');
@@ -14,6 +15,10 @@ function dayLabel(t) {
 }
 const dur = ms => { const s = Math.max(0, Math.round((ms || 0) / 1000)); return `${N(Math.floor(s / 60))}:${N(String(s % 60).padStart(2, '0'))}`; };
 const mb = b => N((b / 1048576).toFixed(1));
+function canShare() {
+  if (isNative()) return false;
+  try { const f = new File([new Blob(['x'])], 'a.webm', { type: 'audio/webm' }); return !!(navigator.canShare && navigator.canShare({ files: [f] })); } catch (e) { return false; }
+}
 const ext = type => (/mp4|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : /wav/.test(type) ? 'wav' : 'webm');
 
 export default {
@@ -51,7 +56,7 @@ export default {
               <div class="row mt">
                 <button class="btn ghost sm" data-act="cmp">${icon('play', 16)} قارن بالقارئ</button>
                 <button class="btn ghost sm" data-go="recite/${r.s}?from=${r.from}&to=${r.to}">${icon('repeat', 16)} سمّع مرة أخرى</button>
-                <button class="btn ghost sm" data-act="share">مشاركة</button>
+                ${canShare() ? '<button class="btn ghost sm" data-act="share">مشاركة</button>' : isNative() ? '' : '<button class="btn ghost sm" data-act="dl">تنزيل</button>'}
                 <button class="btn danger sm" data-act="del">حذف</button>
               </div></div>` : ''}
           </div>`;
@@ -94,15 +99,16 @@ export default {
         if (mineAudio) { try { mineAudio.pause(); } catch (e) {} }
         try { playRange(rec.s, rec.from, rec.to); } catch (e) { toast('تعذر تشغيل التلاوة'); }
       };
-      box.querySelector('[data-act=share]').onclick = () => share(rec);
+      const sb = box.querySelector('[data-act=share]'); if (sb) sb.onclick = () => share(rec);
+      const db = box.querySelector('[data-act=dl]'); if (db) db.onclick = () => share(rec, true);
       box.querySelector('[data-act=del]').onclick = () => confirmDelete(rec);
     }
 
-    async function share(rec) {
+    async function share(rec, downloadOnly) {
       const full = await recordings.get(rec.id);
       if (!full || !full.blob) { toast('تعذر قراءة التسجيل'); return; }
       const name = `تلاوة-${surahName(rec.s)}-${rec.from}-${rec.to}.${ext(full.blob.type)}`;
-      try {
+      if (!downloadOnly) try {
         const file = new File([full.blob], name, { type: full.blob.type || 'audio/webm' });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
           await navigator.share({ files: [file], title: 'تلاوتي' });

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 globalThis.sessionStorage = { getItem: () => null, setItem() {} };
 const { S, dateKey } = await import('../src/core/store.js');
-const { buildStats } = await import('../src/core/family.js');
+const { buildStats, cacheFrom } = await import('../src/core/family.js');
 
 test('buildStats aggregates store state', () => {
   S.days[dateKey(0)] = { a: 5, r: 1, z: 0 };
@@ -24,4 +24,14 @@ test('buildStats aggregates store state', () => {
   assert.equal(s.level, 'مداوم');
   assert.equal(s.khatma, 0);
   assert.equal(s.streak, 1);
+});
+
+test('cacheFrom accepts flat and nested responses', () => {
+  const flat = cacheFrom({ ok: true, code: 'ABC234', name: 'عائلة', owner: true }, 'أحمد');
+  assert.deepEqual(flat, { code: 'ABC234', name: 'عائلة', member: 'أحمد', owner: true });
+  const nested = cacheFrom({ family: { code: 'XYZ567', name: 'ن', owner: false } }, 'سارة');
+  assert.equal(nested.code, 'XYZ567');
+  assert.equal(nested.owner, false);
+  assert.equal(cacheFrom({ ok: true }, 'x'), null);
+  assert.equal(cacheFrom(null, 'x'), null);
 });

@@ -76,14 +76,16 @@ export default {
 
         <div class="card mt"><div class="section-title">الذكاء الاصطناعي</div>
           <div id="ai-card" style="margin-bottom:.8rem"><p class="muted small">جارٍ فحص الخدمات…</p></div>
-          <div class="row"><button class="btn sm ghost" id="ai-refresh">تحديث الحالة</button><button class="btn sm ghost" id="ai-add">إضافة مزود جديد</button></div>
+          <div class="row"><button class="btn sm ghost" id="ai-refresh">تحديث الحالة</button></div>
           <div class="field mt"><label>المزوّد</label>${seg('s-prov', [['auto', 'تلقائي (خادم نور)'], ['free', 'مجاني بديل'], ['custom', 'مخصص']], ai.provider)}</div>
           ${ai.provider === 'custom' ? `
             <div class="field"><label for="ai-url">Base URL</label><input class="input" id="ai-url" dir="ltr" placeholder="https://example.com/v1" value="${esc(ai.baseUrl)}"></div>
             <div class="field"><label for="ai-key">API Key</label><input class="input" id="ai-key" type="password" dir="ltr" autocomplete="off" value="${esc(ai.apiKey)}"></div>
             <div class="field"><label for="ai-model">النموذج</label><input class="input" id="ai-model" dir="ltr" placeholder="gpt-4o-mini" value="${esc(ai.model)}"></div>
             <p class="muted small">يدعم أي خدمة متوافقة مع OpenAI مثل OmniRoute و FreeLLMAPI و OpenRouter</p>` : ''}
-          <button class="btn ghost block mt" id="ai-test">اختبار الاتصال</button></div>
+          <button class="btn ghost block mt" id="ai-test">اختبار الاتصال</button>
+          <details class="mt"><summary class="muted small" style="cursor:pointer">للمطوّر</summary>
+            <button class="btn sm ghost mt" id="ai-add">إضافة مزود جديد</button></details></div>
 
         <div class="card mt"><div class="section-title">البيانات</div>
           <div class="row"><button class="btn sm" id="d-exp">تصدير نسخة احتياطية</button>

@@ -22,13 +22,16 @@ const now = () => Math.floor(Date.now() / 1000);
 function loadSession() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch (e) { return null; } }
 function saveSession(s) { try { s ? localStorage.setItem(AUTH_KEY, JSON.stringify(s)) : localStorage.removeItem(AUTH_KEY); } catch (e) {} }
 
-async function authCall(path, body, signal) {
-  const r = await fetch(SUPABASE_URL + '/auth/v1/' + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY },
-    body: JSON.stringify(body), signal
-  });
-  if (!r.ok) throw new CloudError('auth');
+async function authCall(path, body) {
+  let r;
+  try {
+    r = await fetch(SUPABASE_URL + '/auth/v1/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY },
+      body: JSON.stringify(body), signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined
+    });
+  } catch (e) { throw new CloudError('offline'); }
+  if (!r.ok) { const e = new CloudError('auth'); e.status = r.status; throw e; }
   const d = await r.json();
   if (!d.access_token) throw new CloudError('auth');
   return { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: d.expires_at || (now() + (d.expires_in || 3600)) };
@@ -44,7 +47,11 @@ export async function ensureSession(force = false) {
     try {
       if (s && s.refresh_token) {
         try { const n = await authCall('token?grant_type=refresh_token', { refresh_token: s.refresh_token }); saveSession(n); return n.access_token; }
-        catch (e) { /* refresh token expired/revoked → new anonymous account */ }
+        catch (e) {
+          // Only a definitive rejection of the refresh token justifies a new identity (which would
+          // drop family membership). Network errors / 5xx / 429 → keep the old session, report error.
+          if (!(e.status === 400 || e.status === 401 || e.status === 403)) throw e;
+        }
       }
       const n = await authCall('signup', { data: {} });
       saveSession(n); return n.access_token;
@@ -61,7 +68,13 @@ async function call(action, payload = {}, { signal, timeout = 45000 } = {}, retr
   if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   try {
     let token;
-    try { token = await ensureSession(); } catch (e) { throw e instanceof CloudError ? e : new CloudError('offline'); }
+    try {
+      token = await Promise.race([
+        ensureSession(),
+        new Promise((_, rej) => ctl.signal.addEventListener('abort', () =>
+          rej(new CloudError(ctl.signal.reason === 'aborted' ? 'aborted' : 'timeout')), { once: true }))
+      ]);
+    } catch (e) { throw e instanceof CloudError ? e : new CloudError('offline'); }
     let r;
     try {
       r = await fetch(FN_URL, {
@@ -77,8 +90,9 @@ async function call(action, payload = {}, { signal, timeout = 45000 } = {}, retr
     let d = null; try { d = await r.json(); } catch (e) {}
     if (!r.ok) {
       const code = d && d.error;
+      const MAP = { no_provider: 'no_provider', bad_audio: 'bad_audio', not_found: 'not_found', bad_code: 'not_found', family_full: 'family_full', bad_name: 'bad_name' };
       throw new CloudError(r.status === 429 ? (code === 'daily_limit' ? 'daily_limit' : 'rate_limited')
-        : code === 'no_provider' ? 'no_provider' : code === 'bad_audio' ? 'bad_audio' : r.status === 401 ? 'auth' : 'server');
+        : MAP[code] || (r.status === 401 ? 'auth' : 'server'));
     }
     return d;
   } finally {
@@ -132,7 +146,10 @@ export const ERROR_TEXT = {
   bad_audio: 'التسجيل غير صالح أو طويل جداً',
   server: 'حدث خطأ في الخادم، حاول مرة أخرى',
   timeout: 'انتهت مهلة الاتصال، تحقق من الإنترنت',
-  aborted: 'أُلغي الطلب'
+  aborted: 'أُلغي الطلب',
+  not_found: 'رمز الدائرة غير صحيح',
+  family_full: 'الدائرة ممتلئة (٣٠ عضواً)',
+  bad_name: 'أدخل اسماً صالحاً'
 };
 export const errText = e => ERROR_TEXT[e && e.code] || 'تعذّر الاتصال، تحقق من الإنترنت';
 

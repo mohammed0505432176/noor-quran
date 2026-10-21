@@ -62,6 +62,16 @@ function userId(req: Request): string | null {
   } catch { return null; }
 }
 
+// ---------- server-owned assistant persona (client "system" messages are ignored) ----------
+const NOOR_SYSTEM = `أنت "نور"، رفيق لطيف لتعلّم القرآن الكريم لعائلة عربية، داخل تطبيق نور للقرآن.
+أجب بالعربية الفصحى الواضحة وبفقرات قصيرة.
+في معاني الآيات اعتمد على التفاسير المعتبرة (الميسر، ابن كثير، السعدي) واذكر أيّها اعتمدت؛ وإذا وُجد مقتطف تفسير في الرسالة فابنِ إجابتك عليه.
+لا تختلق آيات ولا أحاديث أبداً. عند الاستشهاد بالقرآن انقل فقط النص الوارد في المحادثة، وإلا فأشر إلى الآية برقمها (سورة:آية).
+لا تُصدر فتاوى في المسائل الفقهية الخلافية؛ اعرض الأقوال الرئيسة باختصار وانصح بسؤال عالم ثقة.
+ساعد في خطط الحفظ وأساسيات التجويد والتحفيز والتدبر.
+اقتصر على ما يتصل بالقرآن وعلومه والعبادة والتحفيز على الطاعة؛ إن طُلب منك شيء بعيد عن ذلك فاعتذر بلطف ووجّه الحديث إلى القرآن.
+حافظ على نبرة محترمة ودافئة.`;
+
 // ---------- usage accounting ----------
 async function bump(uid: string, action: string, cost = 1): Promise<number> {
   try {
@@ -75,6 +85,17 @@ async function bump(uid: string, action: string, cost = 1): Promise<number> {
     return Number(await r.json()) || 0;
   } catch { return 0; } // never block the user because accounting failed
 }
+// Per-network (IP) and global daily ceilings, so creating many anonymous accounts can't drain the free quotas.
+const IP_DAILY: Record<string, number> = { chat: 600, transcribe: 9000, tajweed: 120, status: 1500, family: 1500 };
+const GLOBAL_DAILY: Record<string, number> = { chat: 4000, transcribe: 60000, tajweed: 600, status: 20000, family: 20000 };
+const GLOBAL_ID = "00000000-0000-0000-0000-000000000000";
+async function ipId(req: Request): Promise<string> {
+  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("noor-ip:" + ip))).slice(0, 16);
+  h[6] = (h[6] & 0x0f) | 0x50; h[8] = (h[8] & 0x3f) | 0x80; // uuid-shaped
+  const x = Array.from(h, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+}
 // short-window burst limiter (per instance) on top of the daily cap
 const hits = new Map<string, number[]>();
 function burst(uid: string, action: string): boolean {
@@ -82,7 +103,7 @@ function burst(uid: string, action: string): boolean {
   const k = uid + "|" + action, now = Date.now();
   const arr = (hits.get(k) ?? []).filter((t) => now - t < win);
   arr.push(now); hits.set(k, arr);
-  if (hits.size > 5000) hits.clear();
+  if (hits.size > 5000) { let n = 0; for (const key of hits.keys()) { hits.delete(key); if (++n >= 1000) break; } } // evict oldest, never wipe all
   return arr.length > max;
 }
 
@@ -185,11 +206,12 @@ function sanitizeMessages(raw: unknown): Msg[] {
 }
 
 async function chat(body: any) {
-  const messages = sanitizeMessages(body.messages);
+  let messages = sanitizeMessages(body.messages);
   if (!messages.some((m) => m.role === "user")) return json(400, { error: "bad_request" });
   const mode = body.mode === "smart" ? "smart" : "fast";
-  const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
+  const system = NOOR_SYSTEM;
   const convo = messages.filter((m) => m.role !== "system");
+  messages = [{ role: "system", content: NOOR_SYSTEM }, ...convo];
   const g = await geminiGenerate(mode, {
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents: convo.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
@@ -366,7 +388,15 @@ async function family(uid: string, body: any) {
     return json(200, { ok: true, code: fam.code, name: fam.name, owner: fam.owner === uid });
   }
   if (op === "leave") {
+    const me = await myMembership(uid);
     await rest(`noor_members?uid=eq.${uid}`, { method: "DELETE" });
+    if (me) {
+      const fam = me.noor_families;
+      const left = await rest(`noor_members?family_id=eq.${fam.id}&select=uid&order=joined_at.asc&limit=1`);
+      const next = Array.isArray(left.data) ? left.data[0] : null;
+      if (!next) await rest(`noor_families?id=eq.${fam.id}`, { method: "DELETE" });
+      else if (fam.owner === uid) await rest(`noor_families?id=eq.${fam.id}`, { method: "PATCH", prefer: "return=minimal", body: JSON.stringify({ owner: next.uid }) });
+    }
     return json(200, { ok: true });
   }
   if (op === "sync") {
@@ -397,8 +427,9 @@ Deno.serve(async (req) => {
   const action = String(body?.action ?? "");
   if (!(action in DAILY)) return json(400, { error: "unknown_action" });
   if (burst(uid, action)) return json(429, { error: "rate_limited", retry: 60 });
-  const used = await bump(uid, action);
-  if (used > DAILY[action]) return json(429, { error: "daily_limit", limit: DAILY[action] });
+  const [used, ipUsed, allUsed] = await Promise.all([bump(uid, action), ipId(req).then((id) => bump(id, "ip:" + action)), bump(GLOBAL_ID, "all:" + action)]);
+  if (used > DAILY[action] || ipUsed > IP_DAILY[action]) return json(429, { error: "daily_limit", limit: DAILY[action] });
+  if (allUsed > GLOBAL_DAILY[action]) return json(429, { error: "rate_limited", retry: 3600 });
   if (Math.random() < 0.002) {
     fetch(`${SUPABASE_URL}/rest/v1/rpc/noor_usage_gc`, { method: "POST", headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" }, body: "{}" })
       .then((r) => r.body?.cancel()).catch(() => {});

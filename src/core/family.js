@@ -29,8 +29,9 @@ export function getFamily() {
 function setFamily(f) {
   try { f ? localStorage.setItem(KEY, JSON.stringify(f)) : localStorage.removeItem(KEY); } catch (e) {}
 }
-function cacheFrom(res, member) {
-  const f = res && res.family;
+/** Accepts both flat ({code,name,owner}) and nested ({family:{...}}) responses. */
+export function cacheFrom(res, member) {
+  const f = res && (res.family || (res.code ? res : null));
   if (!f || !f.code) return null;
   const c = { code: f.code, name: f.name || '', member, owner: !!f.owner };
   setFamily(c); markSynced(); return c;
@@ -43,25 +44,37 @@ export async function createFamily(name, member) {
   const res = await familyOp('create', { name: String(name).trim(), member: String(member).trim(), stats: buildStats() });
   const c = cacheFrom(res, String(member).trim());
   if (!c) throw new Error('bad response');
+  boardCache = null;
   return c;
 }
 export async function joinFamily(code, member) {
   const res = await familyOp('join', { code: String(code).trim().toUpperCase(), member: String(member).trim(), stats: buildStats() });
   const c = cacheFrom(res, String(member).trim());
   if (!c) throw new Error('bad response');
+  boardCache = null;
   return c;
 }
 export async function leaveFamily() {
   await familyOp('leave');
-  setFamily(null); lastHash = ''; lastAt = 0;
+  setFamily(null); lastHash = ''; lastAt = 0; boardCache = null;
 }
 /** Returns { family, members } (members sorted as received). Refreshes the local cache. */
-export async function board() {
-  const res = await familyOp('board');
-  if (!res || !res.family) { setFamily(null); return { family: null, members: [] }; }
+let boardCache = null; // { at, code, data }
+const BOARD_TTL = 60_000;
+export async function board({ force = false } = {}) {
+  const startCode = (getFamily() || {}).code || null;
+  if (!force && boardCache && boardCache.code === startCode && Date.now() - boardCache.at < BOARD_TTL) return boardCache.data;
+  const res = await familyOp('board'); // throws on error: local cache untouched
   const cur = getFamily();
-  if (cur) setFamily({ ...cur, name: res.family.name || cur.name, owner: !!res.family.owner });
-  return { family: res.family, members: Array.isArray(res.members) ? res.members : [] };
+  if (!res || !res.family) {
+    // only wipe when the membership did not change while the call was in flight
+    if ((cur ? cur.code : null) === startCode) { setFamily(null); boardCache = null; }
+    return { family: null, members: [] };
+  }
+  if (cur && cur.code === startCode) setFamily({ ...cur, name: res.family.name || cur.name, owner: !!res.family.owner });
+  const data = { family: res.family, members: Array.isArray(res.members) ? res.members : [] };
+  boardCache = { at: Date.now(), code: startCode, data };
+  return data;
 }
 /** Push current stats now. Throws CloudError on failure. */
 export async function syncNow() {
@@ -70,14 +83,17 @@ export async function syncNow() {
   markSynced(); return true;
 }
 
-let started = false; let timer = null;
+let started = false; let timer = null; let syncing = false;
 async function maybeSync() {
   timer = null;
   if (!getFamily()) return;
   if (JSON.stringify(buildStats()) === lastHash) return;
   if (Date.now() - lastAt < MIN_GAP) { schedule(MIN_GAP - (Date.now() - lastAt)); return; }
-  lastAt = Date.now(); // throttle failures too
-  try { await syncNow(); } catch (e) { /* offline: stay silent */ }
+  if (syncing) return;
+  syncing = true;
+  try { await syncNow(); }
+  catch (e) { lastAt = 0; schedule(MIN_GAP); /* offline: retry after the minimum gap */ }
+  finally { syncing = false; }
 }
 function schedule(ms) { if (!timer) timer = setTimeout(maybeSync, ms); }
 

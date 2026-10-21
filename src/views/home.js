@@ -137,7 +137,7 @@ export default {
       try {
         const fm = await import('../core/family.js');
         if (!fm.getFamily()) return;
-        const r = await fm.board();
+        const r = await fm.board(); // cached (60 s)
         if (!alive || !r.family || !r.members.length) return;
         const w = m => Number(m.stats && m.stats.week) || 0;
         const sorted = [...r.members].sort((a, b) => w(b) - w(a));

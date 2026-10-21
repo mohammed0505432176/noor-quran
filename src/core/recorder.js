@@ -124,6 +124,7 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
     if (actx.state === 'suspended') {
       await Promise.race([actx.resume().catch(() => {}), new Promise(res => setTimeout(res, 1500))]);
     }
+    if (!actx || actx.state !== 'running') throw new Error('audio context not running');
   } catch (e) {
     releaseAll();
     onError('error');

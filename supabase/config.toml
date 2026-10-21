@@ -1,0 +1,5 @@
+project_id = "xdrrrquzxoinqwknfrgt"
+
+# noor-ai MUST verify JWTs: the function trusts the verified `sub` claim for per-user quotas.
+[functions.noor-ai]
+verify_jwt = true

@@ -15,6 +15,8 @@ const TABS = [
 ];
 const MEDALS = ['🥇', '🥈', '🥉'];
 
+const FAM_ERR = { not_found: 'رمز الدائرة غير صحيح', family_full: 'الدائرة مكتملة العدد', bad_name: 'الاسم غير صالح، تأكد من الاسم وحاول مجدداً' };
+const famErr = e => FAM_ERR[e && e.code] || errText(e);
 const num = x => Math.max(0, +x || 0);
 function stats(m) { const s = (m && m.stats) || {}; return { week: num(s.week), today: num(s.today), streak: num(s.streak), acc: num(s.acc), rec: num(s.rec), pts: num(s.pts), level: String(s.level || ''), total: num(s.total) }; }
 
@@ -108,14 +110,20 @@ export default {
         <div class="card mt"><div class="section-title">الانضمام بالرمز</div>
           <div class="field"><label for="j-code">رمز الدائرة (٦ خانات)</label><input class="input fam-input-code" id="j-code" maxlength="6" autocapitalize="characters" autocomplete="off" placeholder="XXXXXX" dir="ltr"></div>
           <div class="field mt"><label for="j-me">اسمك</label><input class="input" id="j-me" maxlength="30" value="${nm}" placeholder="اسمك أمام العائلة"></div>
+          <div class="muted small mt" id="j-hint" aria-live="polite"></div>
           <div class="muted small mt" id="j-err" role="alert"></div>
           <button class="btn block ghost mt" id="j-ok">انضمام</button></div>`;
       const code = el.querySelector('#j-code');
-      code.oninput = () => { code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+      const hint = el.querySelector('#j-hint');
+      code.oninput = () => {
+        const up = code.value.toUpperCase();
+        code.value = up.replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, '');
+        hint.textContent = /[IO01]/.test(up) ? 'الرمز لا يحتوي على الأحرف I أو O ولا الرقمين 0 و1' : '';
+      };
       const run = async (btn, errEl, fn, label) => {
         errEl.textContent = ''; btn.disabled = true; btn.textContent = 'جارٍ الاتصال…';
         try { await fn(); if (!alive) return; startFamilySync(); toast('أهلاً بك في الدائرة'); draw(); }
-        catch (e) { if (!alive) return; errEl.textContent = (e && e.code) ? errText(e) : 'تعذّر إتمام الطلب، تحقق من الرمز وحاول مجدداً'; errEl.style.color = 'var(--bad)'; btn.disabled = false; btn.textContent = label; }
+        catch (e) { if (!alive) return; errEl.textContent = (e && e.code) ? famErr(e) : 'تعذّر إتمام الطلب، تحقق من الرمز وحاول مجدداً'; errEl.style.color = 'var(--bad)'; btn.disabled = false; btn.textContent = label; }
       };
       el.querySelector('#c-ok').onclick = e => {
         const n = el.querySelector('#c-fam').value.trim(), me = el.querySelector('#c-me').value.trim();
@@ -152,7 +160,7 @@ export default {
       if (ref) ref.classList.add('fam-spin');
       try {
         await syncNow().catch(() => {});
-        const r = await board();
+        const r = await board({ force: true });
         if (!alive) return;
         if (!r.family) { toast('لم تعد عضواً في هذه الدائرة'); draw(); return; }
         members = r.members; drawBody();

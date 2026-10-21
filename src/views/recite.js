@@ -16,6 +16,7 @@ const MODES = ['ai', 'device', 'hide'];
 const DISPLAYS = ['hidden', 'first', 'full'];
 const MAX_REVIEW_SECS = 240;
 
+const MISTAKE_KIND = { missing: 'نقص', wrong: 'خطأ', extra: 'زيادة', harakah: 'حركة' };
 function loadMode() { try { const m = localStorage.getItem(MODE_KEY); return MODES.includes(m) ? m : null; } catch (e) { return null; } }
 function saveMode(m) { try { localStorage.setItem(MODE_KEY, m); } catch (e) { /* ignore */ } }
 
@@ -331,13 +332,14 @@ export default {
 
       function applyChunk(res) {
         if (!res.ok) {
-          if (res.e && res.e.name === 'AbortError') return;
+          if (finished || ending) return;
+          if (res.e && (res.e.name === 'AbortError' || res.e.code === 'aborted')) return;
           if (++fails >= 2) { toast('تعذّر التحليل بالذكاء — سيُستخدم التعرف على الجهاز'); switchToDevice(true); }
           return;
         }
         fails = 0;
         const t = String(res.text || '').trim();
-        if (!t || finished) return;
+        if (!t || finished || ending) return;
         aiText = joinT(aiText, t);
         lastFull = aiText;
         mres = matcher.update(stripOpeners(aiText, keepBasmala));
@@ -493,7 +495,7 @@ export default {
           <p class="muted small">تقييم استرشادي ولا يغيّر نسبة الدقة المسجلة</p>
         </div>
         ${mistakes.length ? `<h2 class="section-title">أخطاء في التلاوة</h2><div class="card">${mistakes.map(m => `
-          <div class="mb"><span class="chip quran">${esc(m && m.word)}</span> ${m && m.type ? `<b class="gold small">${esc(m.type)}</b>` : ''}${m && m.note ? `<div class="muted small">${esc(m.note)}</div>` : ''}</div>`).join('')}</div>` : ''}
+          <div class="mb"><span class="chip quran">${esc(m && m.word)}</span> ${m && m.kind ? `<b class="gold small">${esc(MISTAKE_KIND[m.kind] || m.kind)}</b>` : ''}${m && m.note ? `<div class="muted small">${esc(m.note)}</div>` : ''}</div>`).join('')}</div>` : ''}
         ${groupsMap.size ? `<h2 class="section-title">ملاحظات التجويد</h2>${[...groupsMap].map(([rule, items]) => `
           <div class="card"><b class="gold">${esc(rule)}</b>${items.map(x => `
             <div class="mt" style="border-inline-start:3px solid ${sevColor(x.severity)};padding-inline-start:10px"><span class="quran">${esc(x.word)}</span>${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ''}</div>`).join('')}</div>`).join('')}` : ''}

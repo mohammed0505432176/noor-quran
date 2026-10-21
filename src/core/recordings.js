@@ -49,9 +49,14 @@ export const save = ({ blob, s, from, to, acc, tajweedScore = null, durationMs =
   if (!blob || !blob.size) return null;
   const id = newId();
   const rec = { id, at: Date.now(), s, from, to, acc, tajweedScore, durationMs, size: blob.size, type: blob.type || '', blob };
-  const tx = db.transaction(STORE, 'readwrite');
-  tx.objectStore(STORE).put(rec);
-  await done(tx);
+  const put = async () => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(rec); await done(tx); };
+  try { await put(); }
+  catch (e) {
+    // quota or other put failure: evict the oldest 5 and retry once
+    const rows = (await all(db)).slice(-5);
+    if (rows.length) { const tx = db.transaction(STORE, 'readwrite'); rows.forEach(r => tx.objectStore(STORE).delete(r.id)); await done(tx); }
+    await put();
+  }
   await evict(db).catch(() => {});
   return id;
 }, null);
