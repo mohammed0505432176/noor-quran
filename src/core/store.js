@@ -12,7 +12,7 @@ const DEFAULTS = () => ({
     reciter: 'Alafasy_128kbps',  // everyayah.com folder id
     fontSize: 30,                // mushaf font size px
     theme: 'dark',               // 'auto' | 'dark' | 'light'
-    ai: { provider: 'free', baseUrl: '', apiKey: '', model: '' }, // 'free' | 'custom' (OpenAI-compatible, e.g. OmniRoute)
+    ai: { provider: 'auto', chosen: false, baseUrl: '', apiKey: '', model: '' }, // 'auto' (family backend) | 'free' | 'custom' (OpenAI-compatible, e.g. OmniRoute)
     prayer: { method: 'UmmAlQura', madhab: 'shafi', notify: true, preAlert: 10, lat: null, lng: null, city: '' }
   },
   pts: 0,
@@ -43,6 +43,8 @@ function deepMerge(base, over) {
 }
 
 export const S = load();
+// Migration: old default 'free' (never explicitly chosen) becomes 'auto'.
+if (S.settings && S.settings.ai && S.settings.ai.provider === 'free' && !S.settings.ai.chosen) S.settings.ai.provider = 'auto';
 
 export function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* storage full or blocked */ }

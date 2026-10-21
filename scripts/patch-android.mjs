@@ -18,7 +18,7 @@ function read(file) {
 {
   const file = p('app/src/main/AndroidManifest.xml');
   let xml = read(file);
-  const perms = ['INTERNET', 'RECORD_AUDIO', 'POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM',
+  const perms = ['INTERNET', 'RECORD_AUDIO', 'MODIFY_AUDIO_SETTINGS', 'POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM',
     'RECEIVE_BOOT_COMPLETED', 'VIBRATE', 'WAKE_LOCK', 'ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION'];
   if (!xml.includes('</manifest>')) fail('anchor </manifest> not found in AndroidManifest.xml');
   const missing = perms.filter((n) => !xml.includes('android:name="android.permission.' + n + '"'));

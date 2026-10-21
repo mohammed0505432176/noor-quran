@@ -29,11 +29,12 @@ const ROUTES = {
   stats: () => import('./views/stats.js'),         // reports + achievements
   azkar: () => import('./views/azkar.js'),
   tasbeeh: () => import('./views/tasbeeh.js'),
+  train: () => import('./views/train.js'),          // memorization drills
   more: () => import('./views/more.js'),
   settings: () => import('./views/settings.js')
 };
 const TABS = [['home', 'home', 'الرئيسية'], ['mushaf', 'book', 'المصحف'], ['recite', 'mic', 'التسميع'], ['prayer', 'mosque', 'الصلاة'], ['more', 'grid', 'المزيد']];
-const TAB_OF = { search: 'mushaf', review: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', tasbeeh: 'more', settings: 'more' };
+const TAB_OF = { search: 'mushaf', train: 'recite', review: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', tasbeeh: 'more', settings: 'more' };
 
 const main = document.getElementById('app');
 const nav = document.getElementById('tabs');

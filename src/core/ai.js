@@ -1,5 +1,6 @@
 // AI assistant core: OpenAI-compatible chat (streaming), tafsir fetch, ayah explanation, hifz plan.
 import { S } from './store.js';
+import { cloudChat } from './cloud.js';
 import { loadQuran, ayah as ayahText, surahName } from './quran.js';
 
 // Verified 2026-10-21 against https://github.com/pollinations/pollinations/blob/master/APIDOCS.md :
@@ -25,15 +26,44 @@ function providerConfig() {
     return {
       url: `${ai.baseUrl.replace(/\/$/, '')}/chat/completions`,
       model: ai.model || 'gpt-4o-mini',
-      headers: ai.apiKey ? { Authorization: `Bearer ${ai.apiKey}` } : {}
+      headers: ai.apiKey ? { Authorization: `Bearer ${ai.apiKey}` } : {},
+      custom: true
     };
   }
   return { url: FREE_URL, model: FREE_MODEL, headers: {} };
 }
 
-/** Send chat. Returns final assistant text. onDelta(textSoFar) is called while streaming. */
-export async function chat(messages, { signal, onDelta } = {}) {
+const CLOUD_NAMES = { gemini: 'Gemini', groq: 'Groq', openrouter: 'OpenRouter' };
+let lastLabel = '';
+/** Short Arabic/Latin label of who answered the last chat() call. */
+export function lastProvider() { return lastLabel; }
+
+function abortErr() { const err = new Error('aborted'); err.name = 'AbortError'; return err; }
+
+/** Send chat. Returns final assistant text. onDelta(textSoFar) is called while streaming (once with full text in auto mode). */
+export async function chat(messages, { signal, onDelta, mode = 'fast' } = {}) {
+  const ai = (S.settings && S.settings.ai) || {};
+  const provider = ai.provider || 'auto';
+  if (provider === 'auto') {
+    try {
+      const r = await cloudChat([{ role: 'system', content: SYSTEM }, ...messages], { signal, mode });
+      const text = ((r && r.text) || '').trim();
+      if (!text) throw new Error('empty');
+      lastLabel = CLOUD_NAMES[String(r.provider || '').toLowerCase()] || r.provider || 'السحابة';
+      if (onDelta) onDelta(text);
+      return text;
+    } catch (e) {
+      if (signal && signal.aborted) throw abortErr();
+      /* backend failed: fall through to the free endpoint */
+    }
+  }
   const cfg = providerConfig();
+  const text = await directChat(cfg, messages, { signal, onDelta });
+  lastLabel = cfg.custom ? 'مخصص' : 'المجاني';
+  return text;
+}
+
+async function directChat(cfg, messages, { signal, onDelta } = {}) {
   const ctrl = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, TIMEOUT_MS);
@@ -60,7 +90,7 @@ export async function chat(messages, { signal, onDelta } = {}) {
     if (!text) throw new Error('empty');
     return text;
   } catch (e) {
-    if (signal && signal.aborted && !timedOut) { const err = new Error('aborted'); err.name = 'AbortError'; throw err; }
+    if (signal && signal.aborted && !timedOut) throw abortErr();
     throw new Error(ERR_MSG);
   } finally {
     clearTimeout(timer);
@@ -151,7 +181,7 @@ export async function explainAyah(s, a, opts = {}) {
     + (tf ? `مقتطف من التفسير الميسر:\n${tf}\n\n` : '')
     + 'اشرح لي: ١) معنى الآية ٢) أبرز الفوائد ٣) كلمات غريبة ومعانيها.'
     + (tf ? ' ابنِ إجابتك على التفسير المذكور واذكر أنه التفسير الميسر.' : ' اذكر التفسير الذي تعتمد عليه.');
-  return chat([{ role: 'user', content: msg }], opts);
+  return chat([{ role: 'user', content: msg }], { mode: 'smart', ...opts });
 }
 
 export async function hifzPlan({ pagesPerDay = 1, daysPerWeek = 5, startSurah = 78, goal = '' } = {}, opts = {}) {
@@ -162,5 +192,5 @@ export async function hifzPlan({ pagesPerDay = 1, daysPerWeek = 5, startSurah = 
     + `- عدد الصفحات يومياً: ${pagesPerDay}\n- أيام الحفظ في الأسبوع: ${daysPerWeek}\n`
     + `- نقطة البداية: سورة ${name || startSurah}\n- الهدف: ${goal || 'حفظ متقن مع مراجعة'}\n\n`
     + 'قسّم الخطة إلى أيام الأسبوع (حفظ جديد، مراجعة قريبة، مراجعة بعيدة)، واجعلها واقعية ومختصرة، واختم بنصيحتين للثبات.';
-  return chat([{ role: 'user', content: msg }], opts);
+  return chat([{ role: 'user', content: msg }], { mode: 'smart', ...opts });
 }

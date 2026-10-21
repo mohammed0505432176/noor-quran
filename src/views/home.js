@@ -77,7 +77,7 @@ export default {
         <button class="btn sm ghost" data-go="ai?s=${ad.s}&a=${ad.a}">${icon('spark', 18)} تفسير بالذكاء</button>
       </div></div>` : '';
 
-    const quick = [['recite', 'mic', 'التسميع'], ['ai', 'spark', 'المساعد الذكي'], ['azkar', 'hands', 'الأذكار'], ['tasbeeh', 'beads', 'المسبحة']]
+    const quick = [['recite', 'mic', 'التسميع'], ['ai', 'spark', 'المساعد الذكي'], ['azkar', 'hands', 'الأذكار'], ['train', 'trophy', 'مركز التدريب']]
       .map(([r, ic, t]) => `<button class="card tight center" data-go="${r}" style="cursor:pointer"><span class="gold">${icon(ic, 26)}</span><div class="small mt">${t}</div></button>`).join('');
 
     el.innerHTML = `

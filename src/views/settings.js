@@ -31,7 +31,8 @@ export default {
           <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح']], s.theme)}</div></div>
 
         <div class="card mt"><div class="section-title">الذكاء الاصطناعي</div>
-          <div class="field"><label>المزوّد</label>${seg('s-prov', [['free', 'مجاني'], ['custom', 'مخصص']], ai.provider)}</div>
+          <div class="field"><label>المزوّد</label>${seg('s-prov', [['auto', 'تلقائي (موصى به)'], ['free', 'مجاني بديل'], ['custom', 'مخصص']], ai.provider)}</div>
+          ${ai.provider === 'auto' ? '<p class="muted small" id="ai-status">جارٍ فحص الاتصال…</p>' : ''}
           ${ai.provider === 'custom' ? `
             <div class="field"><label for="ai-url">Base URL</label><input class="input" id="ai-url" dir="ltr" placeholder="https://example.com/v1" value="${esc(ai.baseUrl)}"></div>
             <div class="field"><label for="ai-key">API Key</label><input class="input" id="ai-key" type="password" dir="ltr" autocomplete="off" value="${esc(ai.apiKey)}"></div>
@@ -69,17 +70,25 @@ export default {
       };
       q('#s-prov').onclick = e => {
         const b = e.target.closest('[data-v]'); if (!b || b.dataset.v === S.settings.ai.provider) return;
-        updateSettings({ ai: { provider: b.dataset.v } }); draw();
+        updateSettings({ ai: { provider: b.dataset.v, chosen: true } }); draw();
       };
       const bindAi = (id, key) => { const i = q(id); if (i) i.oninput = () => updateSettings({ ai: { [key]: i.value.trim() } }); };
       bindAi('#ai-url', 'baseUrl'); bindAi('#ai-key', 'apiKey'); bindAi('#ai-model', 'model');
+      const st = q('#ai-status');
+      if (st) import('../core/cloud.js').then(({ cloudStatus }) => cloudStatus()).then(r => {
+        if (!st.isConnected) return;
+        if (!r || !r.ok) { st.textContent = 'الخادم غير متاح الآن، سيُستخدم البديل المجاني'; return; }
+        const p = r.providers || {};
+        const on = [p.gemini && 'Gemini ✓', p.groq && 'Groq ✓', p.openrouter && 'OpenRouter ✓', r.tajweed && 'التسميع الدقيق ✓'].filter(Boolean);
+        st.textContent = 'متصل' + (on.length ? ': ' + on.join(' · ') : '');
+      }).catch(() => { if (st.isConnected) st.textContent = 'الخادم غير متاح الآن، سيُستخدم البديل المجاني'; });
       q('#ai-test').onclick = async e => {
         const btn = e.currentTarget; btn.disabled = true; toast('جارٍ اختبار الاتصال...');
         try {
-          const { chat } = await import('../core/ai.js');
+          const { chat, lastProvider } = await import('../core/ai.js');
           const r = await chat([{ role: 'user', content: 'قل: السلام عليكم' }]);
           const txt = typeof r === 'string' ? r : (r && (r.text || r.content)) || '';
-          toast('نجح الاتصال: ' + String(txt).slice(0, 60));
+          toast('نجح الاتصال عبر ' + lastProvider() + ': ' + String(txt).slice(0, 50));
         } catch (err) {
           toast('تعذر الاتصال: ' + String((err && err.message) || 'خطأ غير معروف').slice(0, 80), 4000);
         } finally { btn.disabled = false; }

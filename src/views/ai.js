@@ -2,11 +2,12 @@
 import { esc, $, header, icon, toast, N } from '../ui.js';
 import { S, streak, dayStat } from '../core/store.js';
 import { loadQuran, ayah as ayahText, surahName } from '../core/quran.js';
-import { chat, explainAyah } from '../core/ai.js';
+import { chat, explainAyah, lastProvider } from '../core/ai.js';
 
 const KEY = 'noor.chat';
 const WELCOME = 'السلام عليكم، أنا «نور» رفيقك في القرآن. أستطيع أن:\n- أشرح لك معاني الآيات اعتماداً على التفسير الميسر\n- أضع لك خطة حفظ تناسب وقتك\n- أبسّط لك أحكام التجويد\n- أحفّزك على وردك اليومي';
-const CHIPS = ['اشرح لي آية الكرسي', 'ضع لي خطة لحفظ جزء عمّ', 'ما أحكام النون الساكنة؟', 'حفّزني على ورد اليوم'];
+const CHIPS = ['اشرح لي آية الكرسي', 'ضع لي خطة لحفظ جزء عمّ', 'ما أحكام النون الساكنة؟', 'حفّزني على ورد اليوم', 'صحّح لي فهمي لآية', 'اختبرني في معاني جزء عمّ'];
+const QUIZ = 'اختبرني في معاني سور جزء عمّ بثلاثة أسئلة قصيرة، سؤالاً واحداً في كل مرة، وانتظر إجابتي قبل السؤال التالي ثم صحّح لي إجابتي بلطف.';
 
 // ---- pure helpers ----
 function inline(t) { return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'); }
@@ -26,6 +27,8 @@ export function md(text) {
   if (list) out.push('</ul>');
   return out.join('');
 }
+
+function aiHtml(m) { return md(m.content) + (m.prov ? `<div class="muted small" style="margin-top:.4rem;opacity:.75">عبر ${esc(m.prov)}</div>` : ''); }
 
 function loadMsgs() { try { return JSON.parse(sessionStorage.getItem(KEY) || '[]'); } catch (e) { return []; } }
 function saveMsgs(m) { try { sessionStorage.setItem(KEY, JSON.stringify(m.slice(-30))); } catch (e) { /* ignore */ } }
@@ -58,7 +61,7 @@ export default {
       for (const m of msgs) {
         if (m.quote) addBubble('ai', `<div class="quran" style="font-size:1.25em;line-height:2;text-align:center">${esc(m.quote.text)}</div><div class="muted small center">${esc(m.quote.ref)}</div>`);
         if (m.role === 'user') addBubble('user', `<p>${esc(m.content)}</p>`);
-        else if (m.content) addBubble('ai', md(m.content));
+        else if (m.content) addBubble('ai', aiHtml(m));
       }
     }
 
@@ -79,8 +82,9 @@ export default {
       try {
         const text = await produce(t => { bubble.classList.remove('typing'); bubble.innerHTML = md(t); scroll(); }, ctrl.signal);
         if (!alive) return;
-        bubble.classList.remove('typing'); bubble.innerHTML = md(text);
-        msgs.push({ role: 'assistant', content: text }); saveMsgs(msgs);
+        const m = { role: 'assistant', content: text, prov: lastProvider() };
+        bubble.classList.remove('typing'); bubble.innerHTML = aiHtml(m);
+        msgs.push(m); saveMsgs(msgs);
       } catch (e) {
         if (!alive) return;
         bubble.classList.remove('typing');
@@ -123,6 +127,8 @@ export default {
         const i = +chip.dataset.chip;
         if (i === 0) askAyah(2, 255);
         else if (i === 3) run(CHIPS[3], (onDelta, signal) => chat([{ role: 'user', content: motivationPrompt() }], { signal, onDelta }));
+        else if (i === 4) { ta.value = 'أفهم من الآية (اكتب رقمها أو نصها): '; grow(); ta.focus(); toast('اكتب الآية وفهمك لها ثم أرسل'); }
+        else if (i === 5) ask(QUIZ);
         else ask(CHIPS[i]);
         return;
       }
