@@ -60,8 +60,8 @@ function read(file) {
   const before = g;
 
   if (!/^\s*versionCode\s+[^\n]+/m.test(g) || !/^\s*versionName\s+[^\n]+/m.test(g)) fail('versionCode/versionName anchors not found in app/build.gradle');
-  g = g.replace(/^(\s*)versionCode\s+[^\n]+/m, "$1versionCode (System.getenv('NOOR_VERSION_CODE') ?: '1').toInteger()");
-  g = g.replace(/^(\s*)versionName\s+[^\n]+/m, "$1versionName System.getenv('NOOR_VERSION_NAME') ?: '1.0'");
+  g = g.replace(/^(\s*)versionCode\s+[^\n]+/m, "$1versionCode Integer.parseInt(System.getenv('NOOR_VERSION_CODE') ?: '1')");
+  g = g.replace(/^(\s*)versionName\s+[^\n]+/m, "$1versionName (System.getenv('NOOR_VERSION_NAME') ?: '1.0')");
 
   if (!g.includes('// NOOR signing')) {
     if (!/\n    buildTypes \{/.test(g)) fail('anchor "buildTypes {" not found in app/build.gradle');
