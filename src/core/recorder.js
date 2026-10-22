@@ -34,7 +34,7 @@ const wavBlob = bytes => new Blob([bytes], { type: 'audio/wav' });
 
 /** vad (optional): { minSpeechMs, silenceMs, maxMs } overrides for chunk cutting (lower = lower latency).
  *  onPcm (optional): receives every block of continuous 16 kHz mono Float32 PCM (no gaps, no VAD) for streaming engines. */
-export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLevel = () => {}, onError = () => {}, vad = null, onPcm = null } = {}) {
+export async function startRecorder({ chunkMs = 4500, onChunk = null, onLevel = () => {}, onError = () => {}, vad = null, onPcm = null } = {}) {
   // chunkMs is kept for API compatibility; chunk boundaries now follow pauses in speech.
   void chunkMs;
   if (!recorderSupported()) { onError('unsupported'); return null; }
@@ -47,14 +47,22 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
   } catch (e) { actx = null; }
   if (!actx) { onError('error'); return null; }
 
+  // Android's echo canceller / noise suppressor gate and duck quiet, sustained recitation (choppy audio, clipped
+  // madd); only the gain control is kept. Plain {audio:true} if the device rejects the constraints.
   let stream;
+  const denied = e => e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'PermissionDeniedError');
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
-    });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true, channelCount: 1 }
+      });
+    } catch (e) {
+      if (denied(e)) throw e;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
   } catch (e) {
     try { actx.close(); } catch (e2) { /* ignore */ }
-    onError(e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'PermissionDeniedError') ? 'permission' : 'error');
+    onError(denied(e) ? 'permission' : 'error');
     return null;
   }
 
@@ -81,6 +89,7 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
   };
 
   const deliver = chunks => {
+    if (!onChunk) return;
     for (const c of chunks) {
       try { onChunk(wavBlob(encodeWav(c, TARGET_RATE)), idx++); } catch (e) { /* consumer error must not break recording */ }
     }
@@ -100,7 +109,7 @@ export async function startRecorder({ chunkMs = 4500, onChunk = () => {}, onLeve
       const p = floatToPcm16(pcm);
       full.push(p); fullLen += p.length;
     }
-    deliver(chunker.push(pcm));
+    if (onChunk) deliver(chunker.push(pcm));     // streaming-only callers (onPcm) skip the VAD + per-chunk WAV work
   }
 
   try {

@@ -14,6 +14,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
 import './styles/mushaf.css';
+import './styles/kids.css';
 import { S, on } from './core/store.js';
 import { icon, celebrate, toast } from './ui.js';
 import { loadQuran } from './core/quran.js';
@@ -33,11 +34,12 @@ const ROUTES = {
   train: () => import('./views/train.js'),          // memorization drills
   family: () => import('./views/family.js'),        // family circle board & challenges
   recordings: () => import('./views/recordings.js'),// my saved recitations
+  kids: () => import('./views/kids.js'),           // kids corner: kids/<azkar|letters|quran|quiz>/<id>
   more: () => import('./views/more.js'),
   settings: () => import('./views/settings.js')
 };
 const TABS = [['home', 'home', 'الرئيسية'], ['mushaf', 'book', 'المصحف'], ['recite', 'mic', 'التسميع'], ['prayer', 'mosque', 'الصلاة'], ['more', 'grid', 'المزيد']];
-const TAB_OF = { search: 'mushaf', train: 'recite', family: 'more', recordings: 'recite', review: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', tasbeeh: 'more', settings: 'more' };
+const TAB_OF = { search: 'mushaf', train: 'recite', family: 'more', recordings: 'recite', review: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', kids: 'more', tasbeeh: 'more', settings: 'more' };
 
 const main = document.getElementById('app');
 const nav = document.getElementById('tabs');

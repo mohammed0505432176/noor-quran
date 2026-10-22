@@ -1,0 +1,32 @@
+// Arabic letters for kids. forms = [isolated, initial, medial, final] (tatweel marks the joining side).
+
+export const LETTERS = [
+  { ch: 'ا', name: 'ألف', forms: ['ا', 'ا', 'ـا', 'ـا'], word: 'أَسَد', emoji: '1f981', audio: 'kids/letters/01.mp3' },
+  { ch: 'ب', name: 'باء', forms: ['ب', 'بـ', 'ـبـ', 'ـب'], word: 'بَطَّة', emoji: '1f986', audio: 'kids/letters/02.mp3' },
+  { ch: 'ت', name: 'تاء', forms: ['ت', 'تـ', 'ـتـ', 'ـت'], word: 'تُفَّاحَة', emoji: '1f34e', audio: 'kids/letters/03.mp3' },
+  { ch: 'ث', name: 'ثاء', forms: ['ث', 'ثـ', 'ـثـ', 'ـث'], word: 'ثَعْلَب', emoji: '1f98a', audio: 'kids/letters/04.mp3' },
+  { ch: 'ج', name: 'جيم', forms: ['ج', 'جـ', 'ـجـ', 'ـج'], word: 'جَمَل', emoji: '1f42a', audio: 'kids/letters/05.mp3' },
+  { ch: 'ح', name: 'حاء', forms: ['ح', 'حـ', 'ـحـ', 'ـح'], word: 'حِصَان', emoji: '1f40e', audio: 'kids/letters/06.mp3' },
+  { ch: 'خ', name: 'خاء', forms: ['خ', 'خـ', 'ـخـ', 'ـخ'], word: 'خَرُوف', emoji: '1f411', audio: 'kids/letters/07.mp3' },
+  { ch: 'د', name: 'دال', forms: ['د', 'د', 'ـد', 'ـد'], word: 'دُبّ', emoji: '1f43b', audio: 'kids/letters/08.mp3' },
+  { ch: 'ذ', name: 'ذال', forms: ['ذ', 'ذ', 'ـذ', 'ـذ'], word: 'ذُرَة', emoji: '1f33d', audio: 'kids/letters/09.mp3' },
+  { ch: 'ر', name: 'راء', forms: ['ر', 'ر', 'ـر', 'ـر'], word: 'رِيشَة', emoji: '1fab6', audio: 'kids/letters/10.mp3' },
+  { ch: 'ز', name: 'زاي', forms: ['ز', 'ز', 'ـز', 'ـز'], word: 'زَرَافَة', emoji: '1f992', audio: 'kids/letters/11.mp3' },
+  { ch: 'س', name: 'سين', forms: ['س', 'سـ', 'ـسـ', 'ـس'], word: 'سَمَكَة', emoji: '1f41f', audio: 'kids/letters/12.mp3' },
+  { ch: 'ش', name: 'شين', forms: ['ش', 'شـ', 'ـشـ', 'ـش'], word: 'شَجَرَة', emoji: '1f333', audio: 'kids/letters/13.mp3' },
+  { ch: 'ص', name: 'صاد', forms: ['ص', 'صـ', 'ـصـ', 'ـص'], word: 'صَارُوخ', emoji: '1f680', audio: 'kids/letters/14.mp3' },
+  { ch: 'ض', name: 'ضاد', forms: ['ض', 'ضـ', 'ـضـ', 'ـض'], word: 'ضِفْدَع', emoji: '1f438', audio: 'kids/letters/15.mp3' },
+  { ch: 'ط', name: 'طاء', forms: ['ط', 'طـ', 'ـطـ', 'ـط'], word: 'طَاوُوس', emoji: '1f99a', audio: 'kids/letters/16.mp3' },
+  { ch: 'ظ', name: 'ظاء', forms: ['ظ', 'ظـ', 'ـظـ', 'ـظ'], word: 'ظَبْي', emoji: '1f98c', audio: 'kids/letters/17.mp3' },
+  { ch: 'ع', name: 'عين', forms: ['ع', 'عـ', 'ـعـ', 'ـع'], word: 'عِنَب', emoji: '1f347', audio: 'kids/letters/18.mp3' },
+  { ch: 'غ', name: 'غين', forms: ['غ', 'غـ', 'ـغـ', 'ـغ'], word: 'غَيْمَة', emoji: '2601', audio: 'kids/letters/19.mp3' },
+  { ch: 'ف', name: 'فاء', forms: ['ف', 'فـ', 'ـفـ', 'ـف'], word: 'فِيل', emoji: '1f418', audio: 'kids/letters/20.mp3' },
+  { ch: 'ق', name: 'قاف', forms: ['ق', 'قـ', 'ـقـ', 'ـق'], word: 'قِطَّة', emoji: '1f431', audio: 'kids/letters/21.mp3' },
+  { ch: 'ك', name: 'كاف', forms: ['ك', 'كـ', 'ـكـ', 'ـك'], word: 'كَلْب', emoji: '1f436', audio: 'kids/letters/22.mp3' },
+  { ch: 'ل', name: 'لام', forms: ['ل', 'لـ', 'ـلـ', 'ـل'], word: 'لَيْمُون', emoji: '1f34b', audio: 'kids/letters/23.mp3' },
+  { ch: 'م', name: 'ميم', forms: ['م', 'مـ', 'ـمـ', 'ـم'], word: 'مَوْزَة', emoji: '1f34c', audio: 'kids/letters/24.mp3' },
+  { ch: 'ن', name: 'نون', forms: ['ن', 'نـ', 'ـنـ', 'ـن'], word: 'نَحْلَة', emoji: '1f41d', audio: 'kids/letters/25.mp3' },
+  { ch: 'ه', name: 'هاء', forms: ['ه', 'هـ', 'ـهـ', 'ـه'], word: 'هِلَال', emoji: '1f319', audio: 'kids/letters/26.mp3' },
+  { ch: 'و', name: 'واو', forms: ['و', 'و', 'ـو', 'ـو'], word: 'وَرْدَة', emoji: '1f339', audio: 'kids/letters/27.mp3' },
+  { ch: 'ي', name: 'ياء', forms: ['ي', 'يـ', 'ـيـ', 'ـي'], word: 'يَد', emoji: '270b', audio: 'kids/letters/28.mp3' }
+];

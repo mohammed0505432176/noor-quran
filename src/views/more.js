@@ -35,6 +35,8 @@ export default {
           <span class="num-diamond">${esc((name || 'ن').slice(0, 1))}</span>
           <div style="flex:1"><b>${name ? esc(name) : 'مرحباً بك'}</b><div class="muted small">${name ? 'حسابك على هذا الجهاز' : 'أضف اسمك ليظهر في الرئيسية'}</div></div>
           <button class="btn sm ghost" id="name">${name ? 'تعديل' : 'إضافة الاسم'}</button></div></div>
+        <button class="k-entry mt" data-go="kids"><span class="k-entry-art"><img class="k-art" src="${import.meta.env.BASE_URL}kids/img/mascot.webp" alt=""></span>
+          <span style="flex:1"><b>ركن الأطفال ✨</b><small>أذكار وحروف وسور وألعاب بأصوات حقيقية</small></span></button>
         <div class="grid-2 mt">${TILES.map(([r, ic, t, sub]) => `
           <button class="card" data-go="${r}" style="cursor:pointer;text-align:start;position:relative">
             <span class="gold">${icon(ic, 30)}</span>

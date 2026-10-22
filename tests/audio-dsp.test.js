@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { encodeWav, downsample, rms, createVad, createChunker } from '../src/core/audio-dsp.js';
+import { encodeWav, downsample, rms, createVad, createChunker, createDownsampler } from '../src/core/audio-dsp.js';
 
 const sine = (freq, rate, secs, amp = 0.5) => Float32Array.from({ length: Math.round(rate * secs) }, (_, i) => amp * Math.sin(2 * Math.PI * freq * i / rate));
 const crossings = a => { let c = 0; for (let i = 1; i < a.length; i++) if ((a[i - 1] < 0) !== (a[i] < 0)) c++; return c; };
@@ -109,4 +109,32 @@ test('chunker: 15 s continuous speech is split, none above ~12 s, no audio lost'
   out.forEach(c => assert.ok(c.length / 16000 <= 12.1));
   const total = out.reduce((n, c) => n + c.length, 0) / 16000;
   assert.ok(total > 14.9 && total <= 15.01, 'total ' + total);
+});
+
+// the recorder pushes worklet blocks one by one: block boundaries must not change a single sample
+const streamed = (x, inRate, sizes) => {
+  const ds = createDownsampler(inRate, 16000), parts = [];
+  for (let i = 0, k = 0; i < x.length; k++) { const n = sizes[k % sizes.length]; parts.push(Float32Array.from(ds.push(x.subarray(i, i + n)))); i += n; }
+  const out = new Float32Array(parts.reduce((s, p) => s + p.length, 0));
+  let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+};
+for (const inRate of [48000, 44100, 96000]) {
+  test(`downsampler ${inRate} -> 16k: streaming in odd blocks equals one shot (no seams)`, () => {
+    const x = Float32Array.from({ length: inRate * 2 }, (_, i) => 0.4 * Math.sin(2 * Math.PI * 440 * i / inRate) + 0.2 * Math.sin(2 * Math.PI * 1234 * i / inRate));
+    const one = downsample(x, inRate, 16000), st = streamed(x, inRate, [128, 2048, 1, 7, 333, 4096]);
+    assert.equal(st.length, one.length);
+    let maxd = 0; for (let i = 0; i < one.length; i++) maxd = Math.max(maxd, Math.abs(st[i] - one[i]));
+    assert.ok(maxd < 1e-6, 'max diff ' + maxd);
+    // a smooth tone has no jumps: sample-to-sample steps stay within the tone's own maximum slope (+10%)
+    let maxStep = 0; for (let i = 1; i < st.length; i++) maxStep = Math.max(maxStep, Math.abs(st[i] - st[i - 1]));
+    assert.ok(maxStep < 1.1 * (0.4 * 2 * Math.PI * 440 + 0.2 * 2 * Math.PI * 1234) / 16000, 'step ' + maxStep);
+  });
+}
+
+test('downsampler: total output tracks input length exactly (fractional position carried)', () => {
+  const ds = createDownsampler(44100, 16000);
+  let n = 0;
+  for (let k = 0; k < 1000; k++) n += ds.push(new Float32Array(2048)).length;
+  assert.ok(Math.abs(n - 2048 * 1000 * 16000 / 44100) <= 1, 'out ' + n);
 });

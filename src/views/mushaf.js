@@ -5,12 +5,15 @@ import { loadQuran, surahName, ayahCount, typeName, ayah, JUZ, SURAH_COUNT } fro
 import { PAGE_COUNT, pageOf, pageContent, pageFirst, side, quarterOf, quarterStartsOn, hizbLabel, juzOfPage } from '../core/pages.js';
 import * as audio from '../core/audio.js';
 import { loadTajweed, TAJWEED_LEGEND } from '../core/tajweed.js';
+import * as madani from '../core/madani.js';
 
 const BASMALA = 'بِسۡمِ ٱللَّهِ ٱلرَّحۡمَٰنِ ٱلرَّحِيمِ';
 const ORD = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع', 'العاشر', 'الحادي عشر', 'الثاني عشر', 'الثالث عشر', 'الرابع عشر', 'الخامس عشر', 'السادس عشر', 'السابع عشر', 'الثامن عشر', 'التاسع عشر', 'العشرون', 'الحادي والعشرون', 'الثاني والعشرون', 'الثالث والعشرون', 'الرابع والعشرون', 'الخامس والعشرون', 'السادس والعشرون', 'السابع والعشرون', 'الثامن والعشرون', 'التاسع والعشرون', 'الثلاثون'];
 const RATES = [0.75, 1, 1.25, 1.5];
 const reduced = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const TJ_KEY = 'noor.tajweed';
+const MD_KEY = 'noor.madani';
+let mdWarned = false;
 const clampP = p => Math.min(PAGE_COUNT, Math.max(1, p | 0));
 
 function readCounts() {
@@ -115,6 +118,10 @@ async function renderPages(el, page, focusS, focusA) {
   const tjCache = new Map();
   let tjOn = false;
   try { tjOn = localStorage.getItem(TJ_KEY) === '1'; } catch (e) { /* ignore */ }
+  let mdOn = true;
+  try { mdOn = localStorage.getItem(MD_KEY) !== '0'; } catch (e) { /* ignore */ }
+  const mdReady = new Set(), mdFail = new Set(), mdPending = new Set();
+  const useMd = () => mdOn && !tjOn;
 
   const pagesFor = p => {
     if (!isWide()) return [p];
@@ -127,13 +134,94 @@ async function renderPages(el, page, focusS, focusA) {
     const html = tjOn && tjCache.get(s) && tjCache.get(s)[a - 1];
     return (rubs.has(s + ':' + a) && s + a > 2 ? '<span class="rub">۞</span> ' : '') + (html || esc(ayah(s, a))) + ' ' + ayahMark(a);
   };
+  const mdSkeleton = p => '<div class="mq-lines' + (p <= 2 ? ' short' : '') + ' sk">' + '<div class="mq-line"><i></i></div>'.repeat(p <= 2 ? 8 : 15) + '</div>';
+  const madaniBody = p => {
+    const L = madani.cachedLayout(p);
+    const byN = new Map(L.lines.map(l => [l.n, l]));
+    const rows = p <= 2 ? L.lines.map(l => l.n) : Array.from({ length: 15 }, (_, i) => i + 1);
+    let h = `<div class="mq-lines${p <= 2 ? ' short' : ''}" style="font-family:'${madani.familyOf(p)}',var(--font-quran)">`;
+    for (const n of rows) {
+      const l = byN.get(n);
+      if (!l) { h += '<div class="mq-line"></div>'; continue; }
+      if (l.t === 'surah') h += `<div class="mq-line mq-sline"><div class="surah-banner">سورة ${esc(surahName(l.s))}</div></div>`;
+      else if (l.t === 'basmala') h += `<div class="mq-line mq-bline"><div class="basmala">${BASMALA}</div></div>`;
+      else {
+        h += '<div class="mq-line">';
+        for (const w of l.w) h += `<span class="mq-w${w[3] ? ' mq-end' : ''}${S.read[w[1] + ':' + w[2]] ? ' read' : ''}" data-s="${w[1]}" data-a="${w[2]}">${esc(w[0])}</span>`;
+        h += '</div>';
+      }
+    }
+    return h + '</div>';
+  };
+  const fitPage = pg => {
+    const box = $('.mq-lines:not(.sk)', pg);
+    if (!box) return;
+    const W = box.clientWidth;
+    if (W < 40) return;
+    let fs = W / 15;
+    for (let i = 0; i < 3; i++) {
+      box.style.setProperty('--mq-fs', fs.toFixed(2) + 'px');
+      let mx = 1;
+      for (const ln of box.children) {
+        if (ln.querySelector('.mq-w')) {
+          let sum = 0; for (const c of ln.children) sum += c.getBoundingClientRect().width;
+          if (sum > mx) mx = sum;
+        }
+      }
+      if (mx <= 1) break;
+      const nf = fs * W / mx * 0.985;
+      if (Math.abs(nf - fs) < 0.2) { fs = Math.min(fs, nf); break; }
+      fs = nf;
+    }
+    box.style.setProperty('--mq-fs', Math.max(10, fs).toFixed(2) + 'px');
+    // short lines (end of a surah) are centred in print, not stretched edge to edge
+    for (const ln of box.children) {
+      if (!ln.querySelector('.mq-w')) continue;
+      ln.classList.remove('mq-center');
+      let sum = 0; for (const c of ln.children) sum += c.getBoundingClientRect().width;
+      if (sum < W * 0.72) ln.classList.add('mq-center');
+    }
+  };
+  const fitAll = () => $$('.mp-page', el).forEach(fitPage);
+  const refreshPage = p => {
+    const old = $(`.mp-page[data-p="${p}"]`, el);
+    if (!old) return;
+    const t = document.createElement('div');
+    t.innerHTML = pageHTML(p);
+    old.replaceWith(t.firstElementChild);
+    applyMarks();
+    fitAll();
+  };
+  const ensureMadani = () => {
+    if (!useMd()) return;
+    madani.setShown(shown);
+    for (const p of shown) {
+      if ((mdReady.has(p) && madani.hasFont(p)) || mdFail.has(p) || mdPending.has(p)) continue;
+      mdPending.add(p);
+      Promise.all([madani.loadPage(p), madani.loadFont(p)]).then(() => {
+        mdPending.delete(p);
+        if (dead) return;
+        mdReady.add(p);
+        if (useMd() && shown.includes(p)) refreshPage(p);
+        madani.prefetch(cur);
+      }).catch(() => {
+        mdPending.delete(p);
+        if (dead) return;
+        mdFail.add(p);
+        if (!mdWarned) { mdWarned = true; toast('تعذّر تحميل خط المصحف، عُرض بالخط العادي'); }
+        if (shown.includes(p)) refreshPage(p);
+      });
+    }
+  };
   const pageHTML = p => {
     const segs = pageContent(p);
     const first = pageFirst(p);
     const qs = quarterStartsOn(p);
     const hz = qs.length ? qs.map(x => hizbLabel(x.q)).join(' · ') : hizbLabel(quarterOf(first.s, first.a));
     let body = '';
-    for (const g of segs) {
+    const md = useMd() && !mdFail.has(p);
+    if (md) body = mdReady.has(p) ? madaniBody(p) : mdSkeleton(p);
+    else for (const g of segs) {
       if (g.from === 1) {
         body += `<div class="surah-banner">سورة ${esc(surahName(g.s))} · ${typeName(g.s)} · آياتها ${N(ayahCount(g.s))}</div>` +
           (g.s !== 1 && g.s !== 9 ? `<div class="basmala">${BASMALA}</div>` : '');
@@ -146,7 +234,7 @@ async function renderPages(el, page, focusS, focusA) {
     }
     return `<section class="mp-page page-${side(p)}" data-p="${p}">` +
       `<div class="mp-top"><span class="mp-surah">${esc(pageTitle(p))}</span><span class="mp-hizb">${esc(hz)}</span><span class="mp-juz">الجزء ${ORD[juzOfPage(p) - 1]}</span></div>` +
-      `<div class="mp-body">${body}</div>` +
+      `<div class="mp-body${md ? ' madani' : ''}">${body}</div>` +
       `<div class="mp-foot"><span class="mp-num">${N(p)}</span><span class="mp-side">${side(p) === 'right' ? 'صفحة يمنى' : 'صفحة يسرى'}</span></div></section>`;
   };
   const progressHTML = () => `<div class="mp-progress"><i style="width:${(cur / PAGE_COUNT * 100).toFixed(2)}%"></i></div>`;
@@ -161,7 +249,7 @@ async function renderPages(el, page, focusS, focusA) {
   shown = pagesFor(cur);
   rubs = new Set(shown.flatMap(p => quarterStartsOn(p).map(x => x.s + ':' + x.a)));
 
-  el.innerHTML = header(pageTitle(cur), { back: 'mushaf', actions: `<button class="chip${tjOn ? ' active' : ''}" id="tjToggle" aria-pressed="${tjOn}">تجويد</button><button class="icon-btn mp-goto-ic" id="gotoIc" aria-label="اذهب إلى صفحة">${icon('search')}</button><button class="icon-btn" id="playAll" aria-label="استماع للصفحة">${icon('play')}</button>` }) +
+  el.innerHTML = header(pageTitle(cur), { back: 'mushaf', actions: `<button class="chip${mdOn ? ' active' : ''}" id="mdToggle" aria-pressed="${mdOn}" title="خط مصحف المدينة">المدينة</button><button class="chip${tjOn ? ' active' : ''}" id="tjToggle" aria-pressed="${tjOn}">تجويد</button><button class="icon-btn mp-goto-ic" id="gotoIc" aria-label="اذهب إلى صفحة">${icon('search')}</button><button class="icon-btn" id="playAll" aria-label="استماع للصفحة">${icon('play')}</button>` }) +
     `<div class="tj-bar mb" id="tjBar"${tjOn ? '' : ' hidden'}><button class="chip" id="tjLegend">دليل الألوان</button><span class="small muted" id="tjState"></span></div>` +
     progressHTML() + bookHTML() + navHTML() +
     `<div class="center mt"><button class="btn ghost" id="markPage">${icon('check', 18)} تعليم الصفحة كمقروءة</button></div>` +
@@ -171,18 +259,33 @@ async function renderPages(el, page, focusS, focusA) {
   const bar = $('#playerBar', el);
   const playBtn = $('#playAll', el);
   const tjBtn = $('#tjToggle', el), tjBar = $('#tjBar', el), tjState = $('#tjState', el);
-  const spanOf = (s, a) => $(`.ayah[data-s="${s}"][data-a="${a}"]`, el);
+  const spansOf = (s, a) => $$(`[data-s="${s}"][data-a="${a}"]`, el).filter(x => x.classList.contains('ayah') || x.classList.contains('mq-w'));
+  const addCls = (s, a, c) => spansOf(s, a).forEach(x => x.classList.add(c));
+  const mdBtn = $('#mdToggle', el);
   const onShown = (s, a) => shown.includes(pageOf(s, a));
 
   const select = o => {
-    const old = $('.ayah.selected', el); if (old) old.classList.remove('selected');
+    $$('.selected', el).forEach(x => x.classList.remove('selected'));
     sel = o;
-    const sp = o && spanOf(o.s, o.a); if (sp) sp.classList.add('selected');
+    if (o) addCls(o.s, o.a, 'selected');
   };
   const mark = o => {
-    const old = $('.ayah.playing', el); if (old) old.classList.remove('playing');
+    $$('.playing', el).forEach(x => x.classList.remove('playing'));
     playing = o;
-    const sp = o && spanOf(o.s, o.a); if (sp) sp.classList.add('playing');
+    if (o) addCls(o.s, o.a, 'playing');
+  };
+  const applyMarks = () => { if (sel) select(sel); if (playing) mark(playing); };
+  const rerender = () => {
+    $('.mp-book', el).outerHTML = bookHTML();
+    applyMarks(); fitAll(); ensureMadani();
+  };
+  const setMd = on => {
+    mdOn = on;
+    mdBtn.classList.toggle('active', on);
+    mdBtn.setAttribute('aria-pressed', String(on));
+    try { localStorage.setItem(MD_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+    if (tjOn) return;
+    rerender();
   };
 
   // ---- tajweed colours
@@ -223,7 +326,8 @@ async function renderPages(el, page, focusS, focusA) {
     tjBtn.setAttribute('aria-pressed', String(on));
     tjBar.hidden = !on;
     try { localStorage.setItem(TJ_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
-    if (!on) { tjSeq++; tjState.textContent = ''; repaint(); return; }
+    if (!on) { tjSeq++; tjState.textContent = ''; if (mdOn) rerender(); else repaint(); return; }
+    if (mdOn) rerender();
     applyTj();
   };
   const openLegend = () => {
@@ -249,8 +353,8 @@ async function renderPages(el, page, focusS, focusA) {
       clearTimeout(animTimer);
       animTimer = setTimeout(() => $$('.mp-page', el).forEach(pg => pg.classList.remove('turn-next', 'turn-prev')), 700);
     }
-    if (sel) select(sel);
-    if (playing) mark(playing);
+    applyMarks();
+    fitAll(); ensureMadani();
     try { history.replaceState(null, '', '#/mushaf/p' + cur); } catch (e) { /* ignore */ }
     const f = pageFirst(cur); setLast(f.s, f.a);
     window.scrollTo(0, 0);
@@ -356,7 +460,7 @@ async function renderPages(el, page, focusS, focusA) {
       if (act === 'play') { sh.close(); audio.playRange(s, a, ayahCount(s)); return; }
       if (act === 'read') {
         const r = markRead(s, a);
-        const sp = spanOf(s, a); if (sp) sp.classList.add('read');
+        addCls(s, a, 'read');
         { const f = pageFirst(cur); setLast(f.s, f.a); }
         toast(r.counted ? '+٢ نقطة' : 'سُجّلت قراءتها اليوم مسبقًا');
         sh.close(); return;
@@ -398,7 +502,7 @@ async function renderPages(el, page, focusS, focusA) {
     let n = 0, counted = 0;
     for (const p of shown) for (const g of pageContent(p)) for (let a = g.from; a <= g.to; a++) {
       const r = markRead(g.s, a); n++; if (r.counted) counted++;
-      const sp = spanOf(g.s, a); if (sp) sp.classList.add('read');
+      addCls(g.s, a, 'read');
     }
     { const f = pageFirst(cur); setLast(f.s, f.a); }
     toast(counted ? `عُلّمت ${N(n)} آية كمقروءة` : 'سُجّلت قراءتها اليوم مسبقًا');
@@ -417,13 +521,14 @@ async function renderPages(el, page, focusS, focusA) {
       return;
     }
     if (e.target.closest('#playAll')) { toggleAll(); return; }
+    if (e.target.closest('#mdToggle')) { setMd(!mdOn); return; }
     if (e.target.closest('#tjToggle')) { setTj(!tjOn); return; }
     if (e.target.closest('#tjLegend')) { openLegend(); return; }
     if (e.target.closest('#markPage')) { markPage(); return; }
     if (e.target.closest('.mp-next')) { goNext(); return; }
     if (e.target.closest('.mp-prev')) { goPrev(); return; }
     if (e.target.closest('.mp-goto') || e.target.closest('#gotoIc')) { openGoto(); return; }
-    const sp = e.target.closest('.ayah');
+    const sp = e.target.closest('.ayah, .mq-w');
     if (sp && el.contains(sp)) { const s = +sp.dataset.s, a = +sp.dataset.a; select({ s, a }); openAyahSheet(s, a); }
   };
   const onKey = e => {
@@ -448,12 +553,16 @@ async function renderPages(el, page, focusS, focusA) {
   };
   const mq = window.matchMedia ? window.matchMedia('(min-width:900px)') : null;
   const onMq = () => show(cur, null);
+  let rzT = 0;
+  const onRz = () => { cancelAnimationFrame(rzT); rzT = requestAnimationFrame(fitAll); };
+  window.addEventListener('resize', onRz);
   el.addEventListener('click', onClick);
   document.addEventListener('keydown', onKey);
   el.addEventListener('touchstart', onTs, { passive: true });
   el.addEventListener('touchend', onTe, { passive: true });
   if (mq) { if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq); }
 
+  fitAll(); ensureMadani();
   if (tjOn) applyTj();
   if (focusS) {
     select({ s: focusS, a: focusA });
@@ -469,7 +578,8 @@ async function renderPages(el, page, focusS, focusA) {
     tjSeq++;
     unsub();
     audio.stop();
-    clearTimeout(hiTimer); clearTimeout(animTimer);
+    clearTimeout(hiTimer); clearTimeout(animTimer); cancelAnimationFrame(rzT);
+    window.removeEventListener('resize', onRz);
     if (tafsirAbort) tafsirAbort.abort();
     if (openSheet) openSheet.close();
     el.removeEventListener('click', onClick);

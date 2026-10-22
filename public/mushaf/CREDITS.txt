@@ -1,0 +1,4 @@
+Mushaf page layout data (public/mushaf/p/*.json)
+- Source: Quran.com API v4 (https://api.quran.com) - verses by page, word line numbers and QCF v2 glyph codes.
+- Page fonts (QCF v2): King Fahd Glorious Quran Printing Complex, Madinah (Madani Mushaf), served by Quran.com.
+- Used for free, non-profit purposes. Please keep this credit.

@@ -100,7 +100,9 @@ export default {
         <div class="stat"><b>${N(totalRead())}</b><span>آية مقروءة</span></div>
         <div class="stat"><b>${N(S.rec.length)}</b><span>تسميع</span></div>
       </div>
-      <div id="prayer-box" class="mt"></div>
+      <button class="k-entry mt" data-go="kids"><span class="k-entry-art"><img class="k-art" src="${import.meta.env.BASE_URL}kids/img/mascot.webp" alt=""></span>
+          <span style="flex:1"><b>ركن الأطفال ✨</b><small>تعلّم ممتع بالصوت والنجوم</small></span></button>
+        <div id="prayer-box" class="mt"></div>
       <div id="fam-box"></div>
       ${due.length ? `<div class="card mt" data-go="review" style="cursor:pointer"><div class="row" style="align-items:center"><span class="gold">${icon('brain', 24)}</span><div style="flex:1"><b>لديك ${N(due.length)} مقاطع للمراجعة اليوم</b><div class="muted small">المراجعة المنتظمة تثبّت الحفظ</div></div></div></div>` : ''}
       <div class="section-title mt">اختصارات</div>

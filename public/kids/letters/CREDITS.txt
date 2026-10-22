@@ -1,0 +1,7 @@
+Arabic letter clips (01.mp3-28.mp3, standard order alif..ya)
+Source: "Arabic alphabet (31s, 80kbps).ogg", Wikimedia Commons
+URL: https://commons.wikimedia.org/wiki/File:Arabic_alphabet_(31s,_80kbps).ogg
+Author: M. Abuhelwa
+License: Public domain
+Processing: segmented by loudness-envelope valleys (no silence gaps in source), loudnorm, mono 64 kbps, 0.1 s padding.
+NOTE: segmentation not verified by ear.

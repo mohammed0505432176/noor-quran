@@ -91,7 +91,8 @@ export function openEngine() {
     const c = await caches.open(CACHE);
     const [m, j] = await Promise.all([c.match(FILES.model), c.match(FILES.corpus)]);
     if (!m || !j) throw new Error('not downloaded');
-    const [model, corpus] = await Promise.all([m.arrayBuffer(), j.json()]);
+    // the 5 MB corpus goes over as raw bytes and is parsed in the worker (no JSON parse + structured clone on the UI thread)
+    const [model, corpus] = await Promise.all([m.arrayBuffer(), j.arrayBuffer()]);
     const w = new Worker(new URL('./quran-worker.js', import.meta.url), { type: 'module' });
     worker = w;
     let timer;
@@ -105,7 +106,7 @@ export function openEngine() {
       };
       w.onerror = e => reject(new Error((e && e.message) || 'worker'));
       const wasmPaths = new URL(import.meta.env.BASE_URL + 'ort/', location.href).href;
-      w.postMessage({ type: 'init', model, corpus, wasmPaths }, [model]);
+      w.postMessage({ type: 'init', model, corpus, wasmPaths }, [model, corpus]);
     }).finally(() => clearTimeout(timer));
     w.onmessage = ev => route(ev.data || {});
     w.onerror = e => { if (cur && cur.handlers.onError) cur.handlers.onError((e && e.message) || 'worker'); };

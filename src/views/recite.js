@@ -10,7 +10,7 @@ import { speechSupport, startListening } from '../core/speech.js';
 import { haptic } from '../core/platform.js';
 import { startRecorder, recorderSupported } from '../core/recorder.js';
 import { cloudStatus, transcribe, tajweedReview } from '../core/cloud.js';
-import { playRange, playAyah, stop as stopReciter } from '../core/audio.js';
+import { playRange, playAyah, stop as stopReciter, isPlaying as reciterPlaying } from '../core/audio.js';
 import * as recordings from '../core/recordings.js';
 import { engineSupported, engineCached, downloadEngine, openEngine, mapVerdicts, ENGINE_MB } from '../core/quran-engine.js';
 import '../styles/recite.css';
@@ -548,11 +548,17 @@ export default {
       }
 
       // ----- on-device Quran engine (continuous mic, no gaps between ayahs) -----
-      function applyQuran(words) {
+      let qRaf = 0;
+      function applyQuran(words, now = false) {
         // the engine drops its tracker once the passage is complete: an empty list must not erase the page
         if (!words.length && qVerdicts.length) words = qVerdicts;
         qVerdicts = words;
-        const m = mapVerdicts(words, groups);
+        // bursts of verdicts/issues coalesce into one paint per frame (paint only touches words that changed)
+        if (now || document.hidden) { if (qRaf) { cancelAnimationFrame(qRaf); qRaf = 0; } renderQuran(); }
+        else if (!qRaf) qRaf = requestAnimationFrame(() => { qRaf = 0; if (isLive() && !finished) renderQuran(); });
+      }
+      function renderQuran() {
+        const m = mapVerdicts(qVerdicts, groups);
         const st = new Array(total).fill('pending');
         for (const [i, v] of m) {
           st[i] = v.st === 'ok' || v.st === 'unsure' ? 'ok' : v.st === 'pending' ? 'pending' : 'bad';
@@ -582,7 +588,7 @@ export default {
         setStatus('جارٍ تجهيز المحرك القرآني…');
         // the recorder starts first, inside the user's tap (an AudioContext created later may stay suspended);
         // audio captured while the engine loads is buffered and handed over once it is ready
-        let r = null, early = [], earlyLen = 0, live = false;
+        let r = null, early = [], earlyLen = 0, live = false, appAudioTill = 0;
         const fallback = async msg => {
           if (!isLive() || engine !== 'quran' || finished || ending) return;
           toast(msg);
@@ -597,6 +603,11 @@ export default {
         try {
           r = await startRecorder({ onPcm: pcm => {
             if (finished || aiState === 'paused') return;
+            // the mic runs without echo cancellation: while the app's own audio plays (hint / word taps) and ~300 ms
+            // after, the engine gets silence of the same length instead of the speaker, so its timeline stays continuous
+            const now = Date.now();
+            if ((wAudio && !wAudio.paused && !wAudio.ended) || reciterPlaying()) appAudioTill = now + 300;
+            if (now < appAudioTill) pcm = new Float32Array(pcm.length);
             if (live && qe) { qe.pcm(pcm); return; }
             if (earlyLen < 16000 * 20) { early.push(new Float32Array(pcm)); earlyLen += pcm.length; }
           }, onLevel: setLevel, onError: err => {
@@ -699,7 +710,7 @@ export default {
           setStatus('جارٍ إكمال التحليل…');
           if (r) { try { recBlob = await r.stop(); } catch (e) { /* ignore */ } recSecs = r.elapsed(); recCtl = null; }
           if (!isLive()) return;
-          if (qe) { const w = await qe.stop(); activeEngine = null; if (!isLive()) return; if (w.length) applyQuran(w); }
+          if (qe) { const w = await qe.stop(); activeEngine = null; if (!isLive()) return; applyQuran(w, true); }
         } else {
           stopListeningNow();
         }
