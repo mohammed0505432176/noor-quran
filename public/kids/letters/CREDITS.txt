@@ -1,7 +1,5 @@
-Arabic letter clips (01.mp3-28.mp3, standard order alif..ya)
-Source: "Arabic alphabet (31s, 80kbps).ogg", Wikimedia Commons
-URL: https://commons.wikimedia.org/wiki/File:Arabic_alphabet_(31s,_80kbps).ogg
-Author: M. Abuhelwa
-License: Public domain
-Processing: segmented by loudness-envelope valleys (no silence gaps in source), loudnorm, mono 64 kbps, 0.1 s padding.
-NOTE: segmentation not verified by ear.
+Arabic letter clips (01.mp3-28.mp3, order: ا ب ت ث ج ح خ د ذ ر ز س ش ص ض ط ظ ع غ ف ق ك ل م ن ه و ي)
+Source: "القاعدة النورانية صوت" (Al-Qa'ida al-Nuraniyya, audio), lesson 1 «الدرس الأول», read by Eng. Mohammed Farouk Al-Raai.
+URL: https://archive.org/details/qaaedahnorania (file "1  الدرس الأول.mp3")
+Uploader: am6692ai@gmail.com, Internet Archive. No license declared.
+Processing: segmented with ffmpeg silencedetect, each clip checked in lesson order and with Whisper large-v3 (ar), loudnorm two-pass I=-16 LRA=7, mono 64 kbps, 0.12 s padding.

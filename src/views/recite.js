@@ -12,8 +12,25 @@ import { startRecorder, recorderSupported } from '../core/recorder.js';
 import { cloudStatus, transcribe, tajweedReview } from '../core/cloud.js';
 import { playRange, playAyah, stop as stopReciter, isPlaying as reciterPlaying } from '../core/audio.js';
 import * as recordings from '../core/recordings.js';
-import { engineSupported, engineCached, downloadEngine, openEngine, mapVerdicts, ENGINE_MB } from '../core/quran-engine.js';
+import { engineSupported, engineCached, downloadEngine, openEngine, mapVerdicts, freeSegments, ENGINE_MB } from '../core/quran-engine.js';
+import * as madani from '../core/madani.js';
+import { renderPageLines, pageGlyphs, fitLines, BASMALA } from '../core/madani-render.js';
+import { pageOf, pageContent, side, juzOfPage } from '../core/pages.js';
 import '../styles/recite.css';
+
+// free recitation / sard: per-viewer preferences (localStorage only, like the other noor.recite.* keys)
+const TEXT_KEY = 'noor.recite.showtext';   // '1': ghost text visible (not memorising)
+const WARN_KEY = 'noor.recite.warn';       // '0': sard warnings without tone / vibration
+const POS_KEY = 'noor.recite.lastpos';     // {s, a} where the last free session ended (tie-break hint for discovery)
+const loadFlag = (k, def) => { try { const v = localStorage.getItem(k); return v === null ? def : v === '1'; } catch (e) { return def; } };
+const saveFlag = (k, v) => { try { localStorage.setItem(k, v ? '1' : '0'); } catch (e) { /* ignore */ } };
+function loadPos() {
+  try { const p = JSON.parse(localStorage.getItem(POS_KEY) || 'null'); return p && p.s >= 1 && p.s <= 114 && p.a >= 1 ? { surah: p.s | 0, ayah: p.a | 0 } : null; } catch (e) { return null; }
+}
+const savePos = (s, a) => { try { localStorage.setItem(POS_KEY, JSON.stringify({ s, a })); } catch (e) { /* ignore */ } };
+// sard: correction-rule mistakes that get the light warning (vowel / repetition notes stay silent)
+const WARN_KINDS = new Set(['possible_omission', 'possible_substitution', 'possible_skipped_ayah', 'unclear_ayah']);
+const clock = secs => { const t = Math.max(0, Math.round(secs || 0)); return N(Math.floor(t / 60)) + ':' + N(String(t % 60).padStart(2, '0')); };
 
 const MODE_KEY = 'noor.recite.mode';
 const MODES = ['quran', 'device', 'ai', 'hide'];
@@ -102,8 +119,11 @@ export default {
     let cloud = null;            // last cloudStatus()
     let wAudio = null;           // word-by-word audio for hints / mistakes
     let activeEngine = null;     // on-device Quran engine with a running session
+    let freeStop = null;         // free / sard session teardown (timer, tone context, resize listener)
+    let lastFree = 'free';       // kind of the last free session ('free' | 'sard'), for «إعادة»
     const cleanup = () => {
       alive = false; gen++; setupTok++;
+      if (freeStop) { const f = freeStop; freeStop = null; try { f(); } catch (e) {} }
       if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; }
       if (recCtl) { const r = recCtl; recCtl = null; try { r.stop().catch(() => {}); } catch (e) {} }
       if (aiCtl) { try { aiCtl.abort(); } catch (e) {} aiCtl = null; }
@@ -152,6 +172,11 @@ export default {
       } catch (e) { fallback(); }
     }
 
+    const lastPosHtml = () => {
+      const p = loadPos();
+      return p ? `<p class="muted small mt rc-lastpos">آخر موضع وصلت إليه: سورة ${esc(surahName(p.surah))} · الآية ${N(p.ayah)} — ابدأ منه أو من أي موضع آخر</p>` : '';
+    };
+
     // ---------------- setup screen ----------------
     const aiReady = () => navigator.onLine && recorderSupported() && !!(cloud && cloud.stt);
     const chipHtml = () => {
@@ -175,6 +200,13 @@ export default {
           <p>اقرأ من حفظك وسأستمع إليك وأصحح كل كلمة لحظة بلحظة.</p>
         </div>
         ${due ? `<div class="card tight" data-go="review" role="button"><div class="row"><b class="gold">جلسة مراجعة اليوم</b><span class="muted small">لديك ${N(due)} مقاطع مستحقة للمراجعة</span></div></div>` : ''}
+        ${engineSupported() ? `<div class="card rc-free">
+          <button class="btn block rc-freebtn" id="rc-free">${icon('mic', 22)}<span><b>تسميع حر</b><small>اقرأ من أي موضع بلا تحديد، وأنا أتعرّف عليه وأتابعك على صفحات المصحف</small></span></button>
+          <button class="btn ghost block rc-freebtn rc-sardbtn mt" id="rc-sard">${icon('book', 20)}<span><b>السرد</b><small>تلاوة متواصلة طويلة، مع تنبيه خفيف عند الخطأ ليبقى تركيزك</small></span></button>
+          ${lastPosHtml()}
+          <div class="mt" id="rc-eng"></div>
+        </div>
+        <h2 class="section-title">تسميع مقطع محدد</h2>` : ''}
         <div class="card">
           <div class="field"><label for="rc-s">السورة</label><select id="rc-s" class="select">${opts}</select></div>
           <div class="grid-2 mt">
@@ -188,7 +220,7 @@ export default {
             ${modeChip('ai', 'دقيق (Whisper)')}
             ${modeChip('hide', 'اختبار الحفظ (إخفاء)')}
           </div>
-          <div class="mt" id="rc-eng"></div>
+          ${engineSupported() ? '' : '<div class="mt" id="rc-eng"></div>'}
           <div class="mt" id="rc-cloud">${chipHtml()}</div>
           <p class="muted small mt">عرض النص</p>
           <div class="row" id="rc-disp">
@@ -221,7 +253,7 @@ export default {
       function engineCard() {
         const box = $('#rc-eng', el); if (!box || !engineSupported()) return;
         if (engReady) {
-          box.innerHTML = cfg.mode === 'quran' ? '<span class="chip active small">المحرك القرآني جاهز ويعمل بلا إنترنت ✓</span>' : '';
+          box.innerHTML = '<span class="chip active small">المحرك القرآني جاهز ويعمل بلا إنترنت ✓</span>';
           return;
         }
         if (dl) return;
@@ -251,7 +283,6 @@ export default {
       if (engineSupported()) engineCached().then(ok => {
         engReady = ok;
         if (!alive || tok !== setupTok) return;
-        if (ok && !userMode) { cfg.mode = 'quran'; markMode(); }
         if (!ok && cfg.mode === 'quran') { cfg.mode = 'device'; markMode(); }
         engineCard();
       });
@@ -260,6 +291,15 @@ export default {
         $$('#rc-disp button', el).forEach(x => x.classList.toggle('active', x === b));
       });
       $('#rc-start', el).onclick = () => { readInputs(); startSession(); };
+      // free recitation / sard need the on-device engine (it is what discovers the position)
+      const freeGo = kind => {
+        if (engReady) { startFree(kind); return; }
+        toast('حمّل المحرك القرآني أولاً (مرة واحدة) ثم ابدأ');
+        const b = $('#rc-engdl', el); if (b) { try { b.scrollIntoView({ block: 'center', behavior: 'smooth' }); b.focus(); } catch (e) {} }
+      };
+      const fb = $('#rc-free', el), sb = $('#rc-sard', el);
+      if (fb) fb.onclick = () => freeGo('free');
+      if (sb) sb.onclick = () => freeGo('sard');
 
       // Cloud status is checked lazily (cached) only to show whether the precise mode is reachable.
       cloudStatus().then(st => {
@@ -795,6 +835,437 @@ export default {
       else if (!voiceLike) setStatus('تذكّر الآية التالية ثم اضغط «تذكرتها»');
     }
 
+    // ---------------- free recitation (تسميع حر) and sard (السرد) ----------------
+    // No range: the on-device engine starts in discovery mode (whole Quran), locates the reciter from the first seconds
+    // of audio and follows across ayahs, surahs and pages. The current page is shown as the Madinah Mushaf (QCF v2):
+    // words stay hidden until recited (ink), mistakes red, unsure amber. Ends only with «إنهاء» (never on a pause).
+    async function startFree(kind, { auto = true } = {}) {
+      cleanup(); alive = true;
+      const myGen = gen;
+      const isLive = () => alive && gen === myGen;
+      const sard = kind === 'sard';
+      lastFree = kind;
+      if (!(engineSupported() && await engineCached())) { if (isLive()) { if (auto) toast('حمّل المحرك القرآني أولاً (مرة واحدة)'); showSetup(); } return; }
+      if (!isLive()) return;
+      let showText = loadFlag(TEXT_KEY, false), warnOn = loadFlag(WARN_KEY, true);
+      // the tone context is created inside the start tap (a context made later may stay suspended)
+      let toneCtx = null, timer = 0;
+      if (sard) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) toneCtx = new AC(); } catch (e) { toneCtx = null; } }
+      const onResize = () => { if (page && page.mode === 'madani') fitLines($('.mq-lines', el)); };
+      freeStop = () => {
+        if (timer) { clearInterval(timer); timer = 0; }
+        if (raf) { cancelAnimationFrame(raf); raf = 0; }
+        window.removeEventListener('resize', onResize);
+        window.removeEventListener('noor:adhan', onAdhan);
+        if (toneCtx) { try { toneCtx.close(); } catch (e) {} toneCtx = null; }
+      };
+      window.addEventListener('resize', onResize);
+
+      const title = sard ? 'السرد' : 'التسميع';
+      const actions = sard ? `<button class="icon-btn rc-warnbtn${warnOn ? ' on' : ''}" id="rc-warnbtn" aria-pressed="${warnOn}" aria-label="صوت واهتزاز التنبيه">${icon('bell', 18)}</button>` : '';
+      el.innerHTML = header(title, { actions }) + `
+        <div class="rc-ftools">
+          <div class="seg rc-txtseg" role="group" aria-label="عرض النص">
+            <button id="rc-hid" class="${showText ? '' : 'active'}" aria-pressed="${!showText}">مخفي</button>
+            <button id="rc-shw" class="${showText ? 'active' : ''}" aria-pressed="${showText}">ظاهر</button>
+          </div>
+          <button class="chip small${sard ? ' active' : ''}" id="rc-kind" aria-pressed="${sard}">السرد</button>
+          <button class="chip small" id="rc-range">تحديد مقطع</button>
+        </div>
+        <div class="rc-fhead" id="rc-fhead">${sard ? 'اضغط المايك واسرد من حفظك من أي موضع، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع، وسأنتقل إلى الآية التي تقرؤها وأتابعك'}</div>
+        <div class="rc-fwrap${showText ? ' shown' : ''}" id="rc-fwrap"></div>
+        <div class="rc-spacer"></div>
+        <div class="rc-dock" id="rc-dock">
+          <div class="rc-dock-top"><span class="small muted" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : 'اضغط على المايك وابدأ القراءة'}</span><b class="small rc-fcount" id="rc-count"></b></div>
+          <div class="rc-dock-row">
+            <span class="small muted rc-ftime" id="rc-time">${clock(0)}</span>
+            <button class="mic-btn rc-mic" id="rc-mic" aria-label="تشغيل الميكروفون">${icon('mic', 30)}</button>
+            <button class="btn sm" id="rc-end">إنهاء</button>
+          </div>
+        </div>`;
+      { const hd = $('.page-head', el); if (hd) hd.classList.add('sticky-head'); }
+      const micEl = $('#rc-mic', el), statusEl = $('#rc-status', el), countEl = $('#rc-count', el), timeEl = $('#rc-time', el);
+      const wrap = $('#rc-fwrap', el), headEl = $('#rc-fhead', el);
+      const setStatus = t => { if (statusEl) statusEl.textContent = t; };
+      const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
+      const listenText = () => (cur ? (sard ? 'أتابعك… واصل السرد' : 'أتابعك… واصل القراءة') : 'أسمعك… أبحث عن الموضع');
+
+      let rec = null, qe = null, starting = false, recState = 'idle', ending = false, finished = false;
+      let recBlob = null, recSecs = 0, muteTill = 0, lastWarn = 0, warnCount = 0, mistakes = 0;
+      let adhanOn = false;              // the adhan is playing: the engine hears silence (like app audio)
+      const onAdhan = e => { adhanOn = !!(e && e.detail && e.detail.on); };
+      window.addEventListener('noor:adhan', onAdhan);
+      let qWords = [];
+      const judgedKeys = new Set();     // 's:a:w' (engine numbering) judged at least once
+      const ayahsRead = new Set();      // 's:a' with a judged word
+      const issues = new Map();         // 's:a:w' -> feedback kind (correction rules)
+      const issueAyahs = new Set();
+      const visited = new Set();        // pages the recitation went through
+      let cur = null;                   // { s, a } where the reciter is now
+      let page = null;                  // shown page: { p, mode:'madani'|'text', spans, base, prev, groups, ends, endSet, keys }
+      let pageTok = 0, pageWant = 0, raf = 0, mdWarnedHere = false;
+      const counts = () => (qe ? qe.counts() : {});
+
+      const updateCount = () => {
+        if (countEl) countEl.textContent = ayahsRead.size ? `${N(ayahsRead.size)} آية · ${N(mistakes)} ${mistakes === 1 ? 'خطأ' : 'أخطاء'}` : '';
+      };
+      const updateHead = () => {
+        if (!cur || !headEl) return;
+        const p = pageOf(cur.s, cur.a);
+        headEl.innerHTML = `<b class="gold">سورة ${esc(surahName(cur.s))}</b><span>الآية ${N(cur.a)}</span><span>الصفحة ${N(p)}</span><span>الجزء ${N(juzOfPage(p))}</span>`;
+      };
+      timer = setInterval(() => { if (isLive() && rec && timeEl) timeEl.textContent = clock(rec.elapsed()); }, 1000);
+
+      const hidB = $('#rc-hid', el), shwB = $('#rc-shw', el);
+      const setText = v => {
+        showText = v; saveFlag(TEXT_KEY, v);
+        hidB.classList.toggle('active', !v); shwB.classList.toggle('active', v);
+        hidB.setAttribute('aria-pressed', String(!v)); shwB.setAttribute('aria-pressed', String(v));
+        wrap.classList.toggle('shown', v);
+      };
+      hidB.onclick = () => setText(false);
+      shwB.onclick = () => setText(true);
+      const kindEl = $('#rc-kind', el);
+      // free <-> sard changes the tone/warnings, so it is only offered before the session starts (it never throws a running one away)
+      const syncKind = () => { if (kindEl) kindEl.disabled = recState !== 'idle' || starting || ending; };
+      kindEl.onclick = () => { if (recState !== 'idle' || starting || ending) return; startFree(sard ? 'free' : 'sard', { auto: false }); };
+      $('#rc-range', el).onclick = showSetup;
+      const wb = $('#rc-warnbtn', el);
+      if (wb) wb.onclick = () => {
+        warnOn = !warnOn; saveFlag(WARN_KEY, warnOn);
+        wb.classList.toggle('on', warnOn); wb.setAttribute('aria-pressed', String(warnOn));
+        toast(warnOn ? 'التنبيه بالصوت والاهتزاز مفعّل' : 'التنبيه بالصوت والاهتزاز متوقف (تبقى العلامة على الشاشة)');
+      };
+
+      // ---- page display: Madinah Mushaf page (QCF v2), or the plain text of the same page if it cannot load ----
+      function textPage(p) {
+        let h = '<div class="mushaf-text rc-ftext">', i = 0;
+        const groups = [], ends = new Map();
+        for (const seg of pageContent(p)) {
+          if (seg.from === 1) h += `</div><div class="surah-banner">سورة ${esc(surahName(seg.s))}</div>${seg.s !== 1 && seg.s !== 9 ? `<div class="basmala">${BASMALA}</div>` : ''}<div class="mushaf-text rc-ftext">`;
+          for (let a = seg.from; a <= seg.to; a++) {
+            const start = i;
+            for (const w of splitWords(ayah(seg.s, a))) h += `<span class="word" data-i="${i++}">${esc(w)}</span> `;
+            groups.push({ s: seg.s, a, start, end: i });
+            ends.set(seg.s + ':' + a, i);
+            h += `<span class="rc-aend" data-i="${i++}">${ayahMark(a)}</span> `;
+          }
+        }
+        return { html: h + '</div>', groups, ends };
+      }
+      async function showPage(p, dir) {
+        const tok = ++pageTok;
+        pageWant = p;
+        let L = null, fam = null;
+        try { [L, fam] = await Promise.all([madani.loadPage(p), madani.loadFont(p)]); } catch (e) { L = null; }
+        if (!isLive() || tok !== pageTok) return;
+        let html, groups, ends, mode;
+        if (L) { const pg = pageGlyphs(L); groups = pg.groups; ends = pg.ends; mode = 'madani'; html = renderPageLines(L, { hideText: true, family: fam }); }
+        else {
+          ({ html, groups, ends } = textPage(p)); mode = 'text';
+          if (!mdWarnedHere) { mdWarnedHere = true; toast('تعذّر تحميل خط مصحف المدينة، عُرضت الصفحة بالخط العادي'); }
+        }
+        const names = [...new Set(pageContent(p).map(g => g.s))].map(s => 'سورة ' + surahName(s)).join(' · ');
+        wrap.innerHTML = `<div class="mp-page rc-fpage page-${side(p)}${dir ? ' turn-' + dir : ''}" data-p="${p}">
+          <div class="mp-top"><span class="mp-surah">${esc(names)}</span><span class="mp-juz">الجزء ${N(juzOfPage(p))}</span></div>
+          <div class="mp-body${mode === 'madani' ? ' madani' : ''}">${html}</div>
+          <div class="mp-foot"><span class="mp-num">${N(p)}</span></div>
+        </div>`;
+        const spans = $$('[data-i]', wrap);
+        page = {
+          p, mode, spans, groups, ends, endSet: new Set(ends.values()),
+          base: spans.map(x => x.className), prev: spans.map(() => ''), keys: new Set(groups.map(g => g.s + ':' + g.a))
+        };
+        if (mode === 'madani') { madani.setShown([p]); fitLines($('.mq-lines', wrap)); madani.prefetch(p); }
+        paintPage();
+        try { const r = wrap.getBoundingClientRect(); if (r.top < 0 || r.top > window.innerHeight * 0.5) window.scrollTo({ top: Math.max(0, window.scrollY + r.top - 70), behavior: 'auto' }); } catch (e) {}
+      }
+
+      /** Classes of every unit on the shown page from the engine verdicts + correction-rule issues. */
+      function paintPage() {
+        if (!page) return;
+        const keys = page.keys, cn = counts();
+        const m = mapVerdicts(qWords.filter(v => keys.has(v.s + ':' + v.a)), page.groups, cn);
+        const iss = [];
+        for (const [k, kind] of issues) {
+          if (kind === 'vowel' || kind === 'repeat') continue;
+          const [s, a, w] = k.split(':').map(Number);
+          if (keys.has(s + ':' + a)) iss.push({ s, a, w, st: 'wrong' });
+        }
+        const bad = mapVerdicts(iss, page.groups, cn);
+        const st = new Array(page.spans.length).fill('f-pend');
+        let lastJ = -1;
+        for (const g of page.groups) {
+          let all = true;
+          for (let i = g.start; i < g.end; i++) {
+            const v = m.get(i);
+            const x = bad.has(i) ? 'f-bad' : !v || v.st === 'pending' ? 'f-pend' : v.st === 'ok' ? 'f-ok' : v.st === 'unsure' ? 'f-uns' : 'f-bad';
+            st[i] = x;
+            if (x === 'f-pend') all = false; else if (i > lastJ) lastJ = i;
+          }
+          const e = page.ends.get(g.s + ':' + g.a);
+          if (e != null) st[e] = all ? 'f-ok' : 'f-pend';       // ayah-end mark shows once the ayah is complete
+        }
+        let curI = -1;
+        if (!finished && lastJ >= 0) for (let i = lastJ + 1; i < st.length; i++) if (!page.endSet.has(i) && st[i] === 'f-pend') { curI = i; break; }
+        for (let i = 0; i < st.length; i++) {
+          const c = st[i] + (i === curI ? ' f-cur' : '');
+          if (c === page.prev[i]) continue;
+          page.prev[i] = c;
+          page.spans[i].className = page.base[i] + ' ' + c;
+        }
+        // keep the line being recited in the upper part of the screen (the dock covers the bottom)
+        const sp = page.spans[curI >= 0 ? curI : lastJ];
+        if (sp && curI !== page.curI) {
+          page.curI = curI;
+          try {
+            const r = sp.getBoundingClientRect();
+            if (r.top < 70 || r.bottom > window.innerHeight * 0.6) {
+              const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+              window.scrollTo({ top: Math.max(0, window.scrollY + r.top - window.innerHeight * 0.3), behavior: reduce ? 'auto' : 'smooth' });
+            }
+          } catch (e) { /* ignore */ }
+        }
+      }
+      const schedulePaint = () => {
+        if (document.hidden) { paintPage(); return; }
+        if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (isLive()) paintPage(); });
+      };
+
+      function moveTo(s, a) {
+        const first = !cur;
+        cur = { s, a };
+        const p = pageOf(s, a);
+        visited.add(p);
+        if (p !== pageWant) showPage(p, page && !first ? (p > page.p ? 'next' : 'prev') : '');
+        updateHead();
+        if (first) setStatus(listenText());
+      }
+      function applyWords(words) {
+        if (!words.length && qWords.length) return;           // the engine dropped its tracker: keep the page
+        let latest = null;
+        for (const v of words) {
+          if (v.st === 'pending') continue;
+          ayahsRead.add(v.s + ':' + v.a);
+          const k = v.s + ':' + v.a + ':' + v.w;
+          if (!judgedKeys.has(k)) { judgedKeys.add(k); latest = v; }   // Quran order: the last new word is the frontier
+        }
+        qWords = words;
+        if (latest) moveTo(latest.s, latest.a);
+        updateCount();
+        schedulePaint();
+      }
+
+      // ---- the light warning (sard): soft tone + short vibration + a fading «انتبه» near the word ----
+      function beep() {
+        if (!toneCtx) return;
+        try {
+          if (toneCtx.state === 'suspended') toneCtx.resume().catch(() => {});
+          const t = toneCtx.currentTime, o = toneCtx.createOscillator(), g = toneCtx.createGain();
+          o.type = 'sine'; o.frequency.value = 660;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.06, t + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+          o.connect(g); g.connect(toneCtx.destination);
+          o.start(t); o.stop(t + 0.13);
+          // the mic has no echo cancellation: the engine hears silence instead of the tone (+300 ms tail)
+          muteTill = Date.now() + 120 + 300;
+        } catch (e) { /* ignore */ }
+      }
+      function showPill(s, a, w) {
+        if (!wrap) return;
+        const pill = document.createElement('div');
+        pill.className = 'rc-warn'; pill.setAttribute('role', 'status'); pill.textContent = 'انتبه';
+        let placed = false;
+        if (page && page.keys.has(s + ':' + a)) {
+          const idx = [...mapVerdicts([{ s, a, w, st: 'wrong' }], page.groups, counts()).keys()][0];
+          const sp = idx != null ? page.spans[idx] : null;
+          if (sp) {
+            const r = sp.getBoundingClientRect(), b = wrap.getBoundingClientRect();
+            pill.style.left = Math.max(36, Math.min(b.width - 36, r.left + r.width / 2 - b.left)) + 'px';
+            pill.style.top = Math.max(0, r.top - b.top) + 'px';
+            placed = true;
+          }
+        }
+        if (!placed) pill.classList.add('top');
+        wrap.appendChild(pill);
+        setTimeout(() => { try { pill.remove(); } catch (e) {} }, 1600);
+      }
+      function warn(s, a, w) {
+        const now = Date.now();
+        if (now - lastWarn < 2000) return;                       // one warning per burst of flags
+        lastWarn = now; warnCount++;
+        if (warnOn) {
+          beep();
+          let vib = false;
+          try { vib = !!(navigator.vibrate && navigator.vibrate(60)); } catch (e) { vib = false; }
+          if (!vib) haptic('light');
+        }
+        showPill(s, a, w);
+      }
+      function onIssue(issue) {
+        const kind = ISSUE_KIND[issue.kind]; if (!kind) return;
+        const s = issue.s || (cur && cur.s); if (!s) return;
+        const n = issue.kind === 'possible_skipped_ayah' || issue.kind === 'unclear_ayah' ? Math.max(1, issue.words | 0) : 1;
+        for (let k = 0; k < n; k++) { const key = s + ':' + issue.a + ':' + (issue.w + k); if (!issues.has(key) || kind !== 'vowel') issues.set(key, kind); }
+        issueAyahs.add(s + ':' + issue.a);
+        if (kind !== 'vowel' && kind !== 'repeat') {
+          mistakes++;
+          if (sard && WARN_KINDS.has(issue.kind)) warn(s, issue.a, issue.w); else haptic('light');
+        }
+        updateCount();
+        schedulePaint();
+      }
+
+      // ---- mic + engine (continuous; a pause never ends the session) ----
+      async function toggle() {
+        if (finished || ending || starting) return;
+        if (recState === 'rec') { rec.pause(); recState = 'paused'; micEl.classList.remove('live'); setLevel(0); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); return; }
+        if (recState === 'paused') { rec.resume(); recState = 'rec'; micEl.classList.add('live'); setStatus(listenText()); return; }
+        starting = true; syncKind();
+        setStatus('جارٍ تجهيز المحرك القرآني…');
+        let early = [], earlyLen = 0, live = false, appTill = 0, r = null;
+        try {
+          r = await startRecorder({ onPcm: pcm => {
+            if (finished || recState === 'paused') return;
+            // app audio (word taps) or the warning tone: the engine gets silence of the same length (timeline stays continuous)
+            const now = Date.now();
+            if ((wAudio && !wAudio.paused && !wAudio.ended) || reciterPlaying()) appTill = now + 300;
+            if (now < appTill || now < muteTill || adhanOn) pcm = new Float32Array(pcm.length);   // the adhan is not recitation: silence
+            if (live && qe) { qe.pcm(pcm); return; }
+            if (earlyLen < 16000 * 20) { early.push(new Float32Array(pcm)); earlyLen += pcm.length; }
+          }, onLevel: setLevel, onError: err => {
+            if (!isLive()) return;
+            toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : 'تعذر تسجيل الصوت');
+            recState = 'idle'; syncKind(); micEl.classList.remove('live'); setStatus('اضغط على الميكروفون للمحاولة مجدداً');
+          } });
+          if (!r) { starting = false; return; }
+          if (!isLive() || ending) { starting = false; r.stop().catch(() => {}); return; }
+          rec = r; recCtl = r; recState = 'rec'; micEl.classList.add('live');
+          qe = await openEngine();
+          if (!isLive() || ending) { starting = false; return; }
+          qe.startFree({
+            onVerdicts: w => { if (isLive() && !finished) applyWords(w); },
+            onIssue: i => { if (isLive() && !finished) onIssue(i); },
+            onError: () => { if (isLive() && !finished && !ending) { toast('توقف المحرك القرآني — عرضنا ما سُمع'); finish(); } },
+            onSlow: () => { if (isLive() && !finished) toast('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); }
+          }, { hint: loadPos() });
+          activeEngine = qe;
+          for (const b of early) qe.pcm(b);
+          early = []; earlyLen = 0; live = true;
+          setStatus(listenText());
+        } catch (e) {
+          toast('تعذّر تشغيل المحرك القرآني');
+          if (r) { r.stop().catch(() => {}); }
+          rec = null; recCtl = null; recState = 'idle'; micEl.classList.remove('live');
+          setStatus('اضغط على الميكروفون للمحاولة مجدداً');
+        }
+        starting = false; syncKind();
+      }
+
+      async function finish() {
+        if (finished || ending) return;
+        ending = true; syncKind();
+        if (micEl) { micEl.disabled = true; micEl.classList.remove('live'); }
+        setStatus('جارٍ إكمال التحليل…');
+        const r = rec; rec = null;
+        if (r) { try { recBlob = await r.stop(); } catch (e) { /* ignore */ } recSecs = r.elapsed(); recCtl = null; }
+        if (!isLive()) return;
+        // stop only the engine whose startFree ran; one opened but never started would hand back a stale previous result
+        if (qe && activeEngine === qe) { const w = await qe.stop(); activeEngine = null; if (!isLive()) return; if (w.length) applyWords(w); }
+        else qe = null;
+        finalizeFree();
+      }
+
+      /** Results over the ayahs actually covered: the expected word list is built from them, per surah range. */
+      function finalizeFree() {
+        finished = true;
+        paintPage();
+        const segs = freeSegments(qWords, [...issueAyahs], 2, 3);   // < 3 words read ok = a brief false lock, not a recitation
+        if (!segs.length) { toast('لم أتعرّف على تلاوة — حاول مجدداً بصوت أوضح'); showSetup(); return; }
+        const flat = [], groups = [];
+        for (const g of segs) for (let a = g.from; a <= g.to; a++) {
+          const start = flat.length;
+          for (const w of splitWords(ayah(g.s, a))) flat.push({ w, a, s: g.s });
+          groups.push({ s: g.s, a, start, end: flat.length });
+        }
+        const groupOf = [];
+        groups.forEach(g => { for (let k = g.start; k < g.end; k++) groupOf[k] = g; });
+        const cn = counts();
+        const m = mapVerdicts(qWords, groups, cn);
+        const iss = new Map();
+        for (const [k, kind] of issues) {
+          const [s, a, w] = k.split(':').map(Number);
+          for (const i of mapVerdicts([{ s, a, w, st: 'wrong' }], groups, cn).keys()) if (!iss.has(i) || kind !== 'vowel') iss.set(i, kind);
+        }
+        const isBad = i => { const k = iss.get(i); return k && k !== 'vowel' && k !== 'repeat'; };
+        const pre = flat.map((_, i) => {
+          const v = m.get(i);
+          if (isBad(i)) return 'bad';
+          return !v || v.st === 'pending' ? 'pending' : v.st === 'ok' || v.st === 'unsure' ? 'ok' : 'bad';
+        });
+        // words before the first and after the last word reached in each range were never recited: left out, not mistakes
+        const out = new Array(flat.length).fill(false);
+        for (const g of segs) {
+          const idx = []; flat.forEach((x, i) => { if (x.s === g.s && x.a >= g.from && x.a <= g.to) idx.push(i); });
+          let lo = idx.findIndex(i => pre[i] !== 'pending'), hi = -1;
+          for (let k = idx.length - 1; k >= 0; k--) if (pre[idx[k]] !== 'pending') { hi = k; break; }
+          idx.forEach((i, k) => { if (lo < 0 || k < lo || k > hi) out[i] = true; });
+        }
+        const st = pre.map(x => (x === 'ok' ? 'ok' : 'bad'));
+        const analysis = { words: st.map((x, i) => {
+          if (out[i]) return { i, kind: 'unreached', heard: '' };
+          const k = iss.get(i), v = m.get(i);
+          if (x === 'ok') return { i, kind: k === 'vowel' || k === 'repeat' ? k : v && v.vowel > 0 ? 'vowel' : 'ok', heard: '' };
+          return { i, kind: isBad(i) ? k : v && v.st === 'wrong' ? 'wrong' : 'skip', heard: '' };
+        }), extras: [] };
+        const inScope = analysis.words.filter(x => x.kind !== 'unreached');
+        const okN = inScope.filter(x => st[x.i] === 'ok').length;
+        const acc = inScope.length ? Math.round(100 * okN / inScope.length) : 0;
+        const missed = inScope.filter(x => st[x.i] === 'bad').map(x => flat[x.i].w);
+        try {
+          const byS = new Map();
+          for (const x of inScope) { const s = flat[x.i].s; if (!byS.has(s)) byS.set(s, []); byS.get(s).push({ a: flat[x.i].a, w: x.i - groupOf[x.i].start + 1, kind: x.kind }); }
+          for (const [s, items] of byS) recordWords(s, items);
+        } catch (e) { /* ignore */ }
+        const ayahStats = [];
+        for (const g of groups) {
+          let n = 0, ok = 0;
+          for (let k = g.start; k < g.end; k++) if (!out[k]) { n++; if (st[k] === 'ok') ok++; }
+          if (n) ayahStats.push({ s: g.s, a: g.a, ok, n, acc: Math.round(100 * ok / n) });
+        }
+        // history: one entry per surah range recited
+        let pts = 0;
+        for (const g of segs) {
+          const ws = inScope.filter(x => flat[x.i].s === g.s && flat[x.i].a >= g.from && flat[x.i].a <= g.to);
+          if (!ws.length) continue;
+          const ok = ws.filter(x => st[x.i] === 'ok').length;
+          pts += addRecitation({ s: g.s, from: g.from, to: g.to, acc: Math.round(100 * ok / ws.length), miss: ws.filter(x => st[x.i] === 'bad').map(x => flat[x.i].w) }) || 0;
+        }
+        if (cur) savePos(cur.s, cur.a);
+        const prev = segs.length === 1 ? lastAttempt(segs[0].s, segs[0].from, segs[0].to, 1) : null;
+        haptic('heavy');
+        showResult({
+          acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar: [], prev, hideMode: false,
+          span: { segs, kind, pages: visited.size, ayahs: ayahStats.length, warns: warnCount, mistakes: inScope.filter(x => st[x.i] === 'bad').length }
+        });
+      }
+
+      micEl.onclick = toggle;
+      $('#rc-end', el).onclick = () => { if (recState === 'idle' && !qe && !starting) { toast('اضغط على المايك وابدأ القراءة'); return; } finish(); };
+      // a red word: tap to hear it
+      wrap.addEventListener('click', e => {
+        const sp = e.target.closest('.f-bad'); if (!sp || !page || ending) return;
+        const i = +sp.dataset.i, g = page.groups.find(x => i >= x.start && i < x.end);
+        if (!g) return;
+        const n = g.end - g.start, en = counts()[g.s + ':' + g.a] | 0;
+        playWordAt(g.s, g.a, (page.mode === 'madani' ? i - g.start : en && en !== n ? Math.floor((i - g.start) * en / n) : i - g.start) + 1);
+      });
+      // the page where the last free session ended (or the first page) waits under the mic until the engine locates
+      { const h = loadPos(); showPage(h ? pageOf(h.surah, h.ayah) : 1, ''); }
+      if (auto) toggle();
+    }
+
     // ---------------- result ----------------
     function ringSvg(value, color, size = 140) {
       const R = size * 0.386, C = 2 * Math.PI * R, c = size / 2;
@@ -838,7 +1309,10 @@ export default {
     }
 
     /** Detailed feedback: change vs last attempt, mistake counts, ayah map, per-ayah mistakes, mutashabihat. */
-    function feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode }) {
+    function feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode, free = false }) {
+      // free / sard sessions may span surahs: ayahs are then named with their surah
+      const multi = new Set(flat.map(x => x.s || 0)).size > 1;
+      const ayahLabel = (s, a) => (multi && s ? `سورة ${esc(surahName(s))} · الآية ${N(a)}` : `الآية ${N(a)}`);
       const bad = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached');
       const unreached = analysis.words.length - analysis.words.filter(x => x.kind !== 'unreached').length;
       const count = k => bad.filter(x => x.kind === k).length;
@@ -858,7 +1332,7 @@ export default {
       }
       if (ayahStats.length > 1) {
         html += `<h2 class="section-title">خريطة الآيات</h2><div class="card"><div class="rc-amap">${ayahStats.map(x =>
-          `<button class="rc-acell" data-ayah="${x.a}" style="--c:${accColor(x.acc)}" aria-label="آية ${N(x.a)}: ${N(x.acc)}٪"><span>${N(x.a)}</span><small>${N(x.acc)}٪</small></button>`).join('')}</div>
+          `<button class="rc-acell" data-ayah="${x.a}"${x.s ? ` data-s="${x.s}"` : ''} style="--c:${accColor(x.acc)}" aria-label="${x.s ? esc(surahName(x.s)) + ' ' : ''}آية ${N(x.a)}: ${N(x.acc)}٪"><span>${N(x.a)}</span><small>${N(x.acc)}٪</small></button>`).join('')}</div>
           <p class="muted small mt">اضغط على آية لتسميعها وحدها</p></div>`;
       }
       if (similar.length) {
@@ -868,19 +1342,19 @@ export default {
       }
       if (bad.length) {
         const byAyah = new Map();
-        bad.forEach(x => { const a = flat[x.i].a; if (!byAyah.has(a)) byAyah.set(a, []); byAyah.get(a).push(x); });
-        html += `<h2 class="section-title">ملاحظات التسميع</h2>${[...byAyah].map(([a, items]) => `
+        bad.forEach(x => { const k = (flat[x.i].s || 0) + ':' + flat[x.i].a; if (!byAyah.has(k)) byAyah.set(k, []); byAyah.get(k).push(x); });
+        html += `<h2 class="section-title">ملاحظات التسميع</h2>${[...byAyah].map(([k, items]) => { const [s, a] = k.split(':').map(Number); return `
           <div class="card rc-mist">
-            <div class="row"><b class="gold">الآية ${N(a)}</b><span class="muted small">${N(items.length)} ${items.length > 2 ? 'ملاحظات' : 'ملاحظة'}</span></div>
-            ${items.map(x => `<button class="rc-mrow k-${x.kind}" data-i="${x.i}" data-w="${x.i - groupOf[x.i].start + 1}" data-a="${a}">
+            <div class="row"><b class="gold">${ayahLabel(s, a)}</b><span class="muted small">${N(items.length)} ${items.length > 2 ? 'ملاحظات' : 'ملاحظة'}</span></div>
+            ${items.map(x => `<button class="rc-mrow k-${x.kind}" data-i="${x.i}" data-w="${x.i - groupOf[x.i].start + 1}" data-a="${a}"${s ? ` data-s="${s}"` : ''}>
               <span class="quran rc-mword">${esc(flat[x.i].w)}</span>
               <span class="rc-mkind">${esc(label(x.kind))}</span>
               ${x.kind === 'wrong' && x.heard ? `<span class="muted small">قلتَ: «${esc(x.heard)}»</span>` : ''}
               <span class="rc-mplay">${icon('play', 14)}</span>
             </button>`).join('')}
-          </div>`).join('')}`;
+          </div>`; }).join('')}`;
       }
-      if (unreached) html += `<p class="muted small center mt">لم تصل إلى ${N(unreached)} كلمة في آخر المقطع، فلم تُحتسب في ملاحظاتك (لكنها تُنقص الدقة).</p>`;
+      if (unreached && !free) html += `<p class="muted small center mt">لم تصل إلى ${N(unreached)} كلمة في آخر المقطع، فلم تُحتسب في ملاحظاتك (لكنها تُنقص الدقة).</p>`;
       if (!hideMode) html += '<p class="muted small center mt">الملاحظات آلية وقد تخطئ، ولا تغني عن التلقّي من معلّم متقن.</p>';
       if (analysis.extras.length) {
         html += `<div class="card"><b class="gold">كلمات زائدة لم ترد في النص</b><div class="row mt">${analysis.extras.slice(0, 12).map(x =>
@@ -889,12 +1363,28 @@ export default {
       return html;
     }
 
-    function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false }) {
-      const { s, from, to } = cfg;
+    function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false, span = null }) {
+      // span: a free / sard session ({ segs:[{s,from,to}], kind, pages, ayahs, warns, mistakes }); otherwise the cfg range
+      const segs = span ? span.segs : [{ s: cfg.s, from: cfg.from, to: cfg.to }];
+      const { s, from, to } = segs[0];
       const rg = gen;
       const msg = acc >= 90 ? 'ما شاء الله، تسميع متقن' : acc >= 70 ? 'جيد جداً، راجع الكلمات الحمراء' : 'التكرار طريق الإتقان';
-      const badAyahs = ayahStats.filter(x => x.ok < x.n).map(x => x.a);
-      const retry = badAyahs.length && (badAyahs[0] !== from || badAyahs[badAyahs.length - 1] !== to) ? { from: badAyahs[0], to: badAyahs[badAyahs.length - 1] } : null;
+      // retry the ayahs with mistakes (in the surah of the first one)
+      const badSt = ayahStats.filter(x => x.ok < x.n);
+      const rs = badSt.length ? badSt[0].s || s : s;
+      const badAyahs = badSt.filter(x => (x.s || s) === rs).map(x => x.a);
+      const retry = badAyahs.length && (span || badAyahs[0] !== from || badAyahs[badAyahs.length - 1] !== to) ? { s: rs, from: badAyahs[0], to: badAyahs[badAyahs.length - 1] } : null;
+      const where = segs.map(g => `${surahName(g.s)} ${g.from === g.to ? N(g.from) : N(g.from) + '–' + N(g.to)}`).join('، ');
+      const summary = span ? `<div class="card rc-fsum">
+          <b class="gold">${span.kind === 'sard' ? 'ملخص السرد' : 'ملخص التسميع الحر'}</b>
+          <div class="rc-stats">
+            <div class="rc-stat"><b>${N(span.pages)}</b><span>${span.pages === 1 ? 'صفحة' : 'صفحات'}</span></div>
+            <div class="rc-stat"><b>${N(span.ayahs)}</b><span>آية</span></div>
+            <div class="rc-stat skip"><b>${N(span.mistakes)}</b><span>أخطاء</span></div>
+            <div class="rc-stat"><b>${clock(secs)}</b><span>المدة</span></div>
+          </div>
+          ${span.kind === 'sard' && span.warns ? `<p class="muted small mt">نُبّهت ${N(span.warns)} ${span.warns === 1 ? 'مرة' : 'مرات'} أثناء السرد</p>` : ''}
+        </div>` : '';
       const detected = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached').slice(0, 40).map(x => ({ word: flat[x.i] ? flat[x.i].w : '', kind: x.kind, heard: x.heard || '' }));
       const tooLong = secs > MAX_REVIEW_SECS;
       if (blob) { try { resUrl = URL.createObjectURL(blob); } catch (e) { resUrl = null; } }
@@ -912,9 +1402,10 @@ export default {
             <div class="ring-label score" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${N(acc)}٪</div>
           </div>
           <h2 class="mt">${esc(msg)}</h2>
-          <p class="muted small">${esc(surahName(s))} · الآيات ${N(from)}–${N(to)} · +${N(pts)} نقطة</p>
+          <p class="muted small">${span ? esc(where) : `${esc(surahName(s))} · الآيات ${N(from)}–${N(to)}`} · +${N(pts)} نقطة</p>
         </div>
-        ${feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode })}
+        ${summary}
+        ${feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode, free: !!span })}
         ${!analysis.words.length && missed.length ? `<h2 class="section-title">الكلمات التي تحتاج مراجعة</h2><div class="card"><div class="row">${missed.map(w => `<span class="chip quran">${esc(w)}</span>`).join('')}</div></div>` : ''}
         ${retry ? `<button class="btn block mt" id="rc-retry">${icon('repeat', 18)} أعد الآيات التي أخطأت فيها (${N(retry.from)}–${N(retry.to)})</button>` : ''}
         <div class="card mt">
@@ -934,17 +1425,20 @@ export default {
           <button class="btn ghost" id="rc-rev">أضف للمراجعة</button>
         </div>
         <button class="btn ghost block mt" id="rc-new">تسميع جديد</button>`;
-      $('#rc-again', el).onclick = startSession;
-      $('#rc-new', el).onclick = showSetup;
+      // a range session from a free one uses the on-device engine when it is there
+      const toRange = (ss, f, t) => { cfg.s = ss; cfg.from = f; cfg.to = t; if (span && engineSupported()) cfg.mode = 'quran'; startSession(); };
+      $('#rc-again', el).onclick = () => (span ? startFree(span.kind) : startSession());
+      $('#rc-new', el).onclick = () => (span ? startFree(span.kind, { auto: false }) : showSetup());
       const retryBtn = $('#rc-retry', el);
-      if (retryBtn) retryBtn.onclick = () => { cfg.from = retry.from; cfg.to = retry.to; startSession(); };
-      $$('.rc-acell', el).forEach(b => b.onclick = () => { cfg.from = cfg.to = +b.dataset.ayah; startSession(); });
+      if (retryBtn) retryBtn.onclick = () => toRange(retry.s, retry.from, retry.to);
+      $$('.rc-acell', el).forEach(b => b.onclick = () => toRange(+b.dataset.s || s, +b.dataset.ayah, +b.dataset.ayah));
       $$('.rc-mrow', el).forEach(b => b.onclick = () => {
-        playWordAt(s, +b.dataset.a, +b.dataset.w);
+        playWordAt(+b.dataset.s || s, +b.dataset.a, +b.dataset.w);
         const i = +b.dataset.i; if (flat[i]) toast('الصواب: ' + flat[i].w);
       });
       $('#rc-rev', el).onclick = e => {
-        const r = addReview(s, from, to);
+        let r = false;
+        for (const g of segs) r = addReview(g.s, g.from, g.to) || r;
         toast(r ? 'أُضيف المقطع إلى المراجعة' : 'المقطع موجود في المراجعة مسبقاً');
         e.currentTarget.disabled = true;
       };
@@ -970,7 +1464,8 @@ export default {
       };
 
       const box = $('#rc-tj', el), tjBtn = $('#rc-tjbtn', el);
-      if (box && tjBtn) {
+      if (box && tjBtn && segs.length > 1) box.innerHTML = '<div class="card"><p class="muted small center">تقييم التجويد بالذكاء متاح لتلاوة من سورة واحدة.</p></div>';
+      else if (box && tjBtn) {
         const text = Array.from({ length: to - from + 1 }, (_, k) => ayah(s, from + k)).join(' ');
         const idle = () => { box.innerHTML = '<button class="btn block" id="rc-tjbtn">تقييم التجويد بالذكاء ✨</button>'; $('#rc-tjbtn', box).onclick = run; };
         async function run() {
@@ -994,7 +1489,9 @@ export default {
       }
     }
 
-    showSetup();
+    if (!params.id && !q.mode && engineSupported()) {
+      engineCached().then(ok => { if (!alive) return; if (ok) startFree('free', { auto: false }); else showSetup(); }).catch(() => { if (alive) showSetup(); });
+    } else showSetup();
     return cleanup;
   }
 };

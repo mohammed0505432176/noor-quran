@@ -20,6 +20,11 @@ async function LN() {
   return LocalNotifications;
 }
 
+/** adhan sound choice ('full'|'short'|'silent') -> notification channel id */
+export function adhanChannel(choice) {
+  return choice === 'short' ? 'adhan_short' : choice === 'silent' ? 'adhan_silent' : 'adhan_full';
+}
+
 export async function ensurePermission() {
   if (isNative()) {
     try {
@@ -27,6 +32,10 @@ export async function ensurePermission() {
       // channel creation needs no permission; do it first
       try {
         await ln.createChannel({ id: 'adhan', name: 'الأذان', importance: 5, visibility: 1, vibration: true });
+        // channels are immutable once created: sound changes need NEW ids (sound = res/raw file name, no extension)
+        await ln.createChannel({ id: 'adhan_full', name: 'الأذان كاملًا', description: 'أذان كامل عند دخول وقت الصلاة', importance: 5, visibility: 1, vibration: true, sound: 'adhan' });
+        await ln.createChannel({ id: 'adhan_short', name: 'تكبيرات قصيرة', description: 'تكبيرات قصيرة عند دخول وقت الصلاة', importance: 5, visibility: 1, vibration: true, sound: 'adhan_short' });
+        await ln.createChannel({ id: 'adhan_silent', name: 'إشعار صامت', description: 'إشعار وقت الصلاة بدون صوت', importance: 2, visibility: 1, vibration: false });
         await ln.createChannel({ id: 'reminders', name: 'التذكيرات', importance: 3, visibility: 1, vibration: true });
       } catch (e) { /* channels are Android-only */ }
       const r = await ln.requestPermissions();
@@ -84,16 +93,34 @@ export async function cancelRange(min, max) {
   webTimers.forEach(clearTimeout); webTimers = [];
 }
 
-export async function testNotification() {
+/** Cancel specific pending notification ids. */
+export async function cancelIds(ids) {
+  if (!isNative() || !ids.length) return;
+  try { const ln = await LN(); await ln.cancel({ notifications: ids.map(id => ({ id })) }); } catch (e) { /* ignore */ }
+}
+
+/** Test notification after delaySec seconds on the given channel (default: full adhan). */
+export async function testNotification(channel = 'adhan_full', delaySec = 10) {
   const p = await ensurePermission();
   if (!p.granted) return { ...p, sent: false };
-  const at = new Date(Date.now() + 5000);
-  const item = { id: 3099, title: 'تجربة التنبيه', body: 'التنبيهات تعمل بنجاح، بارك الله فيك', at, channel: 'adhan' };
+  const at = new Date(Date.now() + delaySec * 1000);
+  const item = { id: 3099, title: 'تجربة الأذان', body: 'حيّ على الصلاة · هكذا سيصلك التنبيه', at, channel };
   if (isNative()) {
     const ln = await LN();
-    await ln.schedule({ notifications: [{ id: item.id, title: item.title, body: item.body, schedule: { at, allowWhileIdle: true }, channelId: 'adhan', smallIcon: 'ic_stat_noor' }] });
+    await ln.schedule({ notifications: [{ id: item.id, title: item.title, body: item.body, schedule: { at, allowWhileIdle: true }, channelId: channel, smallIcon: 'ic_stat_noor' }] });
     return { ...p, sent: true };
   }
-  setTimeout(() => { webNotify(item.title, { body: item.body, icon: 'icon-192.png' }); }, 5000);
+  setTimeout(() => { webNotify(item.title, { body: item.body, icon: 'icon-192.png' }); }, delaySec * 1000);
   return { ...p, sent: true };
+}
+
+/** Remove delivered prayer notifications in [min,max] (stops their sound) when the in-app adhan takes over. */
+export async function clearDelivered(min, max) {
+  if (!isNative()) return;
+  try {
+    const ln = await LN();
+    const { notifications } = await ln.getDeliveredNotifications();
+    const ids = notifications.filter(n => n.id >= min && n.id <= max).map(n => ({ id: n.id, tag: n.tag }));
+    if (ids.length) await ln.removeDeliveredNotifications({ notifications: ids });
+  } catch (e) { /* ignore */ }
 }

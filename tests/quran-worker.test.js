@@ -11,7 +11,7 @@ const stubs = {
 register('data:text/javascript,' + encodeURIComponent(`const m = ${JSON.stringify(stubs)};
 export async function resolve(s, c, n) { return m[s] ? { url: m[s], shortCircuit: true } : n(s, c); }`));
 
-const N = { 1: 12, 2: 5 };                                  // ayah 1: 12 words, ayah 2: 5 words
+const N = { 1: 12, 2: 5, 7: 4 };                            // ayah 1: 12 words, ayah 2: 5 words, ayah 7: 4 words (free mode test)
 const v = (ayah, word, state) => ({ surah: 2, ayah, word, state, vowelErrors: 0, distance: 0 });
 let steps = [], finalMsgs = [];
 const fake = {
@@ -73,7 +73,47 @@ test('the same tracker carrying on into the next ayah settles the lagging last w
   assert.equal(st(final, 1, 11), 'ok');
 });
 
+test('free mode across two surahs: verdicts keep their surah keys and nothing leaks between surahs', async () => {
+  const sv = (s, a, w, state) => ({ surah: s, ayah: a, word: w, state, vowelErrors: 0, distance: 0 });
+  const seen = new Map();
+  steps = [
+    { verdicts: [0, 1, 2, 3].map(w => sv(1, 7, w, 'ok')) },                                                   // surah 1 ayah 7
+    { verdicts: [0, 1, 2, 3].map(w => sv(1, 7, w, 'ok')).concat([0, 1, 2].map(w => sv(112, 1, w, 'ok'))) }    // then 112:1
+  ];
+  finalMsgs = [];
+  onMsg = m => { if (m.type === 'verdicts') for (const x of m.words) seen.set(`${x.s}:${x.a}:${x.w}`, x.st); };
+  send({ type: 'start', sid: ++sid, free: true });
+  await new Promise(r => setTimeout(r, 20));
+  const feeds = steps.length;                                        // the fake consumes `steps` as it feeds
+  for (let i = 0; i < feeds; i++) { send({ type: 'pcm', sid, samples: new Float32Array(7680) }); await new Promise(r => setTimeout(r, 20)); }
+  const stopped = next('stopped'); send({ type: 'stop', sid });
+  const fin = await stopped;
+  const keys = [...seen.keys()];
+  assert.ok(keys.length > 0, 'verdicts were produced');
+  for (const k of keys) assert.ok(k.startsWith('1:7:') || k.startsWith('112:1:'), `unexpected key ${k}`);
+  assert.equal(seen.get('1:7:0'), 'ok');
+  assert.equal(seen.get('112:1:0'), 'ok');
+  for (const x of fin.words) assert.ok((x.s === 1 && x.a === 7) || (x.s === 112 && x.a === 1), `final leaked ${x.s}:${x.a}`);
+});
+
 test('the passage\'s last reached ayah keeps the stop-lag rule (short tail of a confirmed ayah is read)', async () => {
   const { final } = await run([{ verdicts: [...range(1, 0, 12, 'ok'), ...range(2, 0, 4, 'ok')] }], confirmed);
   assert.equal(st(final, 2, 4), 'ok');
+});
+
+test('free mode: a brief wrong lock on another surah (3 verdicts, then relocation) leaves no trace in the final words', async () => {
+  const sv = (s, a, w, state) => ({ surah: s, ayah: a, word: w, state, vowelErrors: 0, distance: 0 });
+  steps = [
+    { verdicts: [sv(3, 7, 0, 'ok'), sv(3, 7, 1, 'skipped'), sv(3, 7, 2, 'ok')] },                                   // wrong lock, 3 verdicts
+    { relocate: true, verdicts: [sv(3, 7, 0, 'ok'), sv(3, 7, 1, 'skipped'), sv(3, 7, 2, 'ok'), ...[0, 1, 2, 3, 4].map(w => sv(2, 2, w, 'ok'))] }
+  ];
+  finalMsgs = [{ type: 'final_sequence', verses: [{ surah: 2, ayah: 2 }] }];
+  onMsg = () => {};
+  send({ type: 'start', sid: ++sid, free: true });
+  await new Promise(r => setTimeout(r, 20));
+  for (let i = 0; i < 2; i++) { send({ type: 'pcm', sid, samples: new Float32Array(7680) }); await new Promise(r => setTimeout(r, 20)); }
+  const stopped = next('stopped'); send({ type: 'stop', sid });
+  const fin = await stopped;
+  assert.ok(fin.words.length > 0 && fin.words.every(x => x.s === 2 && x.a === 2), 'only the confirmed surah remains');
+  assert.ok(!fin.words.some(x => x.st === 'skipped'), 'no raw skip without a correction flag');
 });

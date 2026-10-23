@@ -115,3 +115,81 @@
 .rc-engcard p { margin: 6px 0 10px; }
 .rc-stat.vowel b { color: var(--gold); }
 .rc-mrow.k-vowel, .rc-mrow.k-repeat { border-inline-start-color: var(--gold); }
+
+/* ===== free recitation (تسميع حر) / sard (السرد) ===== */
+.rc-free { display: flex; flex-direction: column; }
+.rc-freebtn { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 12px 16px; text-align: start; justify-content: flex-start; }
+.rc-freebtn > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rc-freebtn b { font-size: 1.15rem; }
+.rc-freebtn small { font-size: .78rem; font-weight: 400; opacity: .85; line-height: 1.4; white-space: normal; }
+#rc-free { min-height: 76px; }
+#rc-free b { font-size: 1.3rem; }
+.rc-lastpos { margin-bottom: 0; }
+
+.rc-fhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px; margin: -4px 0 10px; font-size: .85rem; color: var(--muted); text-align: center; }
+.rc-fhead b { font-family: var(--font-display); font-size: 1rem; }
+.rc-txtbtn { white-space: nowrap; }
+.rc-warnbtn { opacity: .45; }
+.rc-warnbtn.on { opacity: 1; color: var(--gold); }
+.rc-fwrap { position: relative; max-width: 620px; margin: 0 auto; }
+.rc-fwait { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 32px 16px; }
+.rc-fwait-ic { color: var(--gold); animation: rc-breathe 1.8s ease-in-out infinite; }
+@keyframes rc-breathe { 50% { opacity: .35; transform: scale(.92); } }
+.rc-fpage { min-height: 0; }
+.rc-fcount { color: var(--gold-2); }
+.rc-ftime { font-variant-numeric: tabular-nums; }
+
+/* Madinah page glyphs: unread words are hidden (memorisation), with a faint placeholder bar in their place */
+.rc-fpage .mq-w { cursor: default; transition: color .18s ease-out, opacity .18s ease-out; }
+.rc-fpage .mq-w.f-pend { color: transparent; background: linear-gradient(transparent 58%, color-mix(in srgb, var(--gold) 13%, transparent) 58% 66%, transparent 66%); }
+.rc-fpage .mq-end.f-pend { color: transparent; background: none; }
+.rc-fwrap.shown .rc-fpage .mq-w.f-pend { color: var(--ink); opacity: .62; background: none; }
+.rc-fwrap.shown .rc-fpage .mq-w.f-ok { color: color-mix(in srgb, var(--ok) 70%, var(--ink)); }
+.rc-fpage .mq-w.f-ok { color: var(--ink); }
+.rc-fpage .mq-end.f-ok { color: var(--gold-2); }
+.rc-fpage .mq-w.f-uns { color: color-mix(in srgb, var(--gold) 82%, var(--ink)); }
+.rc-fpage .mq-w.f-bad { color: var(--bad); cursor: pointer; }
+.rc-fpage .mq-w.f-cur { box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--gold) 55%, transparent); }
+/* plain-text fallback of the same page */
+.rc-fpage .rc-ftext { font-size: 26px; line-height: 2.2; }
+.rc-fpage .word { display: inline; padding: 0; background: none; box-shadow: none; }
+.rc-fpage .word.f-pend { color: transparent; text-decoration: underline dotted color-mix(in srgb, var(--gold) 22%, transparent); text-underline-offset: .42em; }
+.rc-fwrap.shown .rc-fpage .word.f-pend { color: var(--ink); opacity: .62; text-decoration: none; }
+.rc-fwrap.shown .rc-fpage .word.f-ok { color: color-mix(in srgb, var(--ok) 70%, var(--ink)); }
+.rc-fpage .word.f-ok { color: var(--ink); }
+.rc-fpage .word.f-uns { color: color-mix(in srgb, var(--gold) 82%, var(--ink)); }
+.rc-fpage .word.f-bad { color: var(--bad); cursor: pointer; }
+.rc-fpage .rc-aend.f-pend { opacity: .25; }
+
+/* sard: the light warning pill, fades out on its own */
+.rc-warn {
+  position: absolute; z-index: 5; transform: translate(-50%, -115%); padding: 3px 12px; border-radius: 999px; pointer-events: none;
+  font-family: var(--font-ui); font-size: .85rem; font-weight: 700; color: var(--bad); white-space: nowrap;
+  background: color-mix(in srgb, var(--bad) 14%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 40%, transparent), var(--shadow);
+  animation: rc-warn 1.5s ease-out both;
+}
+.rc-warn.top { left: 50%; top: 8px; transform: translate(-50%, 0); }
+@keyframes rc-warn { 0% { opacity: 0; } 12% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
+.rc-fsum .rc-stats { margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) { .rc-fwait-ic, .rc-warn { animation: none; } .rc-fpage .mq-w { transition: none; } }
+.rc-ftools { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin: -2px 0 8px; }
+.rc-txtseg { width: auto; }
+.rc-txtseg button { min-width: 72px; min-height: 36px; }
+.rc-fwrap ~ .rc-dock .rc-mic { width: 80px; height: 80px; min-width: 76px; min-height: 76px; border-radius: 50%; background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: var(--on-gold); box-shadow: 0 0 0 1px var(--line), 0 0 26px var(--gold-glow), 0 8px 22px rgba(0, 0, 0, .25); }
+.rc-fwrap ~ .rc-dock .rc-mic svg { width: 34px; height: 34px; }
+.rc-fwrap ~ .rc-dock .rc-mic.live { background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: var(--on-gold); box-shadow: 0 0 0 calc(var(--lvl) * 14px) color-mix(in srgb, var(--gold) 30%, transparent), 0 0 26px var(--gold-glow), 0 8px 22px rgba(0, 0, 0, .25); }
+.rc-fwrap ~ .rc-dock .rc-mic.live::before, .rc-fwrap ~ .rc-dock .rc-mic.live::after { border-color: var(--gold); animation: ring-pulse 1.8s ease-out infinite; }
+.rc-fwrap ~ .rc-dock .rc-mic.live::after { animation-delay: .9s; }
+/* free-mode polish: centred wrapping chips, gold pill warning, no horizontal overflow at 360px */
+.rc-ftools { max-width: 100%; box-sizing: border-box; text-align: center; }
+.rc-ftools > * { flex: 0 1 auto; max-width: 100%; min-height: 36px; }
+.rc-fhead, .rc-fwrap, .rc-fwait, .rc-fsum { max-width: 100%; min-width: 0; box-sizing: border-box; }
+.rc-fpage { overflow-wrap: anywhere; }
+.rc-warn {
+  max-width: calc(100% - 24px); white-space: normal; text-align: center; line-height: 1.4;
+  color: var(--on-gold); background: var(--gold); box-shadow: var(--shadow-1);
+  transition: opacity var(--dur-2) var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-fwrap ~ .rc-dock .rc-mic.live::before, .rc-fwrap ~ .rc-dock .rc-mic.live::after { animation: none; opacity: .5; }
+}

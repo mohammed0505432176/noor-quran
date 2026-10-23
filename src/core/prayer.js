@@ -118,15 +118,18 @@ export async function refreshSchedule() {
     const city = cfg.city || '';
     const now = new Date();
     let pid = ID.prayer[0], rid = ID.pre[0];
-    const pre = Number(p.preAlert) || 0;
+    const pre = p.preOn ? Number(p.preAlert) || 0 : 0;
+    const ch = notify.adhanChannel(p.adhan);
+    const onMap = p.adhanOn || {};
     for (let d = 0; d < 7; d++) {
       const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d, 12, 0, 0);
       const t = timesFor(day, cfg);
       for (const pr of PRAYERS) {
         if (pr.key === 'sunrise') continue;
         const at = t[pr.key];
-        if (at <= now) { pid++; rid++; continue; }
-        list.push({ id: pid++, title: `حان الآن وقت صلاة ${pr.name}`, body: `حيّ على الصلاة — ${city}`, at, channel: 'adhan' });
+        if (at <= now || onMap[pr.key] === false) { pid++; rid++; continue; }
+        const pname = pr.key === 'dhuhr' && day.getDay() === 5 ? 'الجمعة' : pr.name;
+        list.push({ id: pid++, title: `حان الآن وقت صلاة ${pname}`, body: city ? `حيّ على الصلاة · ${city}` : 'حيّ على الصلاة', at, channel: ch });
         if (pre > 0) {
           const pat = new Date(at.getTime() - pre * 60000);
           if (pat > now) list.push({ id: rid, title: `صلاة ${pr.name} قريبة`, body: `بقي ${pre} دقائق على صلاة ${pr.name}`, at: pat, channel: 'reminders' });
@@ -143,4 +146,119 @@ export async function refreshSchedule() {
   } catch (e) {
     return { scheduled: 0, error: true };
   }
+}
+
+// ---------- in-app adhan (app open at prayer time) ----------
+let adhanAudio = null, adhanTimer = null, watcher = null;
+const baseUrl = () => (import.meta.env && import.meta.env.BASE_URL) || './';
+
+let adhanOn = false;
+export const isAdhanPlaying = () => adhanOn;
+function setAdhan(on) {
+  if (adhanOn === on) return;
+  adhanOn = on;
+  try { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('noor:adhan', { detail: { on } })); } catch (e) { /* ignore */ }
+}
+
+export function stopAdhan() {
+  clearTimeout(adhanTimer);
+  try { if (adhanAudio) { adhanAudio.pause(); adhanAudio.removeAttribute('src'); } } catch (e) { /* ignore */ }
+  adhanAudio = null;
+  if (typeof document !== 'undefined') document.getElementById('adhan-ov')?.remove();
+  setAdhan(false);
+}
+
+/** Full-screen adhan card + play the chosen sound once. choice = 'full'|'short'|'silent'. */
+export function playAdhanNow(name, choice = 'full', city = '') {
+  if (typeof document === 'undefined') return;
+  stopAdhan();
+  import('./audio.js').then(a => a.stop()).catch(() => {});
+  setAdhan(true);
+  const esc = x => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const ov = document.createElement('div');
+  ov.id = 'adhan-ov'; ov.className = 'adhan-ov'; ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true'); ov.setAttribute('aria-labelledby', 'adhan-title');
+  ov.innerHTML = `<div class="adhan-card">
+    <img class="adhan-art" src="${baseUrl()}kids/img/mosque.webp" alt="" draggable="false">
+    <div class="adhan-sub">حان الآن وقت</div>
+    <div class="adhan-name" id="adhan-title">${esc(name)}</div>
+    <div class="adhan-hay">حيّ على الصلاة${city ? ' · ' + esc(city) : ''}</div>
+    <button class="btn adhan-stop" id="adhan-stop">${choice === 'silent' ? 'إغلاق' : 'إيقاف الأذان'}</button></div>`;
+  document.body.appendChild(ov);
+  const stopBtn = ov.querySelector('#adhan-stop');
+  stopBtn.onclick = stopAdhan;
+  try { stopBtn.focus(); } catch (e) { /* ignore */ }
+  if (choice === 'silent') { adhanTimer = setTimeout(stopAdhan, 8000); return; }
+  try {
+    const a = new Audio(baseUrl() + (choice === 'short' ? 'adhan/adhan-short.mp3' : 'adhan/adhan.mp3'));
+    adhanAudio = a;
+    a.onended = () => { if (adhanAudio === a) stopAdhan(); };
+    a.play().catch(() => { /* autoplay blocked: card stays, notification still sounds */ });
+  } catch (e) { /* ignore */ }
+}
+
+function adhanCheck() {
+  try {
+    const p = S.settings.prayer;
+    if (!p.notify || document.hidden) return;
+    const cfg = currentConfig();
+    if (!cfg.known) return;
+    const now = new Date();
+    const t = timesFor(now, cfg);
+    const onMap = p.adhanOn || {};
+    let idx = -1;
+    for (const pr of PRAYERS) {
+      if (pr.key === 'sunrise') continue;
+      idx++;
+      if (onMap[pr.key] === false) continue;
+      const diff = now - t[pr.key];
+      if (diff < 0 || diff > 120000) continue;
+      const stamp = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}.${pr.key}`;
+      if (localStorage.getItem('noor.adhan.last') === stamp) continue; // never twice for the same prayer/day
+      localStorage.setItem('noor.adhan.last', stamp);
+      const name = pr.key === 'dhuhr' && now.getDay() === 5 ? 'صلاة الجمعة' : 'صلاة ' + pr.name;
+      import('./notify.js').then(async n => {
+        const id = n.ID.prayer[0] + idx; // today's slot (day 0) of this prayer
+        await n.cancelIds([id]);
+        await n.clearDelivered(n.ID.prayer[0], n.ID.prayer[1]);
+        setTimeout(() => n.clearDelivered(n.ID.prayer[0], n.ID.prayer[1]), 5000);
+      }).catch(() => {});
+      playAdhanNow(name, p.adhan || 'full', cfg.city || '');
+      return;
+    }
+  } catch (e) { /* ignore */ }
+}
+
+/** Start the foreground watcher (idempotent). Call on start and on resume. */
+// one-time cleanup of the old per-day keys
+try {
+  if (typeof localStorage !== 'undefined') {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('noor.adhan.') && k !== 'noor.adhan.last') localStorage.removeItem(k);
+    }
+  }
+} catch (e) { /* ignore */ }
+
+let recvBound = false;
+async function bindReceived() {
+  if (recvBound) return;
+  recvBound = true;
+  try {
+    const { isNative } = await import('./platform.js');
+    if (!isNative()) return;
+    const { LocalNotifications } = await import('@capacitor/local-notifications');
+    const n = await import('./notify.js');
+    LocalNotifications.addListener('localNotificationReceived', note => {
+      if (document.hidden || note.id < n.ID.prayer[0] || note.id > n.ID.prayer[1]) return;
+      // foreground: the in-app adhan owns the sound; never start a second one
+      if (isAdhanPlaying()) n.clearDelivered(n.ID.prayer[0], n.ID.prayer[1]);
+    });
+  } catch (e) { recvBound = false; }
+}
+
+export function startAdhanWatcher() {
+  if (typeof document === 'undefined') return;
+  bindReceived();
+  if (!watcher) watcher = setInterval(adhanCheck, 4000);
+  adhanCheck();
 }

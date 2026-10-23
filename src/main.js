@@ -15,6 +15,7 @@ import './styles/base.css';
 import './styles/components.css';
 import './styles/mushaf.css';
 import './styles/kids.css';
+import './styles/prayer.css';
 import { S, on } from './core/store.js';
 import { icon, celebrate, toast } from './ui.js';
 import { loadQuran } from './core/quran.js';
@@ -106,8 +107,9 @@ function init() {
     try { const { StatusBar, Style } = await import('@capacitor/status-bar'); await StatusBar.setStyle({ style: Style.Dark }); await StatusBar.setBackgroundColor({ color: '#06120d' }); } catch (e) {}
     try {
       const { App } = await import('@capacitor/app');
-      App.addListener('resume', openWidgetRoute);
+      App.addListener('resume', () => { openWidgetRoute(); import('./core/prayer.js').then(p => p.startAdhanWatcher()).catch(() => {}); });
       App.addListener('backButton', ({ canGoBack }) => {
+        if (document.getElementById('adhan-ov')) { import('./core/prayer.js').then(p => p.stopAdhan()); return; }
         const s = document.querySelector('.sheet-wrap.open');
         if (s && s.close) return s.close();
         const c = document.querySelector('.celebrate'); if (c) return c.remove();
@@ -115,7 +117,7 @@ function init() {
       });
     } catch (e) {}
   });
-  import('./core/prayer.js').then(p => p.refreshSchedule && p.refreshSchedule()).catch(() => {});
+  import('./core/prayer.js').then(p => { p.startAdhanWatcher(); p.refreshSchedule && p.refreshSchedule(); }).catch(() => {});
   import('./core/widget.js').then(w => w.updatePrayerWidget()).catch(() => {});
   import('./core/family.js').then(f => f.startFamilySync && f.startFamilySync()).catch(() => {});
   const sp = document.getElementById('splash');

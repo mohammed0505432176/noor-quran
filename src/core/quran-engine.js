@@ -8,8 +8,11 @@
 //   removeEngine() -> Promise                    free the space
 //   openEngine() -> Promise<Engine>             load the worker (once per app run, reused)
 //   Engine.start(s, from, to, { onVerdicts(words), onIssue(issue), onError(msg), onSlow() }) -> sid ; Engine.pcm(Float32Array) ;
+//   Engine.startFree(handlers, { hint:{surah,ayah} }?) -> sid   free recitation: no passage, the engine discovers where the
+//     reciter is (whole Quran) and follows across ayahs and surahs; engine word counts arrive per ayah as they are reached
 //   Engine.stop() -> Promise<words> (current session; [] on 20 s timeout) ; Engine.cancel() abandons the session
-//   words: [{ a, w, st, vowel }]  (w is 0-based within ayah, as the engine numbers words; st 'ok'|'unsure'|'wrong'|'skipped'|'pending')
+//   words: [{ s, a, w, st, vowel }]  (w is 0-based within ayah, as the engine numbers words; st 'ok'|'unsure'|'wrong'|'skipped'|'pending')
+//   Engine.counts() -> { [a] | ['s:a']: n }  engine words per ayah of the current session
 // The model is a Derivative of Quran-Lab's Work under the Quran-Lab No-Profit License 1.2: the app is free,
 // and its automatic feedback may be wrong and does not replace a qualified teacher.
 import { isNative } from './platform.js';
@@ -110,7 +113,7 @@ export function openEngine() {
     }).finally(() => clearTimeout(timer));
     w.onmessage = ev => route(ev.data || {});
     w.onerror = e => { if (cur && cur.handlers.onError) cur.handlers.onError((e && e.message) || 'worker'); };
-    return { start, pcm, stop, cancel };
+    return { start, startFree, pcm, stop, cancel, counts: () => counts };
   })();
   ready = p;
   p.catch(() => { if (ready === p) resetWorkerState(); });
@@ -127,7 +130,7 @@ function finishStop(c, words) {
 function route(d) {
   if (!cur || d.sid !== cur.sid) return;          // stale message from an abandoned session
   const c = cur;
-  if (d.type === 'counts') counts = d.counts || {};
+  if (d.type === 'counts') counts = { ...counts, ...(d.counts || {}) };
   else if (d.type === 'verdicts') c.handlers.onVerdicts(d.words);
   else if (d.type === 'issue') c.handlers.onIssue(d.issue);
   else if (d.type === 'slow') c.handlers.onSlow();
@@ -135,7 +138,12 @@ function route(d) {
   else if (d.type === 'error') { if (c.handlers.onError) c.handlers.onError(d.message); finishStop(c, []); }
 }
 
-function start(s, from, to, h = {}) {
+function start(s, from, to, h = {}) { return begin({ s, from, to }, h); }
+function startFree(h = {}, opts = {}) {
+  const hint = opts && opts.hint && opts.hint.surah > 0 && opts.hint.ayah > 0 ? { surah: opts.hint.surah | 0, ayah: opts.hint.ayah | 0 } : null;
+  return begin({ free: true, hint }, h);
+}
+function begin(msg, h) {
   if (!worker) throw new Error('engine not open');
   if (cur && !cur.done) worker.postMessage({ type: 'cancel', sid: cur.sid });
   if (cur) finishStop(cur, []);
@@ -148,7 +156,7 @@ function start(s, from, to, h = {}) {
       onError: h.onError || null, onSlow: h.onSlow || (() => {}),
     },
   };
-  worker.postMessage({ type: 'start', sid, s, from, to });
+  worker.postMessage({ type: 'start', sid, ...msg });
   return sid;
 }
 function pcm(samples) {
@@ -181,15 +189,18 @@ function cancel() {
 
 const RANK = { pending: 0, ok: 1, unsure: 2, skipped: 3, wrong: 4 };
 
-/** Map engine verdicts (a, w 0-based) onto flat word indices of the passage. groups: [{a, start, end}].
+/** Map engine verdicts (a, w 0-based) onto flat word indices of the passage. groups: [{a, start, end}] (one surah), or
+ *  [{s, a, start, end}] for a free recitation spanning surahs (then verdicts are matched on s too and counts keyed 's:a').
  *  engineCounts: { [a]: n } engine words per ayah; when it differs from the app's split an engine word w
  *  covers app indices [floor(w*n/en), floor((w+1)*n/en)) (at least one). */
 export function mapVerdicts(words, groups, engineCounts = counts) {
   const out = new Map();
-  const byA = new Map(groups.map(g => [g.a, g]));
+  const withS = groups.length > 0 && groups[0].s != null;
+  const key = withS ? x => x.s + ':' + x.a : x => x.a;
+  const byA = new Map(groups.map(g => [key(g), g]));
   for (const v of words) {
-    const g = byA.get(v.a); if (!g) continue;
-    const n = g.end - g.start, en = engineCounts[v.a] | 0;
+    const k0 = key(v), g = byA.get(k0); if (!g) continue;
+    const n = g.end - g.start, en = engineCounts[k0] | 0;
     let lo = v.w, hi = v.w + 1;
     if (en && en !== n) {
       lo = Math.floor(v.w * n / en);
@@ -202,6 +213,27 @@ export function mapVerdicts(words, groups, engineCounts = counts) {
       // two engine words on one app word: the worse verdict wins
       if (!prev || RANK[v.st] > RANK[prev.st]) out.set(i, v);
     }
+  }
+  return out;
+}
+
+/** Free recitation: the ayahs actually covered, as contiguous ranges per surah in Quran order: [{ s, from, to }].
+ *  An ayah counts when any of its words was judged (not pending) or an issue named it (extraKeys 's:a', e.g. a
+ *  skipped ayah). A hole of up to maxGap ayahs inside a surah stays in the range (those words were skipped);
+ *  a longer jump starts a new range. minRead > 0 drops ranges with fewer than minRead words judged 'ok'. */
+export function freeSegments(words, extraKeys = [], maxGap = 2, minRead = 0) {
+  const set = new Set();
+  for (const v of words || []) if (v && v.st !== 'pending' && v.s > 0 && v.a > 0) set.add(v.s * 1000 + v.a);
+  for (const k of extraKeys || []) { const [s, a] = String(k).split(':').map(Number); if (s > 0 && a > 0) set.add(s * 1000 + a); }
+  const out = [];
+  for (const sa of [...set].sort((x, y) => x - y)) {
+    const s = Math.floor(sa / 1000), a = sa % 1000, last = out[out.length - 1];
+    if (last && last.s === s && a - last.to <= maxGap + 1) last.to = a;
+    else out.push({ s, from: a, to: a });
+  }
+  if (minRead > 0) {                             // a stretch with fewer than minRead words read ok is a false lock, not a recitation
+    const okN = (g) => (words || []).filter(v => v && v.st === 'ok' && v.s === g.s && v.a >= g.from && v.a <= g.to).length;
+    return out.filter(g => okN(g) >= minRead);
   }
   return out;
 }

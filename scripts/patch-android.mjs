@@ -185,7 +185,7 @@ ${plugins.map((c) => '        registerPlugin(' + c + '.class);').join('\n')}
   }
 }
 
-// ---------- widget resources (scripts/android/res/** -> app/src/main/res/**) ----------
+// ---------- resources (scripts/android/res/** -> app/src/main/res/**): widget layouts/drawables + res/raw adhan sounds ----------
 {
   const srcRoot = resolve(root, 'scripts/android/res');
   if (!existsSync(srcRoot)) fail('missing directory: ' + srcRoot);
@@ -203,7 +203,7 @@ ${plugins.map((c) => '        registerPlugin(' + c + '.class);').join('\n')}
     log('wrote res/' + rel.split(sep).join('/'));
     n++;
   }
-  if (!n) log('widget resources unchanged');
+  if (!n) log('resources unchanged');
 }
 
 log('done');

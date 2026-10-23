@@ -13,7 +13,7 @@ const DEFAULTS = () => ({
     fontSize: 30,                // mushaf font size px
     theme: 'dark',               // 'auto' | 'dark' | 'light'
     ai: { provider: 'auto', chosen: false, baseUrl: '', apiKey: '', model: '' }, // 'auto' (family backend) | 'free' | 'custom' (OpenAI-compatible, e.g. OmniRoute)
-    prayer: { method: 'UmmAlQura', madhab: 'shafi', notify: true, preAlert: 10, lat: null, lng: null, city: '' }
+    prayer: { method: 'UmmAlQura', madhab: 'shafi', notify: true, adhan: 'full', adhanOn: { fajr: true, dhuhr: true, asr: true, maghrib: true, isha: true }, preOn: false, preAlert: 10, lat: null, lng: null, city: '' }
   },
   pts: 0,
   days: {},        // 'YYYY-MM-DD' -> { a: ayahsRead, r: recitations, z: azkarDone }
@@ -290,6 +290,15 @@ export function importData(json) {
   if (d.settings && typeof d.settings === 'object') {
     d.settings.fontSize = Math.min(52, Math.max(18, int(d.settings.fontSize) || 30));
     d.settings.goal = Math.min(1000, Math.max(1, int(d.settings.goal) || 10));
+    if (d.settings.prayer && typeof d.settings.prayer === 'object') d.settings.prayer.adhan = ['full', 'short', 'silent'].includes(d.settings.prayer.adhan) ? d.settings.prayer.adhan : 'full';
+    if (d.settings.prayer && typeof d.settings.prayer === 'object') {
+      const pr = d.settings.prayer;
+      pr.preAlert = [5, 10, 15, 20, 30].includes(Number(pr.preAlert)) ? Number(pr.preAlert) : 10;
+      pr.preOn = pr.preOn === true;
+      const om = {}, src = pr.adhanOn && typeof pr.adhanOn === 'object' ? pr.adhanOn : {};
+      for (const k of ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha']) om[k] = src[k] !== false;
+      pr.adhanOn = om;
+    }
     d.settings.theme = ['auto', 'dark', 'light'].includes(d.settings.theme) ? d.settings.theme : 'dark';
     if (!(typeof d.settings.reciter === 'string' && /^[\w.-]{1,60}$/.test(d.settings.reciter))) delete d.settings.reciter;
   }

@@ -1,0 +1,6 @@
+Adhan (full): "Beautiful adhan.ogg" by Adam-synagda, Wikimedia Commons
+URL: https://commons.wikimedia.org/wiki/File:Beautiful_adhan.ogg
+License: CC0 1.0 (public domain dedication) - no attribution required
+Processing: mono 96 kbps mp3, loudnorm I=-14, 2.5 s fade-out.
+adhan-short.mp3: first section (first takbir phrase, ~15 s) of the same file, fade-out.
+Muezzin identity not stated in the source.

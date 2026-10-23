@@ -1,0 +1,14 @@
+.adhan-ov{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:calc(var(--safe-t) + 20px) 20px calc(var(--safe-b) + 20px);background:radial-gradient(120% 90% at 50% 0%,color-mix(in srgb,var(--gold) 22%,var(--bg)) 0%,var(--bg) 70%);animation:adhan-in .5s ease}
+.adhan-card{width:100%;max-width:380px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px}
+.adhan-art{width:min(70vw,260px);height:auto;filter:drop-shadow(0 12px 30px color-mix(in srgb,var(--gold) 45%,transparent));animation:adhan-float 4s ease-in-out infinite}
+.adhan-sub{color:var(--muted);font-size:1rem;margin-top:6px}
+.adhan-name{font-family:var(--font-display);font-size:2.4rem;font-weight:700;color:var(--gold)}
+.adhan-hay{color:var(--ink);font-size:1.1rem;margin-bottom:18px}
+.adhan-stop{min-width:200px;background:var(--gold);color:var(--on-gold);border-radius:999px;padding:14px 28px;font-weight:700}
+.adhan-card-set .seg button{flex:1}
+.adhan-days{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+@keyframes adhan-in{from{opacity:0}to{opacity:1}}
+@keyframes adhan-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@media (prefers-reduced-motion:reduce){.adhan-art,.adhan-ov{animation:none}}
+
+.adhan-days .chip{font:inherit;border:0;color:inherit}

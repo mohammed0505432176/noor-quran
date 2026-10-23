@@ -1,7 +1,7 @@
 import { esc, $, $$, toast, icon, header, N } from '../ui.js';
 import { S, updateSettings } from '../core/store.js';
 import { isNative } from '../core/platform.js';
-import { PRAYERS, METHODS, timesFor, nextPrayer, formatTime, currentConfig, ensureLocation, refreshSchedule } from '../core/prayer.js';
+import { PRAYERS, METHODS, timesFor, nextPrayer, formatTime, currentConfig, ensureLocation, refreshSchedule, playAdhanNow, stopAdhan, isAdhanPlaying } from '../core/prayer.js';
 import { updatePrayerWidget } from '../core/widget.js';
 
 const pad = n => String(n).padStart(2, '0');
@@ -17,6 +17,7 @@ export default {
   async render(el) {
     let timer = null;
     let alive = true;
+    let testStarted = false;
     const web = !isNative();
 
     function draw() {
@@ -43,13 +44,22 @@ export default {
           ${cfg.known ? '' : '<div class="muted small mt">نستخدم موقع الرياض مؤقتاً. اضغط «تحديث موقعي» لتحديد موقعك.</div>'}
         </section>
         <div class="list mt">${rows}</div>
+        <div class="card mt adhan-card-set">
+          <div class="section-title">الأذان عند دخول الوقت</div>
+          <p class="muted small">يصلك إشعار بصوت الأذان في وقت الصلاة تمامًا</p>
+          <div class="seg mt" id="ad-snd">${[['full', 'الأذان كاملًا'], ['short', 'تكبيرات قصيرة'], ['silent', 'إشعار صامت']].map(([v, l]) => `<button data-v="${v}" class="${(p.adhan || 'full') === v ? 'active' : ''}">${l}</button>`).join('')}</div>
+          <div class="muted small mt">الأذان لكل صلاة</div>
+          <div class="adhan-days" id="ad-days">${PRAYERS.filter(x => x.key !== 'sunrise').map(x => `<button type="button" class="chip ${(p.adhanOn || {})[x.key] === false ? '' : 'active'}" data-k="${x.key}" aria-pressed="${(p.adhanOn || {})[x.key] === false ? 'false' : 'true'}" style="cursor:pointer">${esc(x.name)}</button>`).join('')}</div>
+          <button class="btn mt" id="tst">${icon('bell', 18)} تجربة الأذان</button>
+        </div>
         <div class="card mt">
           <div class="section-title">الإعدادات</div>
           <div class="list-item"><div class="li-main">تنبيهات الأذان</div><div class="li-end"><label class="switch"><input type="checkbox" id="pn" ${p.notify ? 'checked' : ''}><span></span></label></div></div>
-          <div class="field mt"><label for="pa">تنبيه قبل الصلاة</label><select class="select" id="pa">${[0, 5, 10, 15, 20].map(m => `<option value="${m}" ${Number(p.preAlert) === m ? 'selected' : ''}>${m ? N(m) + ' دقائق' : 'بدون'}</option>`).join('')}</select></div>
+          <div class="list-item mt"><div class="li-main">تذكير قبل الصلاة</div><div class="li-end"><label class="switch"><input type="checkbox" id="pre-on" ${p.preOn ? 'checked' : ''}><span></span></label></div></div>
+          ${p.preOn ? `<div class="field mt"><label for="pa">قبل الصلاة بـ</label><select class="select" id="pa">${[5, 10, 15, 20, 30].map(m => `<option value="${m}" ${Number(p.preAlert) === m ? 'selected' : ''}>${N(m)} دقيقة</option>`).join('')}</select></div>` : ''}
           <div class="field mt"><label for="pm">طريقة الحساب</label><select class="select" id="pm">${Object.entries(METHODS).map(([k, v]) => `<option value="${k}" ${p.method === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
           <div class="field mt"><label>المذهب (العصر)</label><div class="seg" id="pd"><button data-v="shafi" class="${p.madhab !== 'hanafi' ? 'active' : ''}">شافعي/جمهور</button><button data-v="hanafi" class="${p.madhab === 'hanafi' ? 'active' : ''}">حنفي</button></div></div>
-          <div class="row mt"><button class="btn ghost" id="loc">${icon('compass', 18)} تحديث موقعي</button><button class="btn ghost" id="tst">${icon('bell', 18)} تجربة التنبيه</button></div>
+          <div class="row mt"><button class="btn ghost" id="loc">${icon('compass', 18)} تحديث موقعي</button></div>
           ${web ? '<p class="muted small mt">للتنبيه حتى والتطبيق مغلق ثبّت نسخة الأندرويد</p>' : ''}
         </div>
         ${web ? '' : `<div class="card mt">
@@ -97,7 +107,15 @@ export default {
           toast('تم إيقاف التنبيهات');
         }
       };
-      $('#pa', el).onchange = async e => { updateSettings({ prayer: { preAlert: Number(e.target.value) } }); await resched(true); };
+      $('#pre-on', el).onchange = async e => { const pp = { preOn: e.target.checked };
+        if (pp.preOn && ![5, 10, 15, 20, 30].includes(Number(S.settings.prayer.preAlert))) pp.preAlert = 10;
+        updateSettings({ prayer: pp }); draw(); await resched(true); };
+      const pa = $('#pa', el); if (pa) pa.onchange = async e => { updateSettings({ prayer: { preAlert: Number(e.target.value) } }); await resched(true); };
+      $$('#ad-snd button', el).forEach(b => b.onclick = async () => { updateSettings({ prayer: { adhan: b.dataset.v } }); draw(); await resched(true); });
+      $$('#ad-days .chip', el).forEach(c => c.onclick = async () => {
+        const cur = { ...(S.settings.prayer.adhanOn || {}) }; cur[c.dataset.k] = cur[c.dataset.k] === false;
+        updateSettings({ prayer: { adhanOn: cur } }); draw(); await resched(false);
+      });
       $('#pm', el).onchange = async e => { updateSettings({ prayer: { method: e.target.value } }); draw(); await resched(false); };
       $$('#pd button', el).forEach(b => b.onclick = async () => { updateSettings({ prayer: { madhab: b.dataset.v } }); draw(); await resched(false); });
       $('#loc', el).onclick = async () => {
@@ -110,9 +128,11 @@ export default {
       };
       $('#tst', el).onclick = async () => {
         try {
-          const { testNotification } = await import('../core/notify.js');
-          const r = await testNotification();
-          toast(r.sent ? 'سيصلك تنبيه تجريبي خلال ٥ ثوانٍ' : 'فعّل إذن الإشعارات أولاً');
+          const n = await import('../core/notify.js');
+          const choice = S.settings.prayer.adhan || 'full';
+          if (web) { testStarted = true; playAdhanNow('تجربة الأذان', choice, ''); return; }
+          const r = await n.testNotification(n.adhanChannel(choice), 10);
+          toast(r.sent ? 'سيصلك إشعار تجريبي خلال ١٠ ثوانٍ' : 'فعّل إذن الإشعارات لتصلك التجربة');
         } catch (err) { toast('تعذر إرسال التنبيه'); }
       };
     }
@@ -126,6 +146,6 @@ export default {
       draw();
       if (S.settings.prayer.notify) refreshSchedule();
     }).catch(() => {});
-    return () => { alive = false; clearInterval(timer); };
+    return () => { alive = false; clearInterval(timer); if (testStarted && isAdhanPlaying()) stopAdhan(); };
   }
 };

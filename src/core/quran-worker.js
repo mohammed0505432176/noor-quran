@@ -3,20 +3,26 @@
 //   in : { type:'init', model:ArrayBuffer, corpus:ArrayBuffer(JSON bytes)|object, wasmPaths:string }
 //        every other message carries `sid` (session id); every outbound one is tagged with it; stale sids are ignored
 //        { type:'start', sid, s, from, to }      new recitation of surah s, ayahs from..to (correction mode); supersedes any older session
+//        { type:'start', sid, free:true, hint? }  free recitation (discovery): no expected passage, the engine locates the
+//                                                reciter anywhere in the Quran from the first seconds of audio and follows
+//                                                across ayahs, surahs and pages (relocates between surahs). hint {surah, ayah}
+//                                                only breaks ties between equally good locations.
 //        { type:'pcm', sid, samples:Float32Array }  16 kHz mono, any size (fed at once: the model runs as its own 480 ms window fills)
 //        { type:'stop', sid }                    flush the tail, final verdicts
 //        { type:'cancel', sid }                  abandon the session (drop queued audio, reset)
 //   out: { type:'ready' } | { type:'error', sid?, message }
-//        { type:'verdicts', sid, words:[{ a, w, st, vowel }] }   w 0-based within ayah; st: 'ok'|'unsure'|'wrong'|'skipped'|'pending'
-//        { type:'issue', sid, issue:{ kind, a, w, words } }      a mistake flagged by the correction rules
+//        { type:'verdicts', sid, words:[{ s, a, w, st, vowel }] }   w 0-based within ayah; st: 'ok'|'unsure'|'wrong'|'skipped'|'pending'
+//        { type:'issue', sid, issue:{ kind, s, a, w, words } }      a mistake flagged by the correction rules
 //        { type:'stopped', sid, words:[...] }
-//        { type:'counts', sid, counts:{ [a]: n } }               engine words per ayah (sent on start)
+//        { type:'counts', sid, counts:{ [a]: n } }               engine words per ayah (sent on start); free mode: keys 's:a',
+//                                                                 sent (to merge) whenever a new ayah shows up
 //        { type:'slow', sid }                                    backlog > 4 s of audio: oldest dropped down to 1 s (once per session)
 import * as ort from 'onnxruntime-web/wasm';
 import { createZipformerSession } from '@tilawa/core';
 
 let session = null, passage = null, buf = [], bufLen = 0, chain = Promise.resolve(), lastSig = '';
 let curSid = null, slowSent = false;     // current session id
+let hintOn = false;                      // free mode: the start hint is still set on the engine (it only biases the FIRST lock)
 const CHUNK = 7680;                      // 480 ms at 16 kHz: at most one model chunk per feed (verdicts post at least that often)
 const SETTLE = 12;                       // one model window (0.48 s, 25 frames/s) without a new phoneme: the reciter paused
 const QUIET = 8000;                      // ... and the model has been fed >= 0.5 s of low-energy audio since the voice stopped
@@ -41,11 +47,17 @@ function trimBacklog() {
 
 // The engine starts a fresh tracker whenever it relocates (e.g. after a skipped ayah), so its verdict list only
 // covers the current stretch. Accumulate every judged word of the passage across relocations.
-let acc = new Map(), soft = new Map(), flagged = new Set();   // flagged: a*1000+w raised by the correction rules
+// word key K(s,a,w) = (s*1000 + a)*1000 + w (sorts in Quran order); ayah key s*1000 + a
+let acc = new Map(), soft = new Map(), flagged = new Set();   // flagged: word keys raised by the correction rules
 let tkOf = new Map(), tkIds = new WeakMap(), tkNext = 1;     // word key -> id of the tracker that judged it
-const inPassage = v => v.surah === passage.s && v.ayah >= passage.from && v.ayah <= passage.to;
+let countsSent = new Set();                                   // free mode: ayah keys whose word count was posted
+const K = (s, a, w) => (s * 1000 + a) * 1000 + w;
+const inPassage = v => passage.free || (v.surah === passage.s && v.ayah >= passage.from && v.ayah <= passage.to);
 const judged = x => x && x.st !== 'pending';
 const read = x => x && (x.st === 'ok' || x.st === 'unsure');
+const word = v => ({ s: v.surah, a: v.ayah, w: v.word, st: v.state, vowel: v.vowelErrors | 0 });
+/** Ayahs in surah s (0 when unknown: then only wordCount() bounds the next ayah). */
+const ayahN = s => { try { return (session.corpus && session.corpus.surahs[s - 1].ayahCount) || 0; } catch (e) { return 0; } };
 
 /** Raw accumulator: what the live tracers judged (the input of settleFinal). */
 function rawWords() {
@@ -55,10 +67,10 @@ function rawWords() {
   const tk = t ? tkIds.get(t) : 0;
   for (const v of session.verdicts()) {
     if (!inPassage(v)) continue;
-    const k = v.ayah * 1000 + v.word, prev = acc.get(k);
+    const k = K(v.surah, v.ayah, v.word), prev = acc.get(k);
     // a new tracker reports words it never heard as pending: never let that erase an earlier verdict
     if (v.state === 'pending' && prev && prev.st !== 'pending') continue;
-    acc.set(k, { a: v.ayah, w: v.word, st: v.state, vowel: v.vowelErrors | 0 });
+    acc.set(k, word(v));
     if (v.state !== 'pending') tkOf.set(k, tk);
   }
   // the live tracer keeps a word pending until ~6 phonemes of right context follow it, so an ayah's last word waits
@@ -72,8 +84,8 @@ function rawWords() {
       const end = v.word === session.wordCount(v.surah, v.ayah) - 1;
       // 'unsure' only for an ayah's last word heard nearly whole (a pausal ending; not a word cut off mid-way)
       if (v.state !== 'ok' && !(end && v.state === 'unsure' && v.distance <= 0.3)) continue;
-      const k = v.ayah * 1000 + v.word;
-      if (!judged(acc.get(k))) { soft.set(k, { a: v.ayah, w: v.word, st: v.state, vowel: v.vowelErrors | 0 }); tkOf.set(k, tk); }
+      const k = K(v.surah, v.ayah, v.word);
+      if (!judged(acc.get(k))) { soft.set(k, word(v)); tkOf.set(k, tk); }
     }
   }
   return [...acc.keys()].sort((x, y) => x - y).map(k => acc.get(k));
@@ -81,42 +93,55 @@ function rawWords() {
 
 /** Pause-settled words fill what the raw verdicts left pending or unheard. */
 function withSoft(words) {
-  const m = new Map(words.map(x => [x.a * 1000 + x.w, x]));
+  const m = new Map(words.map(x => [K(x.s, x.a, x.w), x]));
   for (const [k, x] of soft) if (!judged(m.get(k))) m.set(k, x);
   return m;
 }
 const sorted = m => [...m.keys()].sort((x, y) => x - y).map(k => m.get(k));
+/** Free mode: a raw 'skipped' without a correction-rule flag is not evidence of a mistake (a wrong or brief lock
+ *  produces them): it counts as 'unsure'. */
+const softSkips = list => (passage && passage.free ? list.map(x => (x.st === 'skipped' && !flagged.has(K(x.s, x.a, x.w)) ? { ...x, st: 'unsure' } : x)) : list);
 
 /** Ayah a runs on into a+1 inside ONE tracker (no relocation / skip / correction restart between them), so a
  *  short unjudged tail of a is the tracer's right-context lag, not words the reciter jumped over. */
-function continued(m, a) {
+function continued(m, s, a) {
+  const na = ayahN(s);
+  if (na && a >= na) return false;                 // the last ayah of a surah runs into another tracker
   let ka = -1;
-  for (let w = session.wordCount(passage.s, a) - 1; w >= 0 && ka < 0; w--) if (judged(m.get(a * 1000 + w))) ka = a * 1000 + w;
+  for (let w = session.wordCount(s, a) - 1; w >= 0 && ka < 0; w--) if (judged(m.get(K(s, a, w)))) ka = K(s, a, w);
   if (ka < 0 || !tkOf.get(ka)) return false;
-  for (let w = 0; w < session.wordCount(passage.s, a + 1); w++) {
-    const k = (a + 1) * 1000 + w;
+  for (let w = 0; w < session.wordCount(s, a + 1); w++) {
+    const k = K(s, a + 1, w);
     if (read(m.get(k))) return tkOf.get(k) === tkOf.get(ka);
   }
   return false;
 }
 const tailMax = n => Math.max(1, Math.floor(n * 0.25));
 /** Unjudged tail of ayah a after its last judged word: [last, n] (last -1 when nothing of it was judged). */
-function tailOf(m, a) {
-  const n = session.wordCount(passage.s, a);
+function tailOf(m, s, a) {
+  const n = session.wordCount(s, a);
   let last = -1;
-  for (let w = n - 1; w >= 0 && last < 0; w--) if (judged(m.get(a * 1000 + w))) last = w;
+  for (let w = n - 1; w >= 0 && last < 0; w--) if (judged(m.get(K(s, a, w)))) last = w;
   return [last, n];
+}
+/** Ayahs [s, a] whose tail may run on into the next ayah: the passage's (but its last), or every ayah seen (free). */
+function tailAyahs(m) {
+  if (!passage) return [];
+  if (!passage.free) { const out = []; for (let a = passage.from; a < passage.to; a++) out.push([passage.s, a]); return out; }
+  const seen = new Set();
+  for (const k of m.keys()) seen.add(Math.floor(k / 1000));
+  return [...seen].sort((x, y) => x - y).map(sa => [Math.floor(sa / 1000), sa % 1000]);
 }
 
 /** Live view: raw + pause-settled words + the short tail of an ayah the same tracker carried on into the next. */
 function snapshot() {
   const m = withSoft(rawWords());
-  for (let a = passage ? passage.from : 0; passage && a < passage.to; a++) {
-    const [last, n] = tailOf(m, a);
-    if (last < 0 || last === n - 1 || n - 1 - last > tailMax(n) || !continued(m, a)) continue;
-    for (let w = last + 1; w < n; w++) if (!judged(m.get(a * 1000 + w))) m.set(a * 1000 + w, { a, w, st: 'ok', vowel: 0 });
+  for (const [s, a] of tailAyahs(m)) {
+    const [last, n] = tailOf(m, s, a);
+    if (last < 0 || last === n - 1 || n - 1 - last > tailMax(n) || !continued(m, s, a)) continue;
+    for (let w = last + 1; w < n; w++) if (!judged(m.get(K(s, a, w)))) m.set(K(s, a, w), { s, a, w, st: 'ok', vowel: 0 });
   }
-  return sorted(m);
+  return softSkips(sorted(m));
 }
 
 /** End of take (on the raw verdicts): ayahs the engine confirmed in its final sequence count their unjudged words
@@ -124,46 +149,67 @@ function snapshot() {
  *  stop (nothing later was read) or the same tracker carried on into the next ayah. A raw 'wrong'/'skipped'
  *  verdict there without a correction-rule flag is only 'unsure'. Pause-settled words are added last. */
 function settleFinal(words, msgs) {
-  const fin = new Set();
-  for (const m of msgs || []) if (m.type === 'final_sequence') for (const v of m.verses || []) if (v.surah === passage.s) fin.add(v.ayah);
+  const fin = new Set();             // ayah keys s*1000+a
+  for (const m of msgs || []) if (m.type === 'final_sequence') for (const v of m.verses || []) {
+    if (inPassage(v)) fin.add(v.surah * 1000 + v.ayah);
+  }
+  // free mode: a brief wrong lock elsewhere (2-3 verdicts before a relocation) is not in the engine's final sequence:
+  // its words are dropped, not reported as a recitation of another surah
+  if (passage && passage.free && fin.size) words = words.filter(x => fin.has(x.s * 1000 + x.a));
   const out = words.map(x => ({ ...x }));
   const all = withSoft(out);
   let top = 0;
-  for (const x of all.values()) if (read(x) && x.a > top) top = x.a;
+  for (const x of all.values()) { const sa = x.s * 1000 + x.a; if (read(x) && sa > top) top = sa; }
   const byA = new Map();
-  for (const x of out) { if (!byA.has(x.a)) byA.set(x.a, []); byA.get(x.a).push(x); }
-  for (const a of fin) {
-    const n = session.wordCount(passage.s, a);
-    const have = new Map((byA.get(a) || []).map(x => [x.w, x]));
+  for (const x of out) { const sa = x.s * 1000 + x.a; if (!byA.has(sa)) byA.set(sa, []); byA.get(sa).push(x); }
+  for (const sa of fin) {
+    const s = Math.floor(sa / 1000), a = sa % 1000;
+    const n = session.wordCount(s, a);
+    const have = new Map((byA.get(sa) || []).map(x => [x.w, x]));
     let last = -1;
     for (const x of have.values()) if (x.st !== 'pending' && x.w > last) last = x.w;
-    if (last >= 0 && (n - 1 - last) <= tailMax(n) && (a >= top || continued(all, a))) last = n - 1;
+    if (last >= 0 && (n - 1 - last) <= tailMax(n) && (sa >= top || continued(all, s, a))) last = n - 1;
     for (let w = 0; w < n; w++) {
       const x = have.get(w);
-      if (!x) { if (w <= last) out.push({ a, w, st: 'ok', vowel: 0 }); continue; }
+      if (!x) { if (w <= last) out.push({ s, a, w, st: 'ok', vowel: 0 }); continue; }
       if (x.st === 'pending') { if (w <= last) x.st = 'ok'; continue; }
       // in a confirmed ayah only the correction rules (tuned against false flags) may call a word wrong;
       // a raw 'wrong'/'skipped' tracker verdict without a flag is only 'unsure'
-      if ((x.st === 'wrong' || x.st === 'skipped') && !flagged.has(a * 1000 + w)) x.st = 'unsure';
+      if ((x.st === 'wrong' || x.st === 'skipped') && !flagged.has(K(s, a, w))) x.st = 'unsure';
     }
   }
-  return sorted(withSoft(out));
+  return softSkips(sorted(withSoft(out)));
 }
 
 function handle(msgs, sid) {
   for (const m of msgs || []) {
     if (m.type === 'correction' && m.state && m.state.phase === 'error' && m.state.issue) {
       const i = m.state.issue;
-      postS(sid, { type: 'issue', issue: { kind: i.kind, a: i.ayah, w: i.word, words: i.words || 1 } });
-      for (let k = 0; k < (i.words || 1); k++) flagged.add(i.ayah * 1000 + i.word + k);
+      postS(sid, { type: 'issue', issue: { kind: i.kind, s: i.surah, a: i.ayah, w: i.word, words: i.words || 1 } });
+      for (let k = 0; k < (i.words || 1); k++) flagged.add(K(i.surah, i.ayah, i.word + k));
       // never block the reciter: note the mistake and carry on (it is reported on the result screen)
       try { handle(session.correct('review_later'), sid); } catch (e) { /* ignore */ }
     } else if (m.type === 'correction_note' && m.issue) {
       const i = m.issue;
-      postS(sid, { type: 'issue', issue: { kind: i.kind, a: i.ayah, w: i.word, words: i.words || 1 } });
+      postS(sid, { type: 'issue', issue: { kind: i.kind, s: i.surah, a: i.ayah, w: i.word, words: i.words || 1 } });
     }
   }
   const words = snapshot();
+  if (hintOn && words.some(judged)) {            // the first lock happened: the start hint must not bias later relocations
+    hintOn = false;
+    try { if (session.engine && session.engine.setHint) session.engine.setHint(null); } catch (e) { /* ignore */ }
+  }
+  if (passage && passage.free) {
+    // free recitation: the passage grows as the reciter goes; word counts of newly reached ayahs go first
+    let fresh = null;
+    for (const x of words) {
+      const sa = x.s * 1000 + x.a;
+      if (countsSent.has(sa)) continue;
+      countsSent.add(sa);
+      (fresh || (fresh = {}))[x.s + ':' + x.a] = session.wordCount(x.s, x.a);
+    }
+    if (fresh) postS(sid, { type: 'counts', counts: fresh });
+  }
   const sig = words.map(x => x.st[0] + x.vowel).join('');
   if (sig !== lastSig) { lastSig = sig; postS(sid, { type: 'verdicts', words }); }
 }
@@ -219,14 +265,24 @@ self.onmessage = ev => {
       } else if (m.type === 'start') {
         if (m.sid !== curSid) return;                // superseded before it ran
         if (!session) throw new Error('not ready');
-        passage = { s: m.s | 0, from: m.from | 0, to: m.to | 0 };
-        lastSig = ''; acc = new Map(); soft = new Map(); flagged = new Set(); tkOf = new Map();
+        passage = m.free ? { free: true } : { s: m.s | 0, from: m.from | 0, to: m.to | 0 };
+        hintOn = false;
+        lastSig = ''; acc = new Map(); soft = new Map(); flagged = new Set(); tkOf = new Map(); countsSent = new Set();
+        // a range stays inside its surah; free recitation must relocate across surahs (the session reads this
+        // option whenever it rebuilds its engine: on reset and after a correction)
+        session.stayOnSurah = !passage.free;
+        if (passage.free) session.setExpected(null);
         session.reset();
-        session.setExpected({ surah: passage.s, ayah: passage.from, ayahEnd: passage.to });
-        // engine word counts per ayah (6 ayahs split a joined Uthmani word differently from the app)
-        const counts = {};
-        for (let a = passage.from; a <= passage.to; a++) counts[a] = session.wordCount(passage.s, a);
-        postS(m.sid, { type: 'counts', counts });
+        if (passage.free) {
+          const h = m.hint;
+          if (h && h.surah > 0 && h.ayah > 0 && session.engine && session.engine.setHint) { session.engine.setHint({ surah: h.surah | 0, ayah: h.ayah | 0 }); hintOn = true; }
+        } else {
+          session.setExpected({ surah: passage.s, ayah: passage.from, ayahEnd: passage.to });
+          // engine word counts per ayah (6 ayahs split a joined Uthmani word differently from the app)
+          const counts = {};
+          for (let a = passage.from; a <= passage.to; a++) counts[a] = session.wordCount(passage.s, a);
+          postS(m.sid, { type: 'counts', counts });
+        }
         handle(session.setMode('correction'), m.sid);
       } else if (m.type === 'pcm') {
         if (!session || !passage || m.sid !== curSid) return;
@@ -239,7 +295,7 @@ self.onmessage = ev => {
         const msgs = await session.stop();
         handle(msgs, m.sid);
         postS(m.sid, { type: 'stopped', words: settleFinal(rawWords(), msgs) });
-        passage = null;
+        passage = null; hintOn = false;
       }
     } catch (e) {
       if (m.type === 'init') post({ type: 'error', message: String((e && e.message) || e) });

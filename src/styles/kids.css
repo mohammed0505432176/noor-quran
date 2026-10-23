@@ -149,3 +149,40 @@
 @media (prefers-reduced-motion: reduce) {
   .kids *, .k-confetti *, .k-sheet *, .k-entry * { animation: none !important; transition: none !important; }
 }
+
+/* prayer guide */
+.k-t5 { background: linear-gradient(160deg, #e3d4ff, #a98cf0); }
+.k-wide { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; min-height: 150px; padding: 14px 22px; }
+.k-wide b { font-size: 1.6rem; }
+.k-wide .k-tile-art { width: 130px; height: 130px; }
+.k-pr-stage { position: relative; margin-top: 8px; padding: 14px; border-radius: 28px; text-align: center; background: linear-gradient(160deg, rgba(227, 212, 255, .5), rgba(159, 216, 232, .4)); border: 2px solid var(--line); box-shadow: var(--shadow); touch-action: pan-y; }
+.k-pr-badge { display: inline-block; padding: 6px 16px; border-radius: 999px; background: linear-gradient(180deg, #ffe08a, #ffc14d); color: #4a3200; font-weight: 800; box-shadow: 0 3px 0 rgba(160, 100, 0, .45); }
+.k-pr-art { display: grid; place-items: center; height: min(52vw, 260px); margin-top: 8px; }
+.k-pr-img { max-height: 100%; width: auto; max-width: 100%; filter: drop-shadow(0 8px 8px rgba(0, 0, 0, .28)); animation: k-pr-in .55s cubic-bezier(.2, 1.2, .4, 1) both; }
+@keyframes k-pr-in { from { opacity: 0; transform: translateY(24px) scale(.82); } to { opacity: 1; transform: none; } }
+.k-pr-title { margin: 14px 0 4px; text-align: center; font-size: 1.5rem; }
+.k-pr-desc { margin: 0 0 8px; text-align: center; color: var(--muted); font-weight: 600; line-height: 1.8; font-size: 1.05rem; }
+.k-pr-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; list-style: none; margin: 0 0 8px; padding: 0; counter-reset: pr; }
+.k-pr-list li { counter-increment: pr; padding: 8px 14px; border-radius: 16px; background: var(--k-card); border: 2px solid var(--line); font-weight: 800; }
+.k-pr-list li::before { content: counter(pr, arabic-indic) ' '; color: #2fb36b; }
+.k-pr-say { margin-top: 10px; }
+.k-pr-q { font-weight: 800; color: var(--muted); }
+.k-say + .k-say { margin-top: 10px; padding-top: 8px; border-top: 2px dashed var(--line); }
+.k-say-t { font-size: clamp(1.4rem, 6vw, 2rem); line-height: 2.1; margin: 6px 0 2px; }
+.k-say.playing .k-say-t { color: #2fb36b; }
+.k-sayplay { width: 72px; height: 72px; font-size: 1.6rem; }
+.k-auto { display: block; width: 100%; min-height: 60px; margin-top: 14px; border: 0; border-radius: 30px; cursor: pointer; font-weight: 800; font-size: 1.2rem; background: linear-gradient(180deg, #b79bf5, #8a6be0); color: #fff !important; box-shadow: 0 5px 0 #5f43b3; }
+.k-auto span { color: #fff; }
+.k-auto:active { transform: translateY(3px); box-shadow: 0 2px 0 #5f43b3; }
+.kids .k-auto.on { background: linear-gradient(180deg, #ff9a7a, #f0654a); box-shadow: 0 5px 0 #b63f29; }
+.k-pr-end .k-end-art { height: 200px; display: grid; place-items: center; }
+.k-pr-quiz { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.k-pq { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border-radius: 22px; border: 2px solid var(--line); background: color-mix(in srgb, var(--k) 40%, var(--card-2)); cursor: pointer; box-shadow: 0 4px 0 rgba(0, 0, 0, .18); }
+.k-pq .k-art { height: 120px; }
+.k-pq small { font-weight: 800; color: var(--ink); opacity: 0; }
+.k-pq.right small { opacity: 1; }
+.kids .k-pq.right { background: #3cc47c; border-color: #2a9a60; pointer-events: none; }
+.kids .k-pq.right small { color: #fff; }
+.kids .k-pq.wrong { animation: k-shake .5s; background: #ff7a8a; }
+.k-pq-n { position: absolute; top: 6px; inset-inline-start: 6px; min-width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; background: #fff; color: #146b3a; }
+.k-pq-n:empty { display: none; }
