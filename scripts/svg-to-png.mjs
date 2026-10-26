@@ -9,7 +9,7 @@ const p = (...a) => resolve(root, ...a);
 mkdirSync(p('assets'), { recursive: true });
 mkdirSync(p('public'), { recursive: true });
 
-const BG = '#06120d';
+const BG = '#082620';
 const jobs = [
   ['assets/icon.svg', 'assets/icon-only.png', 1024],
   ['assets/icon-foreground.svg', 'assets/icon-foreground.png', 1024],

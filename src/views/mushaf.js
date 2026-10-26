@@ -6,6 +6,7 @@ import { PAGE_COUNT, pageOf, pageContent, pageFirst, side, quarterOf, quarterSta
 import * as audio from '../core/audio.js';
 import { loadTajweed, TAJWEED_LEGEND } from '../core/tajweed.js';
 import * as madani from '../core/madani.js';
+import * as store from '../core/store.js';
 
 const BASMALA = 'بِسۡمِ ٱللَّهِ ٱلرَّحۡمَٰنِ ٱلرَّحِيمِ';
 const ORD = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع', 'العاشر', 'الحادي عشر', 'الثاني عشر', 'الثالث عشر', 'الرابع عشر', 'الخامس عشر', 'السادس عشر', 'السابع عشر', 'الثامن عشر', 'التاسع عشر', 'العشرون', 'الحادي والعشرون', 'الثاني والعشرون', 'الثالث والعشرون', 'الرابع والعشرون', 'الخامس والعشرون', 'السادس والعشرون', 'السابع والعشرون', 'الثامن والعشرون', 'التاسع والعشرون', 'الثلاثون'];
@@ -13,6 +14,7 @@ const RATES = [0.75, 1, 1.25, 1.5];
 const reduced = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const TJ_KEY = 'noor.tajweed';
 const MD_KEY = 'noor.madani';
+const HEAT_KEY = 'noor.heat';
 let mdWarned = false;
 const clampP = p => Math.min(PAGE_COUNT, Math.max(1, p | 0));
 
@@ -120,6 +122,8 @@ async function renderPages(el, page, focusS, focusA) {
   try { tjOn = localStorage.getItem(TJ_KEY) === '1'; } catch (e) { /* ignore */ }
   let mdOn = true;
   try { mdOn = localStorage.getItem(MD_KEY) !== '0'; } catch (e) { /* ignore */ }
+  let heatOn = false;
+  try { heatOn = localStorage.getItem(HEAT_KEY) === '1'; } catch (e) { /* ignore */ }
   const mdReady = new Set(), mdFail = new Set(), mdPending = new Set();
   const useMd = () => mdOn && !tjOn;
 
@@ -234,11 +238,12 @@ async function renderPages(el, page, focusS, focusA) {
     }
     return `<section class="mp-page page-${side(p)}" data-p="${p}">` +
       `<div class="mp-top"><span class="mp-surah">${esc(pageTitle(p))}</span><span class="mp-hizb">${esc(hz)}</span><span class="mp-juz">الجزء ${ORD[juzOfPage(p) - 1]}</span></div>` +
+      `<div class="mp-heat-legend" aria-hidden="true"><span>قليل</span><i></i><span>كثير</span></div>` +
       `<div class="mp-body${md ? ' madani' : ''}">${body}</div>` +
       `<div class="mp-foot"><span class="mp-num">${N(p)}</span><span class="mp-side">${side(p) === 'right' ? 'صفحة يمنى' : 'صفحة يسرى'}</span></div></section>`;
   };
   const progressHTML = () => `<div class="mp-progress"><i style="width:${(cur / PAGE_COUNT * 100).toFixed(2)}%"></i></div>`;
-  const bookHTML = () => `<div class="mp-book${shown.length > 1 ? ' spread' : ''}">${shown.map(pageHTML).join('')}</div>`;
+  const bookHTML = () => `<div class="mp-book${shown.length > 1 ? ' spread' : ''}${heatOn ? ' heat-on' : ''}">${shown.map(pageHTML).join('')}</div>`;
   const navHTML = () => {
     const lo = shown[0], hi = shown[shown.length - 1];
     return `<div class="mp-nav"><button class="icon-btn mp-prev" aria-label="الصفحة السابقة"${lo <= 1 ? ' disabled' : ''}>${icon('back')}</button>` +
@@ -249,7 +254,7 @@ async function renderPages(el, page, focusS, focusA) {
   shown = pagesFor(cur);
   rubs = new Set(shown.flatMap(p => quarterStartsOn(p).map(x => x.s + ':' + x.a)));
 
-  el.innerHTML = header(pageTitle(cur), { back: 'mushaf', actions: `<button class="chip${mdOn ? ' active' : ''}" id="mdToggle" aria-pressed="${mdOn}" title="خط مصحف المدينة">المدينة</button><button class="chip${tjOn ? ' active' : ''}" id="tjToggle" aria-pressed="${tjOn}">تجويد</button><button class="icon-btn mp-goto-ic" id="gotoIc" aria-label="اذهب إلى صفحة">${icon('search')}</button><button class="icon-btn" id="playAll" aria-label="استماع للصفحة">${icon('play')}</button>` }) +
+  el.innerHTML = header(pageTitle(cur), { back: 'mushaf', actions: `<button class="chip${mdOn ? ' active' : ''}" id="mdToggle" aria-pressed="${mdOn}" title="خط مصحف المدينة">المدينة</button><button class="chip${heatOn ? ' active' : ''}" id="heatToggle" aria-pressed="${heatOn}">خريطة أخطائي</button><button class="chip${tjOn ? ' active' : ''}" id="tjToggle" aria-pressed="${tjOn}">تجويد</button><button class="icon-btn mp-goto-ic" id="gotoIc" aria-label="اذهب إلى صفحة">${icon('search')}</button><button class="icon-btn" id="playAll" aria-label="استماع للصفحة">${icon('play')}</button>` }) +
     `<div class="tj-bar mb" id="tjBar"${tjOn ? '' : ' hidden'}><button class="chip" id="tjLegend">دليل الألوان</button><span class="small muted" id="tjState"></span></div>` +
     progressHTML() + bookHTML() + navHTML() +
     `<div class="center mt"><button class="btn ghost" id="markPage">${icon('check', 18)} تعليم الصفحة كمقروءة</button></div>` +
@@ -274,7 +279,71 @@ async function renderPages(el, page, focusS, focusA) {
     playing = o;
     if (o) addCls(o.s, o.a, 'playing');
   };
-  const applyMarks = () => { if (sel) select(sel); if (playing) mark(playing); };
+  // ---- mistake heat map (word index per ayah + decayed error frequency)
+  const heatOf = (s, a, w) => { try { const f = store.wordErrorHeat; const v = typeof f === 'function' ? +f(s, a, w) : 0; return v > 0 ? Math.min(1, v) : 0; } catch (e) { return 0; } };
+  const paintHeat = (node, h) => {
+    if (h > 0.03) { node.dataset.heat = h.toFixed(2); node.style.setProperty('--h', h.toFixed(2)); }
+    else { delete node.dataset.heat; node.style.removeProperty('--h'); }
+  };
+  const applyHeat = () => {
+    for (const pg of $$('.mp-page', el)) {
+      const mw = $$('.mq-w', pg);
+      if (mw.length) {
+        const cnt = new Map();
+        const p = +pg.dataset.p;
+        const f0 = pageFirst(p);
+        if (f0 && p > 1) { // an ayah that began on the previous page continues here
+          try {
+            const L = madani.cachedLayout(p - 1);
+            let n = 0;
+            if (L) for (const l of L.lines) for (const w of (l.w || [])) if (w[1] === f0.s && w[2] === f0.a && !w[3]) n++;
+            if (n) cnt.set(f0.s + ':' + f0.a, n);
+          } catch (e) { /* ignore */ }
+        }
+        for (const sp of mw) {
+          if (sp.classList.contains('mq-end')) { delete sp.dataset.heat; sp.style.removeProperty('--h'); continue; }
+          const s = +sp.dataset.s, a = +sp.dataset.a, k = s + ':' + a;
+          const w = (cnt.get(k) || 0) + 1; cnt.set(k, w);
+          sp.dataset.w = w;
+          paintHeat(sp, heatOn ? heatOf(s, a, w) : 0);
+        }
+      }
+      for (const sp of $$('.ayah', pg)) {
+        let mx = 0;
+        if (heatOn) { const s = +sp.dataset.s, a = +sp.dataset.a, n = ayah(s, a).split(/\s+/).filter(Boolean).length; for (let w = 1; w <= n; w++) mx = Math.max(mx, heatOf(s, a, w)); }
+        paintHeat(sp, mx);
+      }
+    }
+  };
+  const setHeat = on => {
+    heatOn = on;
+    const b = $('#heatToggle', el);
+    if (b) { b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); }
+    const bk = $('.mp-book', el); if (bk) bk.classList.toggle('heat-on', on);
+    try { localStorage.setItem(HEAT_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+    applyHeat();
+  };
+  const openHeatSheet = (s, a, w0) => {
+    const n = ayah(s, a).split(/\s+/).filter(Boolean).length;
+    let w = w0 || 1, best = -1;
+    if (!w0) for (let i = 1; i <= n; i++) { const h = heatOf(s, a, i); if (h > best) { best = h; w = i; } }
+    const e = (S.wm || {})[s + ':' + a + ':' + w] || {};
+    const cnt = e.n || 1;
+    let when = '';
+    if (e.d) { try { when = new Date(e.d + 'T00:00:00').toLocaleDateString('ar', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (x) { when = e.d; } }
+    const html = `<div class="center mb"><div class="small muted mb">سورة ${esc(surahName(s))} · الآية ${N(a)} · الكلمة ${N(w)}</div>` +
+      `<b>أخطأت هنا ${N(cnt)} ${cnt === 1 ? 'مرة' : cnt === 2 ? 'مرتين' : 'مرات'}${when ? ' · آخرها ' + esc(when) : ''}</b></div>` +
+      `<div class="grid-2"><button class="btn" data-go="recite/${s}?from=${a}&to=${a}" data-act="close">${icon('mic', 18)} تدرّب على هذه الآية</button>` +
+      `<button class="btn ghost" data-act="play">${icon('play', 18)} استمع</button></div>`;
+    if (openSheet) openSheet.close();
+    const sh = openSheet = sheet(html, { onClose: () => { if (openSheet === sh) openSheet = null; } });
+    sh.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-act]'); if (!b) return;
+      sh.close();
+      if (b.dataset.act === 'play') audio.playRange(s, a, a);
+    });
+  };
+  const applyMarks = () => { if (sel) select(sel); if (playing) mark(playing); applyHeat(); };
   const rerender = () => {
     $('.mp-book', el).outerHTML = bookHTML();
     applyMarks(); fitAll(); ensureMadani();
@@ -522,6 +591,7 @@ async function renderPages(el, page, focusS, focusA) {
     }
     if (e.target.closest('#playAll')) { toggleAll(); return; }
     if (e.target.closest('#mdToggle')) { setMd(!mdOn); return; }
+    if (e.target.closest('#heatToggle')) { setHeat(!heatOn); return; }
     if (e.target.closest('#tjToggle')) { setTj(!tjOn); return; }
     if (e.target.closest('#tjLegend')) { openLegend(); return; }
     if (e.target.closest('#markPage')) { markPage(); return; }
@@ -529,6 +599,7 @@ async function renderPages(el, page, focusS, focusA) {
     if (e.target.closest('.mp-prev')) { goPrev(); return; }
     if (e.target.closest('.mp-goto') || e.target.closest('#gotoIc')) { openGoto(); return; }
     const sp = e.target.closest('.ayah, .mq-w');
+    if (sp && el.contains(sp) && heatOn && sp.dataset.heat) { openHeatSheet(+sp.dataset.s, +sp.dataset.a, +sp.dataset.w || 0); return; }
     if (sp && el.contains(sp)) { const s = +sp.dataset.s, a = +sp.dataset.a; select({ s, a }); openAyahSheet(s, a); }
   };
   const onKey = e => {

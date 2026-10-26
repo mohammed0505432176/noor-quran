@@ -1,9 +1,9 @@
 {
   "appId": "app.noor.quran",
-  "appName": "نور",
+  "appName": "نور الحياة",
   "webDir": "dist",
   "android": {
-    "backgroundColor": "#06120d",
+    "backgroundColor": "#082620",
     "allowMixedContent": false,
     "adjustMarginsForEdgeToEdge": "auto"
   },

@@ -16,6 +16,7 @@ import './styles/components.css';
 import './styles/mushaf.css';
 import './styles/kids.css';
 import './styles/prayer.css';
+import './styles/hifz.css';
 import { S, on } from './core/store.js';
 import { icon, celebrate, toast } from './ui.js';
 import { loadQuran } from './core/quran.js';
@@ -36,11 +37,12 @@ const ROUTES = {
   family: () => import('./views/family.js'),        // family circle board & challenges
   recordings: () => import('./views/recordings.js'),// my saved recitations
   kids: () => import('./views/kids.js'),           // kids corner: kids/<azkar|letters|quran|quiz>/<id>
+  hifz: () => import('./views/hifz.js'),           // memorization tracker + goals
   more: () => import('./views/more.js'),
   settings: () => import('./views/settings.js')
 };
 const TABS = [['home', 'home', 'الرئيسية'], ['mushaf', 'book', 'المصحف'], ['recite', 'mic', 'التسميع'], ['prayer', 'mosque', 'الصلاة'], ['more', 'grid', 'المزيد']];
-const TAB_OF = { search: 'mushaf', train: 'recite', family: 'more', recordings: 'recite', review: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', kids: 'more', tasbeeh: 'more', settings: 'more' };
+const TAB_OF = { search: 'mushaf', train: 'recite', family: 'more', recordings: 'recite', review: 'more', hifz: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', kids: 'more', tasbeeh: 'more', settings: 'more' };
 
 const main = document.getElementById('app');
 const nav = document.getElementById('tabs');
@@ -121,7 +123,7 @@ function init() {
   import('./core/widget.js').then(w => w.updatePrayerWidget()).catch(() => {});
   import('./core/family.js').then(f => f.startFamilySync && f.startFamilySync()).catch(() => {});
   const sp = document.getElementById('splash');
-  if (sp) setTimeout(() => { sp.classList.add('hide'); setTimeout(() => sp.remove(), 700); }, 1300);
+  if (sp) { const rm = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; setTimeout(() => { sp.classList.add('hide'); setTimeout(() => sp.remove(), 650); }, rm ? 500 : 1750); }
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.Capacitor?.isNativePlatform?.()) {
     navigator.serviceWorker.register(import.meta.env.BASE_URL + 'sw.js').catch(() => {});
   }

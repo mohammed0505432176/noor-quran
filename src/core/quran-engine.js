@@ -10,6 +10,8 @@
 //   Engine.start(s, from, to, { onVerdicts(words), onIssue(issue), onError(msg), onSlow() }) -> sid ; Engine.pcm(Float32Array) ;
 //   Engine.startFree(handlers, { hint:{surah,ayah} }?) -> sid   free recitation: no passage, the engine discovers where the
 //     reciter is (whole Quran) and follows across ayahs and surahs; engine word counts arrive per ayah as they are reached
+//   Engine.relock() free mode only: clears the surah lock (the engine otherwise sticks to the surah it locked on until a
+//     sustained match elsewhere) and re-runs discovery
 //   Engine.stop() -> Promise<words> (current session; [] on 20 s timeout) ; Engine.cancel() abandons the session
 //   words: [{ s, a, w, st, vowel }]  (w is 0-based within ayah, as the engine numbers words; st 'ok'|'unsure'|'wrong'|'skipped'|'pending')
 //   Engine.counts() -> { [a] | ['s:a']: n }  engine words per ayah of the current session
@@ -113,7 +115,7 @@ export function openEngine() {
     }).finally(() => clearTimeout(timer));
     w.onmessage = ev => route(ev.data || {});
     w.onerror = e => { if (cur && cur.handlers.onError) cur.handlers.onError((e && e.message) || 'worker'); };
-    return { start, startFree, pcm, stop, cancel, counts: () => counts };
+    return { start, startFree, relock, pcm, stop, cancel, counts: () => counts };
   })();
   ready = p;
   p.catch(() => { if (ready === p) resetWorkerState(); });
@@ -158,6 +160,10 @@ function begin(msg, h) {
   };
   worker.postMessage({ type: 'start', sid, ...msg });
   return sid;
+}
+/** Free recitation: forget the surah lock and run discovery again (the reciter moved on / the view is on the wrong surah). */
+function relock() {
+  if (worker && cur && !cur.done) worker.postMessage({ type: 'relock', sid: cur.sid });
 }
 function pcm(samples) {
   if (!worker || !cur || cur.done) return;

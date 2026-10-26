@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeMistakes } from '../src/core/feedback.js';
+import { analyzeMistakes, MISTAKE_TYPE_AR } from '../src/core/feedback.js';
 
 const E = 'ٱلْحَمْدُ لِلَّهِ رَبِّ ٱلْعَـٰلَمِينَ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ'.split(' ');
 const kinds = r => r.words.map(w => w.kind);
@@ -91,4 +91,16 @@ test('over the cap skips alignment', () => {
   const r = analyzeMistakes(exp, 'كتاب كتاب', exp.map(() => 'bad'));
   assert.ok(r.words.every(w => w.kind === 'skip'));
   assert.deepEqual(r.extras, []);
+});
+
+test('two words read in the wrong order are a transposition, not a skip plus an extra', () => {
+  const st = ['ok', 'ok', 'bad', 'bad', 'ok', 'ok'];
+  const r = analyzeMistakes(E, 'الحمد لله العالمين رب الرحمن الرحيم', st);
+  assert.ok(kinds(r).includes('swap'));
+  assert.equal(r.extras.length, 0);
+});
+
+test('mistake types have Arabic names', () => {
+  for (const k of ['skip', 'extra', 'wrong', 'vowel', 'repeat', 'swap']) assert.ok(MISTAKE_TYPE_AR[k]);
+  assert.equal(MISTAKE_TYPE_AR.swap, 'تقديم وتأخير');
 });

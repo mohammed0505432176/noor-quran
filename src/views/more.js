@@ -7,6 +7,7 @@ const GROUPS = [
   ['التعلّم والحفظ', [
     ['ai', 'spark', 'المساعد الذكي', 'اسأل عن معاني الآيات', 'e'],
     ['train', 'trophy', 'مركز التدريب', 'تلقين، الآية التالية، أخطائي، تحدّي اليوم', 'd'],
+    ['hifz', 'book', 'متابعة الحفظ', 'خريطة صفحاتك وأهدافك', 'b'],
     ['review', 'brain', 'المراجعة', 'ثبّت حفظك بالتكرار المتباعد', 'a'],
     ['search', 'search', 'البحث في المصحف', 'ابحث بكلمة أو عبارة', 'c']
   ]],
@@ -25,10 +26,10 @@ const GROUPS = [
 ];
 
 async function shareApp() {
-  const text = 'حمّل تطبيق نور للقرآن الكريم 🌙';
+  const text = 'حمّل تطبيق نور الحياة للقرآن الكريم 🌙';
   const url = 'https://github.com/mohammed0505432176/noor-quran/releases/latest';
   try {
-    if (navigator.share) { await navigator.share({ title: 'نور', text, url }); return; }
+    if (navigator.share) { await navigator.share({ title: 'نور الحياة', text, url }); return; }
   } catch (e) { if (e && e.name === 'AbortError') return; }
   try { await navigator.clipboard.writeText(`${text} ${url}`); toast('تم نسخ رابط التطبيق'); }
   catch (e) { toast('تعذرت المشاركة'); }
@@ -53,7 +54,7 @@ export default {
         <button class="k-entry mt" data-go="kids"><span class="k-entry-art"><img class="k-art" src="${import.meta.env.BASE_URL}kids/img/mascot.webp" alt=""></span>
           <span style="flex:1"><b>ركن الأطفال ✨</b><small>أذكار وحروف وسور وألعاب بأصوات حقيقية</small></span></button>
         ${GROUPS.map(([title, items]) => `<div class="more-sec">${title}</div><div class="list">${items.map(row).join('')}</div>`).join('')}
-        <div class="center mt"><div class="gold" style="font-family:var(--font-display);font-size:1.2rem">نور ١٫٠</div>
+        <div class="center mt"><div class="gold" style="font-family:var(--font-display);font-size:1.2rem">نور الحياة ١٫٠</div>
           <div class="muted small mt">صدقة جارية — شاركه مع أهلك</div>
           <button class="btn sm ghost mt" id="share">${icon('send', 16)} شارك التطبيق</button></div>`;
       el.querySelector('#share').onclick = shareApp;

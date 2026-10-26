@@ -1,10 +1,13 @@
 // Training center: next-ayah quiz, talqin (listen & repeat), my mistakes, daily challenge, first-words.
-import { S, today, addReview, weakAyahs } from '../core/store.js';
+import { S, today, addReview, weakAyahs, dueReviews, gradeReview, recordWords } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/quran.js';
 import { words } from '../core/arabic.js';
 import * as audio from '../core/audio.js';
 import { haptic } from '../core/platform.js';
 import { esc, icon, toast, header, N } from '../ui.js';
+import { startRecorder } from '../core/recorder.js';
+import { engineSupported, engineCached, openEngine, mapVerdicts } from '../core/quran-engine.js';
+import '../styles/train.css';
 
 const ROUNDS = 10;
 // Skip weak-ayah entries whose surah/ayah do not exist (ayah() throws or returns undefined).
@@ -88,6 +91,12 @@ export default {
         </div>
 
         <div class="card">
+          <b>اختبر حفظك</b>
+          <p class="muted small">بطاقات: تظهر أول كلمات الآية وتكملها بصوتك، من مواضع ضعفك ومراجعاتك المستحقة.</p>
+          <button class="btn block" data-act="flash">${icon('mic', 16)} ابدأ الاختبار</button>
+        </div>
+
+        <div class="card">
           <b>الآية التالية</b>
           <p class="muted small">تُعرض آية ويُطلب منك تذكّر ما بعدها. ${N(ROUNDS)} أسئلة في كل جولة.</p>
           <button class="btn block" data-act="next">${icon('play', 16)} ابدأ التمرين</button>
@@ -120,7 +129,7 @@ export default {
         ${cloud.length ? `<div class="section-title mt">أكثر الكلمات التي أخطأت فيها</div><div class="row">${cloud.map(([w, c]) => `<span class="chip quran">${esc(w)} <small class="muted">${N(c)}</small></span>`).join('')}</div>` : ''}`;
       wirePicker(el, 'fw');
       wire({
-        next: () => nextSetup(), talqin: () => talqinSetup(),
+        flash: () => flashSetup(), next: () => nextSetup(), talqin: () => talqinSetup(),
         first: () => { const p = readPicker(el, 'fw'); if (p) window.noorGo(goUrl(p.s, p.from, p.to, 'display=first')); }
       });
     }
@@ -274,7 +283,217 @@ export default {
       listen();
     }
 
+    // ================= FLASH-CARD TEST «اختبر حفظك» =================
+    let flashCleanup = () => {};
+    function flashSetup() {
+      killAudio(); flashCleanup();
+      const weak = weakAyahs(20).filter(validWeakAyah), due = dueReviews();
+      el.innerHTML = `${header('اختبر حفظك', { back: 'train' })}
+        <div class="card">
+          <label class="row"><input type="checkbox" id="fc-weak" ${weak.length ? 'checked' : 'disabled'}> مواضع ضعفي (${N(weak.length)} آية)</label>
+          <label class="row mt"><input type="checkbox" id="fc-due" ${due.length ? 'checked' : 'disabled'}> مراجعات مستحقة (${N(due.length)})</label>
+          <label class="row mt"><input type="checkbox" id="fc-sur"> سورة محددة</label>
+          <div id="fc-pk" hidden>${picker('fc')}</div>
+          <label class="row mt"><input type="checkbox" id="fc-chain"> وضع السلسلة: الانتقال تلقائياً بعد كل إجابة صحيحة</label>
+          <p class="muted small">تظهر أول كلمات الآية وتكمل الباقي بصوتك. كل تلميح يخفض درجة البطاقة. يتوقف الاستماع بعد ٣٠ ثانية صمت.</p>
+          <button class="btn block mt" data-act="go">${icon('play', 16)} ابدأ</button></div>`;
+      wirePicker(el, 'fc');
+      const chk = id => el.querySelector('#' + id);
+      chk('fc-sur').onchange = () => { el.querySelector('#fc-pk').hidden = !chk('fc-sur').checked; };
+      wire({ go: () => {
+        const deck = [], push = (s, a, rv) => {
+          const ex = deck.find(c => c.s === s && c.a === a);
+          if (ex) { if (rv) ex.rv = rv; return; }
+          try { if (!ayah(s, a)) return; } catch (e) { return; }
+          deck.push({ s, a, rv: rv || null });
+        };
+        if (chk('fc-weak').checked) for (const x of weak) push(x.s, x.a);
+        if (chk('fc-due').checked) for (const r of due) {
+          const n = r.to - r.from + 1, pick = n <= 3 ? Array.from({ length: n }, (_, i) => r.from + i) : [r.from, r.from + Math.floor(n / 2), r.to];
+          pick.forEach(a => push(r.s, a, r.id));
+        }
+        if (chk('fc-sur').checked) {
+          const p = readPicker(el, 'fc'); if (!p) return;
+          const all = []; for (let a = p.from; a <= p.to; a++) all.push(a);
+          while (all.length > 15) all.splice(rnd(all.length), 1);
+          all.forEach(a => push(p.s, a));
+        }
+        if (!deck.length) return toast('لا توجد آيات للاختبار، اختر مصدراً');
+        for (let i = deck.length - 1; i > 0; i--) { const j = rnd(i + 1); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+        flashRun(deck.slice(0, 20), chk('fc-chain').checked);
+      } });
+    }
+
+    async function flashRun(deck, chain) {
+      let useEngine = engineSupported() && await engineCached();
+      if (!alive) return;
+      let rec = null, qe = null, mic = false, paused = false, silentSince = Date.now(), lastSig = '';
+      let i = 0, card = null, active = false, vw = [], autoTimer = null, gen = 0, timer = null;
+      const results = [];
+      const lvl = v => { const m = el.querySelector('#fc-mic'); if (m) m.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); if (v > 0.06) silentSince = Date.now(); };
+      const stopAll = () => {
+        clearTimeout(autoTimer); gen++; active = false;
+        if (qe) { try { qe.cancel(); } catch (e) { /* ignore */ } }
+        if (rec) { rec.stop().catch(() => {}); rec = null; }
+        clearInterval(timer); timer = null;
+      };
+      flashCleanup = stopAll;
+      const setStatus = t => { const s = el.querySelector('#fc-st'); if (s) s.textContent = t; };
+      const scoreOf = c => c.res === 'wrong' ? 0 : Math.max(0.25, 1 - 0.25 * c.peeks);
+
+      function view() {
+        const full = Math.floor(card.peeks / 2), part = card.peeks % 2;
+        return card.ws.map((w, k) => k < card.hint ? { w, k: 'hint' }
+          : k < card.hint + full ? { w, k: 'peek' }
+          : k === card.hint + full && part ? { w: w[0] + '…', k: 'peek' } : { w: '＿＿', k: 'hid' });
+      }
+      function draw(done) {
+        const body = done
+          ? card.ws.map((w, k) => `<span class="${k < card.hint ? '' : card.mark[k] === 'bad' ? 'w-bad' : 'w-ok'}">${esc(w)}</span>`).join(' ')
+          : view().map(x => `<span class="${x.k === 'hid' ? 'fc-hid' : x.k === 'peek' ? 'fc-peek' : ''}">${esc(x.w)}</span>`).join(' ');
+        el.innerHTML = `${header('اختبر حفظك', { back: 'train' })}
+          <div class="row" style="justify-content:space-between"><span class="muted small">بطاقة ${N(i + 1)} من ${N(deck.length)}</span><span class="gold small">${N(results.filter(r => r.res === 'ok').length)} صحيحة</span></div>
+          <div class="progress mt"><i style="width:${i / deck.length * 100}%"></i></div>
+          <div class="card mt"><div class="muted small">${esc(surahName(card.s))} · الآية ${N(card.a)}</div>
+            <p class="fc-hint">${body}</p>
+            <div class="fc-status muted small" id="fc-st"></div>
+            ${done ? `<div class="center"><span class="fc-res ${card.res === 'ok' ? 'ok' : card.res === 'peek' ? 'peek' : 'bad'}">${card.res === 'ok' ? 'صحيح' : card.res === 'peek' ? 'صحيح بتلميح' : 'خطأ'}</span></div>` : useEngine ? `<div class="fc-mic ${mic && !paused ? 'live' : ''}" id="fc-mic" data-act="mic">${icon('mic', 28)}</div>` : ''}
+          </div>
+          ${done ? `<div class="row mt"><button class="btn" data-act="next">${i + 1 >= deck.length ? 'إنهاء' : 'التالية'}</button></div>`
+            : `<div class="row mt" id="fc-act"><button class="btn ghost" data-act="peek">تلميح</button>
+              ${useEngine ? '<button class="btn" data-act="fin">انتهيت</button>' : '<button class="btn ghost" data-act="show">أظهر الإجابة</button>'}
+              <button class="btn ghost" data-act="skip">تخطَّ</button></div>`}`;
+        wire({
+          peek: () => { if (card.peeks < (card.ws.length - card.hint) * 2) { card.peeks++; draw(false); if (useEngine) { mic = !paused; const m = el.querySelector('#fc-mic'); if (m && mic) m.classList.add('live'); } } else toast('لا مزيد من الكلمات'); },
+          mic: () => toggleMic(), fin: () => finishCard(), skip: () => finishCard('wrong', true),
+          show: () => selfGrade(), next: () => advance()
+        });
+      }
+      function selfGrade() {
+        el.querySelector('.fc-hint').innerHTML = card.ws.map(w => `<span>${esc(w)}</span>`).join(' ');
+        el.querySelector('#fc-act').innerHTML = '<button class="btn" data-act="yes">صحيح ✓</button><button class="btn danger" data-act="no">خطأ ✗</button>';
+        wire({ yes: () => finishCard('ok', true), no: () => finishCard('wrong', true) });
+      }
+      function nextCard() {
+        const c = deck[i], ws = words(ayah(c.s, c.a));
+        card = { ...c, ws, hint: Math.min(ws.length <= 3 ? 1 : ws.length <= 6 ? 2 : 3, Math.max(1, ws.length - 1)), peeks: 0, res: '', mark: [] };
+        draw(false);
+        if (useEngine) armMic();
+      }
+      // one engine session per card; the recorder stays open between cards
+      async function armMic() {
+        const my = ++gen; vw = []; paused = false; active = false; silentSince = Date.now(); lastSig = '';
+        try {
+          if (!rec) {
+            setStatus('جارٍ تجهيز المحرك القرآني…');
+            const r = await startRecorder({
+              onPcm: p => { if (active && !paused && qe) qe.pcm(p); },
+              onLevel: lvl,
+              onError: e => { toast(e === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون' : 'تعذر تسجيل الصوت'); fallbackManual(); }
+            });
+            if (!r) return fallbackManual();
+            if (!alive || my !== gen) { r.stop().catch(() => {}); return; }
+            rec = r;
+          }
+          qe = qe || await openEngine();
+          if (!alive || my !== gen) return;
+          qe.start(card.s, card.a, card.a, {
+            onVerdicts: w => { if (my === gen && active) { vw = w; check(false); } },
+            onError: () => { if (my === gen) { toast('توقف المحرك — استخدم التقييم الذاتي'); fallbackManual(); } }
+          });
+          active = true; mic = true;
+          const m = el.querySelector('#fc-mic'); if (m) m.classList.add('live');
+          setStatus('أسمعك… أكمل الآية');
+          clearInterval(timer);
+          timer = setInterval(() => {
+            if (!active || paused) return;
+            if (Date.now() - silentSince > 30000) { paused = true; mic = false; const m2 = el.querySelector('#fc-mic'); if (m2) m2.classList.remove('live'); setStatus('توقف الاستماع لعدم سماع صوت — اضغط الميكروفون للمتابعة'); }
+          }, 1000);
+        } catch (e) { if (alive && my === gen) { toast('تعذّر تشغيل المحرك القرآني — استخدم التقييم الذاتي'); fallbackManual(); } }
+      }
+      function fallbackManual() {
+        useEngine = false; stopAll(); flashCleanup = stopAll;
+        if (card && !card.res) draw(false);
+      }
+      function toggleMic() {
+        if (!paused) return;
+        paused = false; mic = true; silentSince = Date.now();
+        const m = el.querySelector('#fc-mic'); if (m) m.classList.add('live');
+        setStatus('أسمعك… أكمل الآية');
+      }
+      // judge the words after the hint (and the fully revealed ones): 'ok' | 'bad' | null while still pending
+      function judge(final) {
+        const n = card.ws.length, from = card.hint + Math.floor(card.peeks / 2);
+        const m = mapVerdicts(vw, [{ a: card.a, start: 0, end: n }], qe ? qe.counts() : {});
+        let ok = 0, bad = 0, pend = 0; card.mark = [];
+        for (let k = from; k < n; k++) {
+          const v = m.get(k);
+          if (!v || v.st === 'pending') { pend++; card.mark[k] = 'bad'; }
+          else if (v.st === 'wrong' || v.st === 'skipped') { bad++; card.mark[k] = 'bad'; }
+          else { ok++; card.mark[k] = 'ok'; }
+        }
+        const total = n - from;
+        if (total <= 0) return 'ok';
+        if (!final && pend) { const sig = ok + '/' + bad; if (sig !== lastSig) { lastSig = sig; silentSince = Date.now(); } return null; }
+        return (bad + pend) / total <= 0.15 ? 'ok' : 'bad';
+      }
+      function check(final) { const j = judge(final); if (j) finishCard(j === 'ok' ? 'ok' : 'wrong'); }
+      async function finishCard(res, manual) {
+        if (!card || card.res || card.busy) return;
+        if (useEngine && !manual) {
+          if (!res) {                                  // «انتهيت»: take the engine's final verdicts
+            card.busy = true; active = false;
+            try { vw = await qe.stop(); } catch (e) { /* ignore */ }
+            card.busy = false;
+            if (!alive) return;
+            res = judge(true) === 'ok' ? 'ok' : 'wrong';
+          } else if (res === 'ok') { try { qe.cancel(); } catch (e) { /* ignore */ } }
+        }
+        if (useEngine && manual && qe) { try { qe.cancel(); } catch (e) { /* ignore */ } }
+        gen++; active = false; clearInterval(timer); timer = null;
+        if (res === 'ok' && card.peeks) res = 'peek';
+        card.res = res;
+        if (manual) card.mark = card.ws.map(() => (res === 'wrong' ? 'bad' : 'ok'));
+        results.push(card);
+        haptic(res === 'wrong' ? 'medium' : 'light');
+        // word history: revealed words count as hints, the rest ok/wrong; wrong ayah joins the review list
+        const items = [];
+        card.ws.forEach((_, k) => {
+          if (k < card.hint) return;
+          if (k - card.hint < Math.ceil(card.peeks / 2)) items.push({ a: card.a, w: k + 1, kind: 'hint' });
+          else items.push({ a: card.a, w: k + 1, kind: card.mark[k] === 'bad' ? 'wrong' : 'ok' });
+        });
+        try { recordWords(card.s, items); } catch (e) { /* ignore */ }
+        if (res === 'wrong') addReview(card.s, card.a, card.a);
+        draw(true);
+        if (chain && res === 'ok') { setStatus('أحسنت — التالية…'); autoTimer = setTimeout(() => { if (alive && card && card.res === 'ok') advance(); }, 1200); }
+      }
+      function advance() {
+        clearTimeout(autoTimer);
+        if (++i >= deck.length) return summary();
+        nextCard();
+      }
+      function summary() {
+        stopAll(); flashCleanup = () => {};
+        // grade each review in the deck once: all perfect -> 2, any wrong -> 0, else 1
+        const byRv = new Map();
+        for (const c of results) if (c.rv) { if (!byRv.has(c.rv)) byRv.set(c.rv, []); byRv.get(c.rv).push(c); }
+        for (const [id, cs] of byRv) gradeReview(id, cs.some(c => c.res === 'wrong') ? 0 : cs.every(c => c.res === 'ok') ? 2 : 1);
+        const pts = results.reduce((a, c) => a + scoreOf(c), 0), pct = Math.round(pts / deck.length * 100);
+        const weakest = results.filter(c => c.res !== 'ok').sort((x, y) => scoreOf(x) - scoreOf(y)).slice(0, 6);
+        el.innerHTML = `${header('نتيجة الاختبار', { back: 'train' })}
+          <div class="card hero center"><div class="gold">${icon('trophy', 44)}</div>
+            <h2>${N(pct)}٪</h2>
+            <p class="muted">${N(results.filter(r => r.res === 'ok').length)} صحيحة · ${N(results.filter(r => r.res === 'peek').length)} بتلميح · ${N(results.filter(r => r.res === 'wrong').length)} خاطئة من ${N(deck.length)}</p>
+            <div class="progress"><i style="width:${pct}%"></i></div></div>
+          ${weakest.length ? `<div class="card"><b>أضعف الآيات</b><div class="list mt">${weakest.map(c => `<div class="list-item" data-go="${goUrl(c.s, c.a, c.a, 'display=first')}"><div class="li-main"><b>${esc(surahName(c.s))}</b> <span class="muted small">آية ${N(c.a)}</span></div><div class="li-end"><span class="fc-res ${c.res === 'peek' ? 'peek' : 'bad'}">${c.res === 'peek' ? 'تلميح' : 'خطأ'}</span></div></div>`).join('')}</div></div>` : ''}
+          <div class="row mt"><button class="btn" data-act="again">اختبار جديد</button><button class="btn ghost" data-act="home">العودة</button></div>`;
+        wire({ again: () => flashSetup(), home: () => home() });
+      }
+      nextCard();
+    }
+
     home();
-    return () => { alive = false; killAudio(); };
+    return () => { alive = false; killAudio(); flashCleanup(); };
   }
 };

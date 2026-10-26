@@ -147,7 +147,7 @@
 .rc-fwrap.shown .rc-fpage .mq-w.f-ok { color: color-mix(in srgb, var(--ok) 70%, var(--ink)); }
 .rc-fpage .mq-w.f-ok { color: var(--ink); }
 .rc-fpage .mq-end.f-ok { color: var(--gold-2); }
-.rc-fpage .mq-w.f-uns { color: color-mix(in srgb, var(--gold) 82%, var(--ink)); }
+.rc-fpage .mq-w.f-uns { color: var(--rc-amber); }
 .rc-fpage .mq-w.f-bad { color: var(--bad); cursor: pointer; }
 .rc-fpage .mq-w.f-cur { box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--gold) 55%, transparent); }
 /* plain-text fallback of the same page */
@@ -157,7 +157,7 @@
 .rc-fwrap.shown .rc-fpage .word.f-pend { color: var(--ink); opacity: .62; text-decoration: none; }
 .rc-fwrap.shown .rc-fpage .word.f-ok { color: color-mix(in srgb, var(--ok) 70%, var(--ink)); }
 .rc-fpage .word.f-ok { color: var(--ink); }
-.rc-fpage .word.f-uns { color: color-mix(in srgb, var(--gold) 82%, var(--ink)); }
+.rc-fpage .word.f-uns { color: var(--rc-amber); }
 .rc-fpage .word.f-bad { color: var(--bad); cursor: pointer; }
 .rc-fpage .rc-aend.f-pend { opacity: .25; }
 
@@ -193,3 +193,49 @@
 @media (prefers-reduced-motion: reduce) {
   .rc-fwrap ~ .rc-dock .rc-mic.live::before, .rc-fwrap ~ .rc-dock .rc-mic.live::after { animation: none; opacity: .5; }
 }
+
+/* ===== trustworthy marks, peeking, controls (T-REC) ===== */
+:root { --rc-amber: #d9930d; --rc-blue: #3b8ee8; }
+/* unsure = read, but not clearly: amber, never red */
+.rc-page .word.w-uns { color: var(--rc-amber); }
+/* peeked at (hint button): blue outline, so it is clear the word was shown to you */
+.rc-page .word.w-peek {
+  color: var(--ink); opacity: 1; text-decoration: none; border-radius: 6px;
+  outline: 2px solid color-mix(in srgb, var(--rc-blue) 80%, transparent); outline-offset: 2px;
+}
+.rc-page .word.w-peek.w-pend { color: var(--rc-blue); }
+.rc-stat.unsure b { color: var(--rc-amber); }
+.rc-stat.peek b { color: var(--rc-blue); }
+.rc-mrow.k-unsure { border-inline-start-color: var(--rc-amber); }
+.rc-mrow.k-swap { border-inline-start-color: var(--gold); }
+.rc-mrow.k-peek { border-inline-start-color: var(--rc-blue); }
+.rc-hifz { margin: 6px 0 0; font-weight: 700; color: var(--gold-2); }
+
+/* mistake detail sheet */
+.rc-msheet { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
+.rc-mline { margin: 4px 0; display: flex; align-items: baseline; gap: 8px; }
+.rc-mline b { font-size: 1.6rem; line-height: 1.6; }
+.rc-mline b.muted { font-size: 1.05rem; font-weight: 600; }
+.rc-mline small { color: var(--muted); font-size: .9rem; min-width: 4.5em; }
+
+/* controls sheet */
+.rc-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.rc-opt.col { flex-direction: column; align-items: stretch; cursor: default; }
+.rc-opt span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rc-opt small { color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.rc-opt input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--gold); flex: none; }
+
+/* «pause until I fix it»: the correct word, big, above the dock */
+.rc-fix {
+  position: fixed; left: 12px; right: 12px; bottom: calc(var(--tabbar-h) + var(--safe-b) + 150px); z-index: 450;
+  max-width: 480px; margin: 0 auto; padding: 12px 16px; border-radius: 20px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: var(--card-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 45%, transparent), var(--shadow);
+  -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+}
+.rc-fix small { color: var(--muted); }
+.rc-fix b { font-size: 2.4rem; line-height: 1.7; color: var(--ink); }
+
+/* free mode: glyphs shown by «تلميح» */
+.rc-fpage .mq-w.f-pk, .rc-fpage .word.f-pk { color: var(--ink); opacity: 1; background: none; border-radius: 6px; outline: 2px solid color-mix(in srgb, var(--rc-blue) 80%, transparent); outline-offset: 1px; }
+.rc-bubble { font-family: var(--font-quran); font-size: 1.6rem; line-height: 1.3; background: var(--rc-blue); color: #fff; }

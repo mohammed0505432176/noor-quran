@@ -69,7 +69,7 @@ function read(file) {
   let xml = read(file);
   for (const key of ['app_name', 'title_activity_main']) {
     const re = new RegExp('<string name="' + key + '">[^<]*</string>');
-    const line = '<string name="' + key + '">نور</string>';
+    const line = '<string name="' + key + '">نور الحياة</string>';
     if (re.test(xml)) {
       if (!xml.includes(line)) { xml = xml.replace(re, line); log('strings: set ' + key); }
     } else {

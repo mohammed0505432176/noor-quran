@@ -17,7 +17,8 @@ function close(a, b) {
   return similarity(a, b) >= 0.7 || similarity(strip(a), strip(b)) >= 0.7;
 }
 
-/** Explain what went wrong. states: 'ok'|'bad' per expected word; hinted: Set of indices shown as hints. */
+/** Explain what went wrong. states: 'ok'|'bad' per expected word; hinted: Set of indices shown as hints.
+ *  kinds: ok | skip | wrong | hint | swap (words read in the wrong order); extras are inserted words. */
 export function analyzeMistakes(expected, heard, states, hinted = new Set()) {
   const E = expected.map(norm);
   const T = norm(heard || '').split(' ').filter(Boolean);
@@ -93,5 +94,26 @@ export function analyzeMistakes(expected, heard, states, hinted = new Set()) {
     // said = the aligned transcript word (used to rebuild phrases); heard is only shown when it differs
     else { words[i].kind = 'wrong'; words[i].said = h; if (!close(E[i], h)) words[i].heard = h; }
   }
+  // transposition, case 1: two neighbours substituted by each other (A B read as B A)
+  for (let i = 0; i + 1 < n; i++) {
+    if (words[i].kind !== 'wrong' || words[i + 1].kind !== 'wrong') continue;
+    if (close(E[i], aligned[i + 1]) && close(E[i + 1], aligned[i])) {
+      words[i].kind = words[i + 1].kind = 'swap';
+      words[i].heard = words[i + 1].heard = '';
+      i++;
+    }
+  }
+  // transposition, case 2: a skipped word that shows up as an «extra» right next to its own place was read in the wrong order
+  for (let i = 0; i < n; i++) {
+    if (words[i].kind !== 'skip') continue;
+    const k = extras.findIndex(x => Math.abs(x.after - i) <= 3 && close(E[i], x.heard));
+    if (k >= 0) { words[i].kind = 'swap'; extras.splice(k, 1); }
+  }
   return { words, extras };
 }
+
+/** Arabic name of a verdict kind (engine issue kinds + analyzeMistakes kinds), for the «what went wrong» sheet. */
+export const MISTAKE_TYPE_AR = {
+  skip: 'حذف', extra: 'إضافة', wrong: 'إبدال', vowel: 'تشكيل', repeat: 'تكرار', swap: 'تقديم وتأخير',
+  hint: 'تلقين', peek: 'تلميح', unsure: 'غير واضحة'
+};

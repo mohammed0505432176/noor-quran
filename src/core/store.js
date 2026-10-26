@@ -2,6 +2,8 @@
 // CONTRACT: other modules import { S, save, on, emit, ... } from './store.js'.
 // Ayah keys are always `${s}:${a}` with 1-based surah (1..114) and ayah numbers.
 
+import { pageOf, pageContent, PAGE_COUNT } from './pages.js';
+
 const KEY = 'noor.v1';
 
 const DEFAULTS = () => ({
@@ -22,6 +24,8 @@ const DEFAULTS = () => ({
   bookmarks: [],   // [{ s, a, at }]
   rec: [],         // recitation history [{ d, s, from, to, acc, miss: [words] }] newest first
   reviews: [],     // spaced repetition [{ id, s, from, to, box, due, added, last }]
+  hifz: { pages: {} }, // memorization tracker: pages[p] = { lvl 0..3, at 'YYYY-MM-DD', n, m? first-memorized date }
+  goals: [],       // [{ id, type:'memorize'|'review'|'recite', unit:'page'|'ayah'|'minute', target, period:'day'|'week', created }]
   wm: {},          // per-word recitation history 's:a:w' -> { n, k, d, ok } (w 1-based within ayah)
   tasbeeh: 0,
   badges: {}       // badgeId -> 'YYYY-MM-DD' unlocked
@@ -206,6 +210,103 @@ export function lastAttempt(s, from, to, skip = 0) {
   return null;
 }
 
+// ---- hifz tracker, goals, word heat ----
+const dayNum = k => Math.round(new Date(k + 'T12:00:00').getTime() / 864e5);
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const OLD_DAYS = 1e6; // invalid or empty date: treated as very old so that it decays
+const daysSince = k => {
+  if (!DATE_RE.test(String(k || ''))) return OLD_DAYS;
+  const n = dayNum(today()) - dayNum(k);
+  return Number.isFinite(n) ? Math.max(0, n) : OLD_DAYS;
+};
+const HIFZ_DECAY_DAYS = 14;
+const pageEntry = p => (S.hifz && S.hifz.pages && S.hifz.pages[p]) || null;
+/** Page memorization level 0..3, dropping 1 level per ~14 days since the last review. */
+export function hifzLevel(p) {
+  const e = pageEntry(p); if (!e || !(e.lvl > 0)) return 0;
+  const v = Math.max(0, Math.min(3, e.lvl) - Math.floor(daysSince(e.at) / HIFZ_DECAY_DAYS));
+  return Number.isFinite(v) ? v : 0;
+}
+/** Called after a recitation: quality 0..1 per page. >=0.9 raises the level (at most once per day), 0.6..0.9 only refreshes it. */
+export function notePagesRecited(pages, quality) {
+  const q = Number(quality); if (!(q >= 0.6)) return;
+  const pg = ((S.hifz ||= { pages: {} }).pages ||= {});
+  for (const raw of pages || []) {
+    const p = Math.trunc(Number(raw)); if (!(p >= 1 && p <= PAGE_COUNT)) continue;
+    const cur = hifzLevel(p), e = pg[p] || (pg[p] = { lvl: 0, at: '', n: 0 });
+    const raiseToday = e.at !== today();
+    if (q >= 0.9 && raiseToday) { e.lvl = Math.min(3, cur + 1); e.n = Math.min(9999, (e.n || 0) + 1); }
+    else e.lvl = Math.max(cur, 1);
+    if (!e.m) e.m = today();
+    e.at = today();
+  }
+  save();
+}
+export function setPageMemorized(p, on) {
+  p = Math.trunc(Number(p)); if (!(p >= 1 && p <= PAGE_COUNT)) return;
+  const pg = ((S.hifz ||= { pages: {} }).pages ||= {});
+  if (on) { const e = pg[p] || (pg[p] = { lvl: 0, at: '', n: 0 }); e.lvl = 3; e.at = today(); if (!e.m) e.m = today(); }
+  else delete pg[p];
+  save();
+}
+export function hifzTotals() {
+  let c = 0; for (let p = 1; p <= PAGE_COUNT; p++) if (hifzLevel(p) > 0) c++;
+  return { pages: c, pct: Math.round(c / PAGE_COUNT * 100) };
+}
+
+const GOAL_TYPES = ['memorize', 'review', 'recite'], GOAL_UNITS = ['page', 'ayah', 'minute'], GOAL_PERIODS = ['day', 'week'], GOALS_MAX = 30;
+export function addGoal(g) {
+  g = g || {};
+  if (!GOAL_TYPES.includes(g.type) || !GOAL_UNITS.includes(g.unit) || !GOAL_PERIODS.includes(g.period)) return null;
+  const target = Math.min(9999, Math.trunc(Number(g.target)));
+  if (!(target >= 1)) return null;
+  const goals = (S.goals ||= []);
+  if (goals.length >= GOALS_MAX) return null;
+  const goal = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), type: g.type, unit: g.unit, target, period: g.period, created: today() };
+  goals.push(goal); save(); return goal;
+}
+export function removeGoal(id) { S.goals = (S.goals || []).filter(g => g.id !== id); save(); }
+
+// Window of dates [lo, hi] for the period `k` periods ago (0 = current).
+function goalWindow(g, k) {
+  const span = g.period === 'week' ? 7 : 1;
+  return [dateKey(k * span + span - 1), dateKey(k * span)];
+}
+const SEC_PER_AYAH = 15; // S.rec has no duration: minutes are estimated from ayahs
+function rangePages(s, from, to) { const o = new Set(); if (s >= 1 && from >= 1 && to >= from) for (let p = pageOf(s, from), e = pageOf(s, to); p <= e; p++) o.add(p); return o; }
+const pageAyahs = p => pageContent(p).reduce((t, x) => t + (x.to - x.from + 1), 0);
+/** Progress of a goal in the period `back` periods ago (default current). -> { done, target } */
+export function goalProgress(g, back = 0) {
+  const [lo, hi] = goalWindow(g, back), inW = d => !!d && d >= lo && d <= hi;
+  const pages = new Set(); let ayahs = 0;
+  const hp = (S.hifz && S.hifz.pages) || {};
+  if (g.type === 'recite') {
+    for (const r of S.rec || []) if (inW(r.d) && r.to >= r.from) { ayahs += r.to - r.from + 1; rangePages(r.s, r.from, r.to).forEach(p => pages.add(p)); }
+  } else if (g.type === 'review') {
+    for (const r of S.reviews || []) if (inW(r.last) && r.to >= r.from) { ayahs += r.to - r.from + 1; rangePages(r.s, r.from, r.to).forEach(p => pages.add(p)); }
+    for (const k of Object.keys(hp)) { const e = hp[k]; if (e && e.lvl > 0 && inW(e.at) && !pages.has(+k)) { pages.add(+k); ayahs += pageAyahs(+k); } }
+  } else {
+    for (const k of Object.keys(hp)) { const e = hp[k]; if (e && e.lvl > 0 && inW(e.m)) { pages.add(+k); ayahs += pageAyahs(+k); } }
+  }
+  const done = g.unit === 'page' ? pages.size : g.unit === 'ayah' ? ayahs : Math.round(ayahs * SEC_PER_AYAH / 60);
+  return { done, target: g.target };
+}
+/** Consecutive completed periods (the current one counts only once completed). */
+export function goalStreak(g) {
+  const met = i => { const p = goalProgress(g, i); return p.done >= p.target; };
+  let c = met(0) ? 1 : 0;
+  for (let k = 1; k < 400 && met(k); k++) c++;
+  return c;
+}
+
+/** 0..1 heat of mistakes for a word: frequency, fading over time (half-life ~3 weeks) and with later correct reads. */
+export function wordErrorHeat(s, a, w) {
+  const e = S.wm && S.wm[s + ':' + a + ':' + w];
+  if (!e || !(e.n > 0) || e.ok >= 3) return 0;
+  const h = Math.min(1, e.n / 4) * Math.pow(0.5, daysSince(e.d) / 21) * (1 - (e.ok || 0) / 3);
+  return Math.max(0, Math.min(1, h));
+}
+
 // ---- spaced repetition review (Leitner boxes) ----
 const BOX_DAYS = [0, 1, 3, 7, 14, 30, 60];
 export function addReview(s, from, to) {
@@ -284,6 +385,23 @@ export function importData(json) {
     }
   }
   d.wm = wm;
+  const hp = {};
+  if (d.hifz && d.hifz.pages && typeof d.hifz.pages === 'object' && !Array.isArray(d.hifz.pages)) {
+    for (const key of Object.keys(d.hifz.pages)) {
+      const p = parseInt(key, 10), e = d.hifz.pages[key];
+      if (!(p >= 1 && p <= PAGE_COUNT) || String(p) !== key || !e || typeof e !== 'object') continue;
+      const at = String(e.at || '');
+      if (!DATE_RE.test(at)) continue; // invalid date: drop the entry rather than keep a broken level
+      hp[p] = { lvl: Math.min(3, int(e.lvl)), at, n: Math.min(9999, int(e.n)) };
+      if (e.m) { const m = String(e.m); if (DATE_RE.test(m)) hp[p].m = m; }
+    }
+  }
+  d.hifz = { pages: hp };
+  const seenGoalIds = new Set();
+  d.goals = (Array.isArray(d.goals) ? d.goals : []).filter(g => g && GOAL_TYPES.includes(g.type) && GOAL_UNITS.includes(g.unit) && GOAL_PERIODS.includes(g.period))
+    .map((g, i) => ({ id: String(g.id || '').replace(/[^\w-]/g, '').slice(0, 24) || (Date.now().toString(36) + i), type: g.type, unit: g.unit, target: Math.max(1, Math.min(9999, int(g.target))), period: g.period, created: String(g.created || '').slice(0, 10) }))
+    .filter(g => { if (seenGoalIds.has(g.id)) return false; seenGoalIds.add(g.id); return true; })
+    .slice(0, GOALS_MAX);
   // an imported file must not redirect the AI to another server: keep this device's AI settings
   const keepAi = S.settings && S.settings.ai ? JSON.parse(JSON.stringify(S.settings.ai)) : null;
   if (d.settings && typeof d.settings === 'object') delete d.settings.ai;

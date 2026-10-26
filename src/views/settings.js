@@ -38,7 +38,7 @@ function statusHtml(r) {
 }
 
 const ADD_PROVIDER_HTML = `<h3>إضافة مزود جديد</h3>
-  <p class="muted small">كل مزود يتفعّل بإضافة مفتاحه المجاني في خادم نور فقط — لا يُخزَّن داخل التطبيق ولا يلزم تحديثه.</p>
+  <p class="muted small">كل مزود يتفعّل بإضافة مفتاحه المجاني في خادم نور الحياة فقط — لا يُخزَّن داخل التطبيق ولا يلزم تحديثه.</p>
   <ol style="padding-inline-start:1.3rem;line-height:1.9;margin:.6rem 0">
     <li>احصل على المفتاح (كلها بلا بطاقة):<br>
       <b>NVIDIA</b>: <span dir="ltr">build.nvidia.com</span> → Get API Key → السر <b dir="ltr">NVIDIA_API_KEY</b><br>
@@ -84,7 +84,7 @@ export default {
         <div class="card mt"><div class="section-title">الذكاء الاصطناعي</div>
           <div id="ai-card" style="margin-bottom:.8rem"><p class="muted small">جارٍ فحص الخدمات…</p></div>
           <div class="row"><button class="btn sm ghost" id="ai-refresh">تحديث الحالة</button></div>
-          <div class="field mt"><label>المزوّد</label>${seg('s-prov', [['auto', 'تلقائي (خادم نور)'], ['free', 'مجاني بديل'], ['custom', 'مخصص']], ai.provider)}</div>
+          <div class="field mt"><label>المزوّد</label>${seg('s-prov', [['auto', 'تلقائي (خادم نور الحياة)'], ['free', 'مجاني بديل'], ['custom', 'مخصص']], ai.provider)}</div>
           ${ai.provider === 'custom' ? `
             <div class="field"><label for="ai-url">Base URL</label><input class="input" id="ai-url" dir="ltr" placeholder="https://example.com/v1" value="${esc(ai.baseUrl)}"></div>
             <div class="field"><label for="ai-key">API Key</label><input class="input" id="ai-key" type="password" dir="ltr" autocomplete="off" value="${esc(ai.apiKey)}"></div>
@@ -101,7 +101,7 @@ export default {
           <input type="file" id="d-file" accept="application/json,.json" hidden></div>
 
         <div class="card mt"><div class="section-title">عن التطبيق</div>
-          <p><b>نور ١٫٠</b></p>
+          <p><b>نور الحياة ١٫٠</b></p>
           <p class="muted small">نص المصحف: موسوعة القرآن الكريم quranenc.com عبر quran-json (CC BY 4.0).<br>التلاوات: everyayah.com.<br>التفسير: alquran.cloud.<br>المواقيت: مكتبة adhan.</p></div>`;
       bind();
     };

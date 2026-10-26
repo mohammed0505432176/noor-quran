@@ -1,7 +1,7 @@
 // Tasmee' (recitation checking): voice mode with live word matching, or hide-and-recall mode.
-import { esc, $, $$, toast, icon, ayahMark, header, N } from '../ui.js';
-import { S, addRecitation, addReview, dueReviews, recordWords, lastAttempt, ayahMistakeMap } from '../core/store.js';
-import { analyzeMistakes } from '../core/feedback.js';
+import { esc, $, $$, toast, icon, ayahMark, header, N, sheet } from '../ui.js';
+import { S, addRecitation, addReview, dueReviews, recordWords, lastAttempt, ayahMistakeMap, notePagesRecited } from '../core/store.js';
+import { analyzeMistakes, MISTAKE_TYPE_AR } from '../core/feedback.js';
 import { wrongRuns, findSimilar } from '../core/mutashabih.js';
 import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/quran.js';
 import { words as splitWords } from '../core/arabic.js';
@@ -29,6 +29,28 @@ function loadPos() {
 }
 const savePos = (s, a) => { try { localStorage.setItem(POS_KEY, JSON.stringify({ s, a })); } catch (e) { /* ignore */ } };
 // sard: correction-rule mistakes that get the light warning (vowel / repetition notes stay silent)
+// controls sheet (gear): persisted together under one key
+const OPTS_KEY = 'noor.recite.opts';
+const STRICT = ['low', 'mid', 'high'];
+const STRICT_AR = { low: 'منخفضة', mid: 'متوسطة', high: 'عالية' };
+const STRICT_NOTE = { low: 'تُتجاهل أخطاء الحركات', mid: 'أخطاء الحركات تظهر كتنبيه ولا تُحسب خطأً', high: 'أخطاء الحركات تُحسب خطأً' };
+function loadOpts() {
+  const w = loadFlag(WARN_KEY, true);
+  const o = { sound: w, vibrate: w, pause: false, strict: 'mid' };
+  try {
+    const p = JSON.parse(localStorage.getItem(OPTS_KEY) || 'null');
+    if (p && typeof p === 'object') {
+      if (typeof p.sound === 'boolean') o.sound = p.sound;
+      if (typeof p.vibrate === 'boolean') o.vibrate = p.vibrate;
+      if (typeof p.pause === 'boolean') o.pause = p.pause;
+      if (STRICT.includes(p.strict)) o.strict = p.strict;
+    }
+  } catch (e) { /* ignore */ }
+  return o;
+}
+const saveOpts = o => { try { localStorage.setItem(OPTS_KEY, JSON.stringify(o)); } catch (e) { /* ignore */ } };
+const CLIP_PRE = 1.2, CLIP_POST = 0.4;   // seconds around the moment a word's verdict became final (verdicts trail the voice a little)
+const PCM_RATE = 16000;
 const WARN_KINDS = new Set(['possible_omission', 'possible_substitution', 'possible_skipped_ayah', 'unclear_ayah']);
 const clock = secs => { const t = Math.max(0, Math.round(secs || 0)); return N(Math.floor(t / 60)) + ':' + N(String(t % 60).padStart(2, '0')); };
 
@@ -43,7 +65,9 @@ const MAX_REVIEW_SECS = 240;
 
 const MISTAKE_KIND = { missing: 'نقص', wrong: 'خطأ', extra: 'زيادة', harakah: 'حركة' };
 // per-word verdicts from feedback.js
-const KIND_LABEL = { skip: 'محذوفة', wrong: 'مبدّلة', hint: 'تلقين', vowel: 'حركة', repeat: 'تكرار' };
+const KIND_LABEL = { skip: 'محذوفة', wrong: 'مبدّلة', hint: 'تلقين', vowel: 'حركة', repeat: 'تكرار', swap: 'تقديم وتأخير', unsure: 'غير واضحة', peek: 'تلميح' };
+// verdict kinds the weak-word store knows
+const WM_KIND = { skip: 'skip', wrong: 'wrong', swap: 'wrong', hint: 'hint', vowel: 'vowel', repeat: 'repeat', ok: 'ok' };
 // on-device engine issues -> feedback kinds
 const ISSUE_KIND = { possible_omission: 'skip', possible_substitution: 'wrong', possible_vowel: 'vowel', possible_repetition: 'repeat', possible_skipped_ayah: 'skip', unclear_ayah: 'wrong' };
 function loadMode() {
@@ -120,9 +144,19 @@ export default {
     let wAudio = null;           // word-by-word audio for hints / mistakes
     let activeEngine = null;     // on-device Quran engine with a running session
     let freeStop = null;         // free / sard session teardown (timer, tone context, resize listener)
+    const opts = loadOpts();     // controls sheet (sound / vibration / pause-until-fixed / vowel strictness)
+    let clipAudio = null, clipTimer = 0;   // your own recording, clipped around one word
+    let ctlSheet = null, mSheet = null;    // open bottom sheets
+    let fixEl = null;            // «pause until I fix it» overlay
+    /** A correction-rule kind that counts as a mistake (vowel slips only with the strict setting; repetition never). */
+    const hardKind = k => k !== 'repeat' && (k !== 'vowel' || opts.strict === 'high');
     let lastFree = 'free';       // kind of the last free session ('free' | 'sard'), for «إعادة»
     const cleanup = () => {
       alive = false; gen++; setupTok++;
+      stopClip(); hideFix();
+      if (ctlSheet) { try { ctlSheet.close(); } catch (e) {} ctlSheet = null; }
+      if (mSheet) { try { mSheet.close(); } catch (e) {} mSheet = null; }
+      if (clipAudio) { try { clipAudio.pause(); clipAudio.removeAttribute('src'); clipAudio.load(); } catch (e) {} clipAudio = null; }
       if (freeStop) { const f = freeStop; freeStop = null; try { f(); } catch (e) {} }
       if (stopMic) { try { stopMic(); } catch (e) {} stopMic = null; }
       if (recCtl) { const r = recCtl; recCtl = null; try { r.stop().catch(() => {}); } catch (e) {} }
@@ -156,6 +190,7 @@ export default {
     /** Play one word (1-based w within ayah a) from quran.com word audio, falling back to the whole ayah. */
     function playWordAt(s, a, w) {
       try { stopReciter(); } catch (e) {}
+      stopClip();
       if (resAudio && !resAudio.paused) { try { resAudio.pause(); } catch (e) {} }
       if (wAudio) { try { wAudio.pause(); } catch (e) {} }
       const myGen = gen;
@@ -170,6 +205,95 @@ export default {
         const pr = wAudio.play();
         if (pr && pr.catch) pr.catch(fallback);
       } catch (e) { fallback(); }
+    }
+
+    // ---- own-recording clip around one word, tone, overlay, controls sheet ----
+    function stopClip() {
+      if (clipTimer) { clearTimeout(clipTimer); clipTimer = 0; }
+      if (clipAudio && !clipAudio.paused) { try { clipAudio.pause(); } catch (e) {} }
+    }
+    /** Play [t0, t1] seconds of the session recording (resUrl). Returns false when there is no recording. */
+    function playClip(t0, t1) {
+      if (!resUrl) return false;
+      stopClip();
+      try { stopReciter(); } catch (e) {}
+      if (resAudio && !resAudio.paused) { try { resAudio.pause(); } catch (e) {} }
+      if (wAudio) { try { wAudio.pause(); } catch (e) {} }
+      const a = clipAudio || (clipAudio = new Audio(resUrl));
+      const go = () => {
+        if (!alive) return;
+        try { a.currentTime = Math.max(0, t0); } catch (e) { /* ignore */ }
+        const pr = a.play();
+        if (pr && pr.catch) pr.catch(() => toast('تعذر تشغيل التسجيل'));
+        clipTimer = setTimeout(stopClip, Math.max(300, (t1 - t0) * 1000));
+      };
+      if (a.readyState >= 1) go(); else a.addEventListener('loadedmetadata', go, { once: true });
+      return true;
+    }
+    function makeTone() {
+      let ctx = null;
+      try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) ctx = new AC(); } catch (e) { ctx = null; }
+      return {
+        /** Soft beep; returns how long the engine should hear silence (the mic has no echo cancellation). */
+        beep() {
+          if (!ctx) return 0;
+          try {
+            if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+            const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
+            o.type = 'sine'; o.frequency.value = 660;
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(0.06, t + 0.015);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+            o.connect(g); g.connect(ctx.destination);
+            o.start(t); o.stop(t + 0.13);
+            return 420;
+          } catch (e) { return 0; }
+        },
+        close() { if (ctx) { try { ctx.close(); } catch (e) {} ctx = null; } }
+      };
+    }
+    function hideFix() { if (fixEl) { try { fixEl.remove(); } catch (e) {} fixEl = null; } }
+    /** «توقف حتى أصحّح»: the correct word, big, until the user continues. */
+    function showFixWord(text) {
+      hideFix();
+      if (!text) return;
+      const d = document.createElement('div');
+      d.className = 'rc-fix'; d.setAttribute('role', 'alert');
+      d.innerHTML = `<small>الصواب</small><b class="quran">${esc(text)}</b><button class="btn sm" type="button">متابعة</button>`;
+      d.querySelector('button').onclick = hideFix;
+      el.appendChild(d);
+      fixEl = d;
+    }
+    const gearBtn = `<button class="icon-btn" id="rc-gear" aria-label="إعدادات التسميع">${icon('gear', 20)}</button>`;
+    function openControls() {
+      if (ctlSheet) { try { ctlSheet.close(); } catch (e) {} }
+      const row = (k, label, hint) => `<label class="rc-opt"><span><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</span><input type="checkbox" data-o="${k}"${opts[k] ? ' checked' : ''}></label>`;
+      const sh = sheet(`<h3 class="mb">إعدادات التسميع</h3>
+        ${row('sound', 'صوت التنبيه عند الخطأ')}
+        ${row('vibrate', 'اهتزاز')}
+        ${row('pause', 'توقف حتى أصحّح', 'في السرد والمقاطع: عند الخطأ تظهر الكلمة الصحيحة حتى تتابع')}
+        <div class="rc-opt col"><span><b>صرامة التشكيل</b></span>
+          <div class="seg" role="group" aria-label="صرامة التشكيل">${STRICT.map(k => `<button type="button" data-strict="${k}" class="${opts.strict === k ? 'active' : ''}" aria-pressed="${opts.strict === k}">${STRICT_AR[k]}</button>`).join('')}</div>
+          <small class="muted" id="rc-strictnote">${STRICT_NOTE[opts.strict]}</small></div>
+        <button class="btn block mt" type="button" data-x>تم</button>`, { onClose: () => { if (ctlSheet === sh) ctlSheet = null; } });
+      ctlSheet = sh;
+      sh.querySelectorAll('input[data-o]').forEach(i => { i.onchange = () => { opts[i.dataset.o] = i.checked; saveOpts(opts); }; });
+      sh.querySelectorAll('[data-strict]').forEach(b => { b.onclick = () => {
+        opts.strict = b.dataset.strict; saveOpts(opts);
+        sh.querySelectorAll('[data-strict]').forEach(x => { const on = x === b; x.classList.toggle('active', on); x.setAttribute('aria-pressed', String(on)); });
+        const nt = sh.querySelector('#rc-strictnote'); if (nt) nt.textContent = STRICT_NOTE[opts.strict];
+      }; });
+      sh.querySelector('[data-x]').onclick = () => sh.close();
+    }
+    /** Hifz tracker: the pages this session covered (words read ok), with its quality. Returns how many pages were noted. */
+    function noteHifz(ayahStats, defS, quality) {
+      try {
+        const pages = new Set();
+        for (const x of ayahStats) if (x.ok > 0) pages.add(pageOf(x.s || defS, x.a));
+        if (!pages.size || !(quality >= 0.6)) return 0;
+        notePagesRecited([...pages], quality);
+        return pages.size;
+      } catch (e) { return 0; }
     }
 
     const lastPosHtml = () => {
@@ -335,7 +459,7 @@ export default {
       let raw = new Array(total).fill('pending');       // last raw matcher states (before locking)
       let mres = { states: new Array(total).fill('pending'), pointer: 0, acc: 0 };
       const hst = new Array(total).fill('pending');   // hide-mode states
-      const forced = new Set();                         // hinted words (always bad)
+      const forced = new Set();                         // peeked-at words (shown by «تلميح»; never counted as recited)
       const groupOf = new Array(total);
       groups.forEach(g => { for (let k = g.start; k < g.end; k++) groupOf[k] = g; });
       let finished = false, ending = false, listening = false, support = 'native';
@@ -351,6 +475,12 @@ export default {
       if (engine === 'device' && voiceLike) support = await speechSupport();
       if (!isLive()) return;
       if (engine === 'ai') aiCtl = new AbortController();
+      const tone = makeTone();
+      freeStop = () => tone.close();
+      let muteTill = 0, lastBeep = 0, fixIdx = -1, pcmN = 0;
+      const stamp = new Map();                          // flat index -> recorder sample count when its verdict first became final
+      const peekLetter = new Set(), peekedAll = new Set();   // graded peeking: first letter shown / every word peeked at
+      let pkIdx = -1, pkStep = 0;
 
       let fs = loadFs();
       const showBanner = from === 1;
@@ -365,7 +495,7 @@ export default {
       const centerBtn = mode === 'hide'
         ? `<button class="btn rc-okbtn" id="rc-ok">${icon('check', 18)} تذكرتها</button>`
         : (noVoice ? '<span></span>' : `<button class="mic-btn rc-mic" id="rc-mic" aria-label="تشغيل الميكروفون">${icon('mic', 30)}</button>`);
-      el.innerHTML = header(MODE_TITLE[mode], { actions: fsCtl }) + `
+      el.innerHTML = header(MODE_TITLE[mode], { actions: fsCtl + gearBtn }) + `
         ${noVoice ? `<div class="card"><p>التعرف على الصوت غير متاح على هذا الجهاز أو المتصفح.</p><button class="btn block" id="rc-tohide">جرّب اختبار الحفظ (إخفاء)</button></div>` : ''}
         <div class="rc-sub muted small">${esc(surahName(s))} · الآيات ${N(from)}–${N(to)}</div>
         <div class="mushaf-page rc-page${disp === 'full' ? ' rc-full' : ''}" id="rc-page" style="--rc-fs:${fs}px">
@@ -374,7 +504,7 @@ export default {
           <div class="mushaf-text" id="rc-text">${body}</div>
         </div>
         ${mode === 'hide' ? '<p class="muted small center mt">اضغط على مكان أي كلمة لكشفها (تُحسب خطأ)، أو «تذكرتها» عند إتقان الآية التالية.</p>'
-          : '<p class="muted small center mt">تُكتب الكلمة عند نطقها صحيحة، والأخطاء بالأحمر — اضغط عليها لسماعها.</p>'}
+          : '<p class="muted small center mt">تُكتب الكلمة عند نطقها صحيحة، والأخطاء بالأحمر، وغير الواضحة بالأصفر — اضغط على الخطأ لسماعه.</p>'}
         <div class="rc-spacer"></div>
         <div class="rc-dock" id="rc-dock">
           <div class="rc-dock-top"><span class="small muted" id="rc-status">${voiceLike ? 'جارٍ تشغيل الميكروفون…' : 'تذكّر الآية التالية'}</span><b class="score" id="rc-score">٠٪</b></div>
@@ -408,7 +538,7 @@ export default {
       $('#rc-fsp', el).onclick = () => setFs(fs + 2);
 
       const baseStates = () => (voiceLike ? mres.states : hst);
-      const effective = () => baseStates().map((st, i) => (forced.has(i) ? 'bad' : st));
+      const effective = () => baseStates().map((st, i) => (forced.has(i) ? 'peek' : st));
       const setStatus = t => { if (statusEl) statusEl.textContent = t; };
 
       // ---- keep the current line around the upper-middle of the viewport ----
@@ -434,18 +564,20 @@ export default {
       function paint() {
         const st = effective();
         const ptr = st.indexOf('pending');
-        let ok = 0, done = 0, newBad = false, newAyah = false;
+        let ok = 0, done = 0, newBad = false, newAyah = false, newBadIdx = -1;
         for (let i = 0; i < total; i++) {
           const x = st[i];
-          if (x === 'ok') ok++;
+          if (x === 'ok' || x === 'uns') ok++;
           if (x !== 'pending') done++;
           if (x === prevSt[i]) continue;
           const sp = spans[i];
-          sp.classList.toggle('w-ok', x === 'ok');
+          sp.classList.toggle('w-ok', x === 'ok' || x === 'uns');
+          sp.classList.toggle('w-uns', x === 'uns');
           sp.classList.toggle('w-bad', x === 'bad');
+          sp.classList.toggle('w-peek', x === 'peek' || (x === 'pending' && peekLetter.has(i)));
           sp.classList.toggle('w-pend', x === 'pending');
-          if (x === 'bad') newBad = true;
-          const first = x === 'pending' && disp === 'first';
+          if (x === 'bad') { newBad = true; if (newBadIdx < 0) newBadIdx = i; }
+          const first = x === 'pending' && (disp === 'first' || peekLetter.has(i));
           if (shown[i] !== first) { shown[i] = first; sp.textContent = first ? firstLetter(flat[i].w) : flat[i].w; sp.classList.toggle('w-first', first); }
           const g = groupOf[i];
           if (x === 'pending') ayahDone.delete(g.a);
@@ -462,12 +594,20 @@ export default {
           prevPtr = curNow;
         }
         prevSt = st;
-        if (newBad || newAyah) haptic('light');      // no haptic per written word: only mistakes / ayah completion
+        if ((newBad || newAyah) && opts.vibrate) haptic('light');      // no haptic per written word: only mistakes / ayah completion
+        if (newBad && voiceLike && !ending && !finished) mistakeAlert(newBadIdx);
+        if (fixIdx >= 0 && (st[fixIdx] === 'ok' || st[fixIdx] === 'uns')) { fixIdx = -1; hideFix(); }
         const acc = total ? Math.round(100 * ok / total) : 0;
         scoreEl.textContent = N(acc) + '٪';
         progEl.style.width = (total ? 100 * done / total : 0) + '%';
         if (ptr !== curPtr) { curPtr = ptr; if (ptr >= 0) scrollToCurrent(); }
         return ptr;
+      }
+      /** Tone + «pause until I fix it» for a word that just turned red (at most one beep per 1.5 s burst). */
+      function mistakeAlert(i) {
+        const now = Date.now();
+        if (opts.sound && now - lastBeep > 1500) { lastBeep = now; const ms = tone.beep(); if (ms) muteTill = now + ms; }
+        if (opts.pause && i >= 0 && fixIdx !== i) { fixIdx = i; showFixWord(flat[i].w); }
       }
       // first paint of "first letters" display
       if (disp === 'first') for (let i = 0; i < total; i++) { shown[i] = true; spans[i].textContent = firstLetter(flat[i].w); spans[i].classList.add('w-first'); }
@@ -601,10 +741,13 @@ export default {
         const m = mapVerdicts(qVerdicts, groups);
         const st = new Array(total).fill('pending');
         for (const [i, v] of m) {
-          st[i] = v.st === 'ok' || v.st === 'unsure' ? 'ok' : v.st === 'pending' ? 'pending' : 'bad';
-          if (v.vowel > 0 && st[i] === 'ok') qVowel.add(i);
+          // unsure is its own (amber) state: counted as read, but never red
+          st[i] = v.st === 'ok' ? 'ok' : v.st === 'unsure' ? 'uns' : v.st === 'pending' ? 'pending' : 'bad';
+          if (v.st !== 'pending' && !stamp.has(i)) stamp.set(i, pcmN);
+          if (v.vowel > 0 && (st[i] === 'ok' || st[i] === 'uns')) qVowel.add(i);
         }
-        for (const [i, k] of qIssues) if (k !== 'vowel' && k !== 'repeat') st[i] = 'bad';
+        for (const [i, k] of qIssues) if (hardKind(k)) st[i] = 'bad';
+        if (opts.strict === 'high') for (const i of qVowel) if (st[i] === 'ok' || st[i] === 'uns') st[i] = 'bad';
         // the worker already accumulates settled verdicts: no locking here, so a later correction can still turn a word red
         raw = st;
         mres = { states: st.slice() };
@@ -617,7 +760,7 @@ export default {
         const items = [];
         for (let k = 0; k < n; k++) items.push({ a: issue.a, w: issue.w + k, st: 'wrong' });
         for (const i of mapVerdicts(items, groups).keys()) { if (!qIssues.has(i) || kind !== 'vowel') qIssues.set(i, kind); if (kind === 'vowel') qVowel.add(i); }
-        if (kind !== 'vowel' && kind !== 'repeat') haptic('light');
+        if (hardKind(kind) && opts.vibrate) haptic('light');
         applyQuran(qVerdicts);
       }
       async function toggleQuran() {
@@ -643,11 +786,12 @@ export default {
         try {
           r = await startRecorder({ onPcm: pcm => {
             if (finished || aiState === 'paused') return;
+            pcmN += pcm.length;
             // the mic runs without echo cancellation: while the app's own audio plays (hint / word taps) and ~300 ms
             // after, the engine gets silence of the same length instead of the speaker, so its timeline stays continuous
             const now = Date.now();
             if ((wAudio && !wAudio.paused && !wAudio.ended) || reciterPlaying()) appAudioTill = now + 300;
-            if (now < appAudioTill) pcm = new Float32Array(pcm.length);
+            if (now < appAudioTill || now < muteTill) pcm = new Float32Array(pcm.length);
             if (live && qe) { qe.pcm(pcm); return; }
             if (earlyLen < 16000 * 20) { early.push(new Float32Array(pcm)); earlyLen += pcm.length; }
           }, onLevel: setLevel, onError: err => {
@@ -707,16 +851,22 @@ export default {
         playWordAt(s, g.a, i - g.start + 1);
       }
 
+      /** Graded peeking: 1st tap = first letter of the next word, 2nd = the whole word, 3rd = the rest of the ayah. */
       function hint() {
         if (finished || ending) return;
         const st = effective();
-        const start = voiceLike ? Math.max(0, st.indexOf('pending')) : 0;
-        let i = -1;
-        for (let k = start; k < total; k++) if (st[k] === 'pending') { i = k; break; }
+        const i = st.indexOf('pending');
         if (i < 0) return;
-        if (voiceLike) forced.add(i); else hst[i] = 'bad';
+        const g = groupOf[i];
+        let step = 1;
+        if (pkStep === 1 && i === pkIdx) step = 2;
+        else if (pkStep === 2 && pkIdx >= 0 && i > pkIdx && groupOf[pkIdx] === g) step = 3;
+        const reveal = k => { forced.add(k); peekedAll.add(k); peekLetter.delete(k); };
+        if (step === 1) { peekLetter.add(i); peekedAll.add(i); prevSt[i] = null; pkIdx = i; pkStep = 1; setStatus('تلميح: الحرف الأول من الكلمة'); }
+        else if (step === 2) { reveal(i); pkIdx = i; pkStep = 2; setStatus('تلميح: الكلمة كاملة'); }
+        else { for (let k = i; k < g.end; k++) if (st[k] === 'pending') reveal(k); pkIdx = -1; pkStep = 0; setStatus('تلميح: بقية الآية'); }
         paint();
-        playWord(i);
+        if (step === 2) playWord(i);
       }
 
       function markNextAyah() {
@@ -759,20 +909,22 @@ export default {
 
       function finalize() {
         finished = true;
+        hideFix();
         if (pageEl) pageEl.classList.remove('rc-busy');
         // the on-device engine's states are final as they are (engine corrections must not be locked away)
         const pre = engine === 'quran' ? raw.slice() : voiceLike ? tracker.apply(raw, { final: true }).states : hst.slice();
         // words after the last one reached (session ended early) are not mistakes: they are only left out
         let reached = -1;
         pre.forEach((x, i) => { if (x !== 'pending' || forced.has(i)) reached = i; });
-        let st = pre.map(x => (x === 'ok' ? 'ok' : 'bad'));
+        let st = pre.map(x => (x === 'ok' || x === 'uns' ? 'ok' : 'bad'));
         try { matcher.finish(); } catch (e) { /* ignore */ }
-        st = st.map((x, i) => (forced.has(i) ? 'bad' : x));
+        const vowelHard = i => engine === 'quran' && opts.strict === 'high' && pre[i] !== 'pending' && (qIssues.get(i) === 'vowel' || qVowel.has(i));
+        st = st.map((x, i) => (forced.has(i) || vowelHard(i) ? 'bad' : x));
         const ok = st.filter(x => x === 'ok').length;
         const acc = total ? Math.round(100 * ok / total) : 0;
         const missed = flat.filter((_, i) => st[i] === 'bad').map(x => x.w);
         // detailed verdict per word: skipped / substituted (with what was heard) / hinted, plus inserted words
-        let analysis = { words: st.map((x, i) => ({ i, kind: x === 'ok' ? 'ok' : forced.has(i) ? 'hint' : 'skip', heard: '' })), extras: [] };
+        let analysis = { words: st.map((x, i) => ({ i, kind: x === 'ok' ? 'ok' : forced.has(i) ? 'peek' : 'skip', heard: '' })), extras: [] };
         try {
           const heard = voiceLike ? stripOpeners(lastFull, keepBasmala) : '';
           // hide mode: only words actually revealed (tapped / hinted) count as «كُشفت»
@@ -781,18 +933,25 @@ export default {
             // the engine judged every word acoustically: use its verdicts and correction rules directly
             const m = mapVerdicts(qVerdicts, groups);
             analysis = { words: st.map((x, i) => {
-              if (forced.has(i)) return { i, kind: 'hint', heard: '' };
+              if (forced.has(i)) return { i, kind: 'peek', heard: '' };
               const iss = qIssues.get(i);
-              if (x === 'ok') return { i, kind: iss === 'vowel' || iss === 'repeat' ? iss : qVowel.has(i) ? 'vowel' : 'ok', heard: '' };
+              if (x === 'ok') {
+                const vk = iss === 'vowel' || iss === 'repeat' ? iss : qVowel.has(i) ? 'vowel' : '';
+                const base = pre[i] === 'uns' ? 'unsure' : 'ok';
+                return { i, kind: vk === 'vowel' && opts.strict === 'low' ? base : vk || base, heard: '' };
+              }
+              if (vowelHard(i)) return { i, kind: 'vowel', heard: '' };
               const v = m.get(i);
-              return { i, kind: iss && iss !== 'vowel' && iss !== 'repeat' ? iss : v && v.st === 'wrong' ? 'wrong' : 'skip', heard: '' };
+              return { i, kind: iss && iss !== 'repeat' ? iss : v && v.st === 'wrong' ? 'wrong' : 'skip', heard: '' };
             }), extras: [] };
           } else analysis = analyzeMistakes(flat.map(x => x.w), heard, st, hinted);
         } catch (e) { /* keep the simple verdict */ }
+        analysis.words.forEach(x => { if (forced.has(x.i)) { x.kind = 'peek'; x.heard = ''; } });
         analysis.words.forEach(x => { if (x.i > reached && x.kind !== 'ok') { x.kind = 'unreached'; x.heard = ''; } });
         analysis.extras = analysis.extras.filter(x => x.after < reached);
         try {
-          recordWords(s, analysis.words.filter(x => x.kind !== 'unreached').map(x => ({ a: flat[x.i].a, w: x.i - groupOf[x.i].start + 1, kind: x.kind })));
+          // unsure / peeked words say nothing about the weak-word store; a transposition is stored as a substitution
+          recordWords(s, analysis.words.filter(x => WM_KIND[x.kind]).map(x => ({ a: flat[x.i].a, w: x.i - groupOf[x.i].start + 1, kind: WM_KIND[x.kind] })));
         } catch (e) { /* ignore */ }
         // drifted into a similar ayah elsewhere (mutashabihat)?
         const similar = [];
@@ -811,20 +970,26 @@ export default {
         });
         const pts = addRecitation({ s, from, to, acc, miss: missed });
         const prev = lastAttempt(s, from, to, 1);
+        // words peeked at are sent to review (their ayahs), and counted separately in the results
+        const peekN = peekedAll.size;
+        if (peekN) { try { for (const a of new Set([...peekedAll].map(k => flat[k].a))) addReview(s, a, a); } catch (e) { /* ignore */ } }
+        const hifzN = noteHifz(ayahStats, s, acc / 100);
+        const stamps = new Map(); stamp.forEach((n, i) => stamps.set(i, n / PCM_RATE));
         haptic('heavy');
-        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar, prev, hideMode: !voiceLike });
+        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar, prev, hideMode: !voiceLike, okN: ok, totalN: total, stamps, peekN, hifzN });
       }
 
       if (noVoice) { $('#rc-tohide', el).onclick = () => { cfg.mode = 'hide'; startSession(); }; }
       if (micEl) micEl.onclick = () => (engine === 'ai' ? toggleAi() : engine === 'quran' ? toggleQuran() : toggleMic());
       $('#rc-hint', el).onclick = hint;
+      $('#rc-gear', el).onclick = openControls;
       const okBtn = $('#rc-ok', el); if (okBtn) okBtn.onclick = markNextAyah;
       $('#rc-end', el).onclick = () => { finish(); };
       $('#rc-text', el).addEventListener('click', e => {
         const sp = e.target.closest('.word'); if (!sp || finished || ending) return;
         const i = +sp.dataset.i;
         const st = effective()[i];
-        if (st === 'bad') { playWord(i); toast('الصواب: ' + flat[i].w); return; }
+        if (st === 'bad' || st === 'peek') { playWord(i); toast('الصواب: ' + flat[i].w); return; }
         if (mode === 'hide' && hst[i] === 'pending') { hst[i] = 'bad'; paint(); playWord(i); }
       });
       paint();
@@ -847,23 +1012,22 @@ export default {
       lastFree = kind;
       if (!(engineSupported() && await engineCached())) { if (isLive()) { if (auto) toast('حمّل المحرك القرآني أولاً (مرة واحدة)'); showSetup(); } return; }
       if (!isLive()) return;
-      let showText = loadFlag(TEXT_KEY, false), warnOn = loadFlag(WARN_KEY, true);
+      let showText = loadFlag(TEXT_KEY, false);
       // the tone context is created inside the start tap (a context made later may stay suspended)
-      let toneCtx = null, timer = 0;
-      if (sard) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) toneCtx = new AC(); } catch (e) { toneCtx = null; } }
+      let tone = null, timer = 0;
+      if (sard) tone = makeTone();
       const onResize = () => { if (page && page.mode === 'madani') fitLines($('.mq-lines', el)); };
       freeStop = () => {
         if (timer) { clearInterval(timer); timer = 0; }
         if (raf) { cancelAnimationFrame(raf); raf = 0; }
         window.removeEventListener('resize', onResize);
         window.removeEventListener('noor:adhan', onAdhan);
-        if (toneCtx) { try { toneCtx.close(); } catch (e) {} toneCtx = null; }
+        if (tone) { tone.close(); tone = null; }
       };
       window.addEventListener('resize', onResize);
 
       const title = sard ? 'السرد' : 'التسميع';
-      const actions = sard ? `<button class="icon-btn rc-warnbtn${warnOn ? ' on' : ''}" id="rc-warnbtn" aria-pressed="${warnOn}" aria-label="صوت واهتزاز التنبيه">${icon('bell', 18)}</button>` : '';
-      el.innerHTML = header(title, { actions }) + `
+      el.innerHTML = header(title, { actions: gearBtn }) + `
         <div class="rc-ftools">
           <div class="seg rc-txtseg" role="group" aria-label="عرض النص">
             <button id="rc-hid" class="${showText ? '' : 'active'}" aria-pressed="${!showText}">مخفي</button>
@@ -871,6 +1035,8 @@ export default {
           </div>
           <button class="chip small${sard ? ' active' : ''}" id="rc-kind" aria-pressed="${sard}">السرد</button>
           <button class="chip small" id="rc-range">تحديد مقطع</button>
+          <button class="chip small" id="rc-relock">إعادة تحديد الموضع</button>
+          <button class="chip small" id="rc-hint">${icon('eye', 14)} تلميح</button>
         </div>
         <div class="rc-fhead" id="rc-fhead">${sard ? 'اضغط المايك واسرد من حفظك من أي موضع، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع، وسأنتقل إلى الآية التي تقرؤها وأتابعك'}</div>
         <div class="rc-fwrap${showText ? ' shown' : ''}" id="rc-fwrap"></div>
@@ -891,7 +1057,11 @@ export default {
       const listenText = () => (cur ? (sard ? 'أتابعك… واصل السرد' : 'أتابعك… واصل القراءة') : 'أسمعك… أبحث عن الموضع');
 
       let rec = null, qe = null, starting = false, recState = 'idle', ending = false, finished = false;
-      let recBlob = null, recSecs = 0, muteTill = 0, lastWarn = 0, warnCount = 0, mistakes = 0;
+      let recBlob = null, recSecs = 0, muteTill = 0, lastWarn = 0, warnCount = 0, mistakes = 0, pcmN = 0;
+      const peekPages = new Map();      // page -> Set of glyph/word indices revealed by «تلميح»
+      const peekedKeys = new Set(), forcedKeys = new Set();   // 's:a:k' (k = 0-based word of the ayah): peeked at / fully shown
+      let pkIdx = -1, pkStep = 0, pkPage = 0;
+      const stampKeys = new Map();      // 's:a:w' (engine numbering) -> recorder sample count when the word was first judged
       let adhanOn = false;              // the adhan is playing: the engine hears silence (like app audio)
       const onAdhan = e => { adhanOn = !!(e && e.detail && e.detail.on); };
       window.addEventListener('noor:adhan', onAdhan);
@@ -930,12 +1100,14 @@ export default {
       const syncKind = () => { if (kindEl) kindEl.disabled = recState !== 'idle' || starting || ending; };
       kindEl.onclick = () => { if (recState !== 'idle' || starting || ending) return; startFree(sard ? 'free' : 'sard', { auto: false }); };
       $('#rc-range', el).onclick = showSetup;
-      const wb = $('#rc-warnbtn', el);
-      if (wb) wb.onclick = () => {
-        warnOn = !warnOn; saveFlag(WARN_KEY, warnOn);
-        wb.classList.toggle('on', warnOn); wb.setAttribute('aria-pressed', String(warnOn));
-        toast(warnOn ? 'التنبيه بالصوت والاهتزاز مفعّل' : 'التنبيه بالصوت والاهتزاز متوقف (تبقى العلامة على الشاشة)');
+      $('#rc-hint', el).onclick = () => hint();
+      // the engine sticks to the surah it locked on; this clears that lock and runs discovery again
+      const relockB = $('#rc-relock', el);
+      relockB.onclick = () => {
+        if (recState === 'rec' && qe && activeEngine === qe && !ending && !finished && qe.relock) { qe.relock(); toast('أعدت البحث عن موضعك — تابع القراءة'); }
+        else toast('ابدأ القراءة أولاً');
       };
+      $('#rc-gear', el).onclick = openControls;
 
       // ---- page display: Madinah Mushaf page (QCF v2), or the plain text of the same page if it cannot load ----
       function textPage(p) {
@@ -988,7 +1160,7 @@ export default {
         const m = mapVerdicts(qWords.filter(v => keys.has(v.s + ':' + v.a)), page.groups, cn);
         const iss = [];
         for (const [k, kind] of issues) {
-          if (kind === 'vowel' || kind === 'repeat') continue;
+          if (!hardKind(kind)) continue;
           const [s, a, w] = k.split(':').map(Number);
           if (keys.has(s + ':' + a)) iss.push({ s, a, w, st: 'wrong' });
         }
@@ -1015,6 +1187,10 @@ export default {
           page.spans[i].className = page.base[i] + ' ' + c;
         }
         // keep the line being recited in the upper part of the screen (the dock covers the bottom)
+        // words shown by «تلميح» stay visible (blue outline) but are not counted as recited
+        const pks = peekPages.get(page.p);
+        if (pks) for (const i of pks) if (st[i] === 'f-pend') st[i] = 'f-pk';
+        page.lastJ = lastJ; page.st = st;
         const sp = page.spans[curI >= 0 ? curI : lastJ];
         if (sp && curI !== page.curI) {
           page.curI = curI;
@@ -1032,6 +1208,39 @@ export default {
         if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (isLive()) paintPage(); });
       };
 
+      /** Graded peeking on the Madinah page: 1st = first letter in a bubble, 2nd = the word's glyph, 3rd = the rest of the ayah. */
+      function hint() {
+        if (finished || ending || !page || !page.st) return;
+        if (showText) { toast('التلميح للنص المخفي — اختر «مخفي» أولاً'); return; }
+        let i = -1;
+        for (let k = page.lastJ + 1; k < page.spans.length; k++) if (!page.endSet.has(k) && page.st[k] === 'f-pend') { i = k; break; }
+        const g = i >= 0 ? page.groups.find(x => i >= x.start && i < x.end) : null;
+        if (!g) return;
+        let step = 1;
+        if (pkStep === 1 && i === pkIdx && pkPage === page.p) step = 2;
+        else if (pkStep === 2 && pkPage === page.p && i > pkIdx && pkIdx >= g.start) step = 3;
+        const set = peekPages.get(page.p) || peekPages.set(page.p, new Set()).get(page.p);
+        const key = k => g.s + ':' + g.a + ':' + (k - g.start);
+        const reveal = k => { set.add(k); peekedKeys.add(key(k)); forcedKeys.add(key(k)); };
+        if (step === 1) {
+          peekedKeys.add(key(i)); pkIdx = i; pkStep = 1; pkPage = page.p;
+          const txt = splitWords(ayah(g.s, g.a))[i - g.start];
+          const sp = page.spans[i];
+          if (sp && txt) {
+            const b = document.createElement('div');
+            b.className = 'rc-warn rc-bubble'; b.setAttribute('role', 'status'); b.textContent = firstLetter(txt);
+            const r = sp.getBoundingClientRect(), bb = wrap.getBoundingClientRect();
+            b.style.left = Math.max(36, Math.min(bb.width - 36, r.left + r.width / 2 - bb.left)) + 'px';
+            b.style.top = Math.max(0, r.top - bb.top) + 'px';
+            wrap.appendChild(b);
+            setTimeout(() => { try { b.remove(); } catch (e) {} }, 2600);
+          }
+          setStatus('تلميح: الحرف الأول من الكلمة');
+        } else if (step === 2) { reveal(i); pkIdx = i; pkStep = 2; setStatus('تلميح: الكلمة كاملة'); }
+        else { for (let k = i; k < g.end; k++) if (page.st[k] === 'f-pend') reveal(k); pkIdx = -1; pkStep = 0; setStatus('تلميح: بقية الآية'); }
+        paintPage();
+      }
+
       function moveTo(s, a) {
         const first = !cur;
         cur = { s, a };
@@ -1048,7 +1257,7 @@ export default {
           if (v.st === 'pending') continue;
           ayahsRead.add(v.s + ':' + v.a);
           const k = v.s + ':' + v.a + ':' + v.w;
-          if (!judgedKeys.has(k)) { judgedKeys.add(k); latest = v; }   // Quran order: the last new word is the frontier
+          if (!judgedKeys.has(k)) { judgedKeys.add(k); stampKeys.set(k, pcmN); latest = v; }   // Quran order: the last new word is the frontier
         }
         qWords = words;
         if (latest) moveTo(latest.s, latest.a);
@@ -1058,19 +1267,17 @@ export default {
 
       // ---- the light warning (sard): soft tone + short vibration + a fading «انتبه» near the word ----
       function beep() {
-        if (!toneCtx) return;
-        try {
-          if (toneCtx.state === 'suspended') toneCtx.resume().catch(() => {});
-          const t = toneCtx.currentTime, o = toneCtx.createOscillator(), g = toneCtx.createGain();
-          o.type = 'sine'; o.frequency.value = 660;
-          g.gain.setValueAtTime(0.0001, t);
-          g.gain.exponentialRampToValueAtTime(0.06, t + 0.015);
-          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
-          o.connect(g); g.connect(toneCtx.destination);
-          o.start(t); o.stop(t + 0.13);
-          // the mic has no echo cancellation: the engine hears silence instead of the tone (+300 ms tail)
-          muteTill = Date.now() + 120 + 300;
-        } catch (e) { /* ignore */ }
+        if (!tone) return;
+        // the mic has no echo cancellation: the engine hears silence instead of the tone (+300 ms tail)
+        const ms = tone.beep();
+        if (ms) muteTill = Date.now() + ms;
+      }
+      /** «توقف حتى أصحّح» (sard): show the correct word of the flagged engine word until the user continues. */
+      function fixWord(s, a, w) {
+        if (!page || !page.keys.has(s + ':' + a)) return;
+        const idx = [...mapVerdicts([{ s, a, w, st: 'wrong' }], page.groups, counts()).keys()][0];
+        const g = idx != null ? page.groups.find(x => idx >= x.start && idx < x.end) : null;
+        if (g) showFixWord(splitWords(ayah(g.s, g.a))[idx - g.start]);
       }
       function showPill(s, a, w) {
         if (!wrap) return;
@@ -1095,8 +1302,8 @@ export default {
         const now = Date.now();
         if (now - lastWarn < 2000) return;                       // one warning per burst of flags
         lastWarn = now; warnCount++;
-        if (warnOn) {
-          beep();
+        if (opts.sound) beep();
+        if (opts.vibrate) {
           let vib = false;
           try { vib = !!(navigator.vibrate && navigator.vibrate(60)); } catch (e) { vib = false; }
           if (!vib) haptic('light');
@@ -1109,9 +1316,10 @@ export default {
         const n = issue.kind === 'possible_skipped_ayah' || issue.kind === 'unclear_ayah' ? Math.max(1, issue.words | 0) : 1;
         for (let k = 0; k < n; k++) { const key = s + ':' + issue.a + ':' + (issue.w + k); if (!issues.has(key) || kind !== 'vowel') issues.set(key, kind); }
         issueAyahs.add(s + ':' + issue.a);
-        if (kind !== 'vowel' && kind !== 'repeat') {
+        if (hardKind(kind)) {
           mistakes++;
-          if (sard && WARN_KINDS.has(issue.kind)) warn(s, issue.a, issue.w); else haptic('light');
+          if (sard && (WARN_KINDS.has(issue.kind) || kind === 'vowel')) warn(s, issue.a, issue.w); else if (opts.vibrate) haptic('light');
+          if (sard && opts.pause) fixWord(s, issue.a, issue.w);
         }
         updateCount();
         schedulePaint();
@@ -1128,6 +1336,7 @@ export default {
         try {
           r = await startRecorder({ onPcm: pcm => {
             if (finished || recState === 'paused') return;
+            pcmN += pcm.length;
             // app audio (word taps) or the warning tone: the engine gets silence of the same length (timeline stays continuous)
             const now = Date.now();
             if ((wAudio && !wAudio.paused && !wAudio.ended) || reciterPlaying()) appTill = now + 300;
@@ -1198,13 +1407,24 @@ export default {
           const [s, a, w] = k.split(':').map(Number);
           for (const i of mapVerdicts([{ s, a, w, st: 'wrong' }], groups, cn).keys()) if (!iss.has(i) || kind !== 'vowel') iss.set(i, kind);
         }
-        const isBad = i => { const k = iss.get(i); return k && k !== 'vowel' && k !== 'repeat'; };
+        // fully shown (peeked) words are never counted as recited, and they belong to the covered range
+        const forcedIdx = new Set();
+        for (const key of forcedKeys) {
+          const [s, a, k] = key.split(':').map(Number), g = groups.find(x => x.s === s && x.a === a);
+          if (g && g.start + k < g.end) forcedIdx.add(g.start + k);
+        }
+        const isBad = i => {
+          const k = iss.get(i); if (k && hardKind(k)) return true;
+          const v = m.get(i);
+          return opts.strict === 'high' && !!v && v.st !== 'pending' && v.vowel > 0;
+        };
         const pre = flat.map((_, i) => {
           const v = m.get(i);
           if (isBad(i)) return 'bad';
           return !v || v.st === 'pending' ? 'pending' : v.st === 'ok' || v.st === 'unsure' ? 'ok' : 'bad';
         });
         // words before the first and after the last word reached in each range were never recited: left out, not mistakes
+        forcedIdx.forEach(i => { pre[i] = 'bad'; });
         const out = new Array(flat.length).fill(false);
         for (const g of segs) {
           const idx = []; flat.forEach((x, i) => { if (x.s === g.s && x.a >= g.from && x.a <= g.to) idx.push(i); });
@@ -1215,9 +1435,14 @@ export default {
         const st = pre.map(x => (x === 'ok' ? 'ok' : 'bad'));
         const analysis = { words: st.map((x, i) => {
           if (out[i]) return { i, kind: 'unreached', heard: '' };
+          if (forcedIdx.has(i)) return { i, kind: 'peek', heard: '' };
           const k = iss.get(i), v = m.get(i);
-          if (x === 'ok') return { i, kind: k === 'vowel' || k === 'repeat' ? k : v && v.vowel > 0 ? 'vowel' : 'ok', heard: '' };
-          return { i, kind: isBad(i) ? k : v && v.st === 'wrong' ? 'wrong' : 'skip', heard: '' };
+          if (x === 'ok') {
+            const vk = k === 'vowel' || k === 'repeat' ? k : v && v.vowel > 0 ? 'vowel' : '';
+            const base = v && v.st === 'unsure' ? 'unsure' : 'ok';
+            return { i, kind: vk === 'vowel' && opts.strict === 'low' ? base : vk || base, heard: '' };
+          }
+          return { i, kind: isBad(i) ? (k && k !== 'repeat' ? k : 'vowel') : v && v.st === 'wrong' ? 'wrong' : 'skip', heard: '' };
         }), extras: [] };
         const inScope = analysis.words.filter(x => x.kind !== 'unreached');
         const okN = inScope.filter(x => st[x.i] === 'ok').length;
@@ -1225,7 +1450,11 @@ export default {
         const missed = inScope.filter(x => st[x.i] === 'bad').map(x => flat[x.i].w);
         try {
           const byS = new Map();
-          for (const x of inScope) { const s = flat[x.i].s; if (!byS.has(s)) byS.set(s, []); byS.get(s).push({ a: flat[x.i].a, w: x.i - groupOf[x.i].start + 1, kind: x.kind }); }
+          for (const x of inScope) {
+            if (!WM_KIND[x.kind]) continue;           // unsure words say nothing about the weak-word store
+            const s = flat[x.i].s; if (!byS.has(s)) byS.set(s, []);
+            byS.get(s).push({ a: flat[x.i].a, w: x.i - groupOf[x.i].start + 1, kind: WM_KIND[x.kind] });
+          }
           for (const [s, items] of byS) recordWords(s, items);
         } catch (e) { /* ignore */ }
         const ayahStats = [];
@@ -1244,9 +1473,15 @@ export default {
         }
         if (cur) savePos(cur.s, cur.a);
         const prev = segs.length === 1 ? lastAttempt(segs[0].s, segs[0].from, segs[0].to, 1) : null;
+        const peekN = peekedKeys.size;
+        if (peekN) { try { for (const sa of new Set([...peekedKeys].map(k => k.split(':').slice(0, 2).join(':')))) { const [ps, pa] = sa.split(':').map(Number); addReview(ps, pa, pa); } } catch (e) { /* ignore */ } }
+        const hifzN = noteHifz(ayahStats, 0, acc / 100);
+        const stamps = new Map();
+        for (const [i, v] of m) { const t = stampKeys.get(v.s + ':' + v.a + ':' + v.w); if (t != null) stamps.set(i, t / PCM_RATE); }
         haptic('heavy');
         showResult({
           acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar: [], prev, hideMode: false,
+          okN, totalN: inScope.length, stamps, peekN, hifzN,
           span: { segs, kind, pages: visited.size, ayahs: ayahStats.length, warns: warnCount, mistakes: inScope.filter(x => st[x.i] === 'bad').length }
         });
       }
@@ -1309,26 +1544,31 @@ export default {
     }
 
     /** Detailed feedback: change vs last attempt, mistake counts, ayah map, per-ayah mistakes, mutashabihat. */
-    function feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode, free = false }) {
+    function feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode, free = false, peekN = 0 }) {
       // free / sard sessions may span surahs: ayahs are then named with their surah
       const multi = new Set(flat.map(x => x.s || 0)).size > 1;
       const ayahLabel = (s, a) => (multi && s ? `سورة ${esc(surahName(s))} · الآية ${N(a)}` : `الآية ${N(a)}`);
-      const bad = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached');
+      // flagged = everything worth a look; bad = the real mistakes (amber «unsure» words and peeked-at words are not)
+      const flagged = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached');
+      const bad = flagged.filter(x => x.kind !== 'unsure' && x.kind !== 'peek');
       const unreached = analysis.words.length - analysis.words.filter(x => x.kind !== 'unreached').length;
-      const count = k => bad.filter(x => x.kind === k).length;
+      const count = k => flagged.filter(x => x.kind === k).length;
       const label = k => (hideMode && k === 'hint' ? 'كُشفت' : KIND_LABEL[k] || k);
       let html = '';
       if (prev) {
         const d = acc - prev.acc;
         html += `<div class="rc-delta ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${d > 0 ? '▲ تحسّنت ' + N(d) + '٪' : d < 0 ? '▼ أقل بـ ' + N(-d) + '٪' : '= نفس الدقة'} عن محاولتك السابقة (${N(prev.acc)}٪)</div>`;
       }
-      if (bad.length || analysis.extras.length) {
+      if (flagged.length || analysis.extras.length || peekN) {
         const stat = (n, t, cls) => `<div class="rc-stat ${cls}"><b>${N(n)}</b><span>${t}</span></div>`;
+        const peekStat = peekN ? stat(peekN, 'كلمات استعنت فيها بالتلميح', 'peek') : '';
         html += `<div class="rc-stats">${hideMode
-          ? stat(count('hint'), 'كلمات كُشفت', 'hint')
+          ? stat(count('hint'), 'كلمات كُشفت', 'hint') + peekStat
           : stat(count('skip'), 'محذوفة', 'skip') + stat(count('wrong'), 'مبدّلة', 'wrong') + stat(count('hint'), 'تلقين', 'hint')
+            + (count('swap') ? stat(count('swap'), 'تقديم وتأخير', 'wrong') : '')
             + (count('vowel') ? stat(count('vowel'), 'حركات', 'vowel') : '') + (count('repeat') ? stat(count('repeat'), 'تكرار', 'extra') : '')
-            + (analysis.extras.length ? stat(analysis.extras.length, 'زيادة', 'extra') : '')}</div>`;
+            + (analysis.extras.length ? stat(analysis.extras.length, 'إضافة', 'extra') : '')
+            + (count('unsure') ? stat(count('unsure'), 'غير واضحة', 'unsure') : '') + peekStat}</div>`;
       }
       if (ayahStats.length > 1) {
         html += `<h2 class="section-title">خريطة الآيات</h2><div class="card"><div class="rc-amap">${ayahStats.map(x =>
@@ -1340,10 +1580,10 @@ export default {
           <p class="mt">في الآية ${N(m.at.a)} انتقلت إلى موضع مشابه: «${esc(m.heard.join(' '))}» — وهي من ${m.hits.map(h => `<span class="chip">${esc(surahName(h.s))} ${N(h.a)}</span>`).join(' ')}</p>`).join('')}
           <p class="muted small">ركّز على الكلمة التي يفترق فيها الموضعان، وسمّعهما متتاليين.</p></div>`;
       }
-      if (bad.length) {
+      if (flagged.length) {
         const byAyah = new Map();
-        bad.forEach(x => { const k = (flat[x.i].s || 0) + ':' + flat[x.i].a; if (!byAyah.has(k)) byAyah.set(k, []); byAyah.get(k).push(x); });
-        html += `<h2 class="section-title">ملاحظات التسميع</h2>${[...byAyah].map(([k, items]) => { const [s, a] = k.split(':').map(Number); return `
+        flagged.forEach(x => { const k = (flat[x.i].s || 0) + ':' + flat[x.i].a; if (!byAyah.has(k)) byAyah.set(k, []); byAyah.get(k).push(x); });
+        html += `<h2 class="section-title">ملاحظات التسميع</h2><p class="muted small">اضغط على أي كلمة لترى المتوقع وما سُمع</p>${[...byAyah].map(([k, items]) => { const [s, a] = k.split(':').map(Number); return `
           <div class="card rc-mist">
             <div class="row"><b class="gold">${ayahLabel(s, a)}</b><span class="muted small">${N(items.length)} ${items.length > 2 ? 'ملاحظات' : 'ملاحظة'}</span></div>
             ${items.map(x => `<button class="rc-mrow k-${x.kind}" data-i="${x.i}" data-w="${x.i - groupOf[x.i].start + 1}" data-a="${a}"${s ? ` data-s="${s}"` : ''}>
@@ -1363,12 +1603,12 @@ export default {
       return html;
     }
 
-    function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false, span = null }) {
+    function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false, span = null, okN = 0, totalN = 0, stamps = null, peekN = 0, hifzN = 0 }) {
       // span: a free / sard session ({ segs:[{s,from,to}], kind, pages, ayahs, warns, mistakes }); otherwise the cfg range
       const segs = span ? span.segs : [{ s: cfg.s, from: cfg.from, to: cfg.to }];
       const { s, from, to } = segs[0];
       const rg = gen;
-      const msg = acc >= 90 ? 'ما شاء الله، تسميع متقن' : acc >= 70 ? 'جيد جداً، راجع الكلمات الحمراء' : 'التكرار طريق الإتقان';
+      const msgFor = a => (a >= 90 ? 'ما شاء الله، تسميع متقن' : a >= 70 ? 'جيد جداً، راجع الكلمات الحمراء' : 'التكرار طريق الإتقان');
       // retry the ayahs with mistakes (in the surah of the first one)
       const badSt = ayahStats.filter(x => x.ok < x.n);
       const rs = badSt.length ? badSt[0].s || s : s;
@@ -1385,7 +1625,7 @@ export default {
           </div>
           ${span.kind === 'sard' && span.warns ? `<p class="muted small mt">نُبّهت ${N(span.warns)} ${span.warns === 1 ? 'مرة' : 'مرات'} أثناء السرد</p>` : ''}
         </div>` : '';
-      const detected = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached').slice(0, 40).map(x => ({ word: flat[x.i] ? flat[x.i].w : '', kind: x.kind, heard: x.heard || '' }));
+      const detected = analysis.words.filter(x => x.kind !== 'ok' && x.kind !== 'unreached' && x.kind !== 'unsure' && x.kind !== 'peek').slice(0, 40).map(x => ({ word: flat[x.i] ? flat[x.i].w : '', kind: x.kind, heard: x.heard || '' }));
       const tooLong = secs > MAX_REVIEW_SECS;
       if (blob) { try { resUrl = URL.createObjectURL(blob); } catch (e) { resUrl = null; } }
       let recId = null, pendingTj = null;
@@ -1395,17 +1635,19 @@ export default {
           if (id && pendingTj != null) recordings.update(id, { tajweedScore: pendingTj });
         }).catch(() => {});
       }
-      el.innerHTML = header('نتيجة التسميع') + `
-        <div class="card hero center">
+      const heroHtml = () => `
           <div class="ring" style="position:relative;width:140px;height:140px;margin:0 auto">
             ${ringSvg(acc, accColor(acc), 140)}
             <div class="ring-label score" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${N(acc)}٪</div>
           </div>
-          <h2 class="mt">${esc(msg)}</h2>
+          <h2 class="mt">${esc(msgFor(acc))}</h2>
           <p class="muted small">${span ? esc(where) : `${esc(surahName(s))} · الآيات ${N(from)}–${N(to)}`} · +${N(pts)} نقطة</p>
-        </div>
+          ${hifzN ? `<p class="rc-hifz">+${N(hifzN)} ${hifzN === 1 ? 'صفحة' : 'صفحات'} في متابعة الحفظ</p>` : ''}`;
+      const fbHtml = () => feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode, free: !!span, peekN });
+      el.innerHTML = header('نتيجة التسميع') + `
+        <div class="card hero center" id="rc-hero">${heroHtml()}</div>
         ${summary}
-        ${feedbackHtml({ acc, analysis, flat, groupOf, ayahStats, similar, prev, hideMode, free: !!span })}
+        <div id="rc-fb">${fbHtml()}</div>
         ${!analysis.words.length && missed.length ? `<h2 class="section-title">الكلمات التي تحتاج مراجعة</h2><div class="card"><div class="row">${missed.map(w => `<span class="chip quran">${esc(w)}</span>`).join('')}</div></div>` : ''}
         ${retry ? `<button class="btn block mt" id="rc-retry">${icon('repeat', 18)} أعد الآيات التي أخطأت فيها (${N(retry.from)}–${N(retry.to)})</button>` : ''}
         <div class="card mt">
@@ -1431,11 +1673,72 @@ export default {
       $('#rc-new', el).onclick = () => (span ? startFree(span.kind, { auto: false }) : showSetup());
       const retryBtn = $('#rc-retry', el);
       if (retryBtn) retryBtn.onclick = () => toRange(retry.s, retry.from, retry.to);
-      $$('.rc-acell', el).forEach(b => b.onclick = () => toRange(+b.dataset.s || s, +b.dataset.ayah, +b.dataset.ayah));
-      $$('.rc-mrow', el).forEach(b => b.onclick = () => {
-        playWordAt(+b.dataset.s || s, +b.dataset.a, +b.dataset.w);
-        const i = +b.dataset.i; if (flat[i]) toast('الصواب: ' + flat[i].w);
-      });
+      const bindFb = () => {
+        $$('.rc-acell', el).forEach(b => b.onclick = () => toRange(+b.dataset.s || s, +b.dataset.ayah, +b.dataset.ayah));
+        $$('.rc-mrow', el).forEach(b => b.onclick = () => openMistake(+b.dataset.i));
+      };
+      const paintFb = () => {
+        const hero = $('#rc-hero', el), fb = $('#rc-fb', el);
+        if (hero) hero.innerHTML = heroHtml();
+        if (fb) fb.innerHTML = fbHtml();
+        bindFb();
+      };
+      /** «كنت محقاً»: the user was right. The word becomes ok, leaves the mistake counts and the weak-word store. */
+      function markRight(i) {
+        const x = analysis.words.find(w => w.i === i), fl = flat[i];
+        if (!x || !fl || x.kind === 'ok') return;
+        const was = x.kind, g = groupOf[i], ws = fl.s || s, wn = i - g.start + 1;
+        x.kind = 'ok'; x.heard = ''; delete x.said;
+        if (was === 'skip' || was === 'wrong' || was === 'swap' || was === 'hint') {
+          okN++;
+          const st = ayahStats.find(a => a.a === fl.a && (!a.s || a.s === ws));
+          if (st) { st.ok = Math.min(st.n, st.ok + 1); st.acc = st.n ? Math.round(100 * st.ok / st.n) : 100; }
+          if (totalN) acc = Math.round(100 * okN / totalN);
+          const k = missed.indexOf(fl.w); if (k >= 0) missed.splice(k, 1);
+        }
+        try {
+          if (WM_KIND[was]) {          // undo this session's note about the word, then count a clean read
+            const key = ws + ':' + fl.a + ':' + wn, e = S.wm && S.wm[key];
+            if (e) { e.n = Math.max(0, e.n - 1); if (!e.n) delete S.wm[key]; }
+          }
+          recordWords(ws, [{ a: fl.a, w: wn, kind: 'ok' }]);
+        } catch (e) { /* ignore */ }
+        if (!span) {
+          const r0 = S.rec && S.rec[0];
+          if (r0 && r0.s === s && r0.from === from && r0.to === to) { r0.acc = acc; if (Array.isArray(r0.miss)) { const k = r0.miss.indexOf(fl.w); if (k >= 0) r0.miss.splice(k, 1); } }
+        }
+        paintFb();
+        toast('عُدّلت الكلمة إلى صحيحة');
+      }
+      /** Tap on an amber / red word: expected vs heard, the mistake type, both recitations, and the override. */
+      function openMistake(i) {
+        const x = analysis.words.find(w => w.i === i), fl = flat[i];
+        if (!x || !fl) return;
+        const g = groupOf[i], ws = fl.s || s, wn = i - g.start + 1;
+        const t = stamps ? stamps.get(i) : null;
+        const canMine = !!(resUrl && t != null);
+        const canFix = x.kind !== 'ok' && x.kind !== 'peek' && x.kind !== 'hint';
+        const heard = x.heard || (x.kind === 'swap' ? '(بترتيب مختلف)' : x.kind === 'skip' || x.kind === 'hint' || x.kind === 'peek' ? '(لم تُقرأ)' : '(غير واضح)');
+        if (mSheet) { try { mSheet.close(); } catch (e) {} }
+        const sh = sheet(`<div class="rc-msheet">
+          <p class="rc-mline"><small>المتوقع:</small> <b class="quran">${esc(fl.w)}</b></p>
+          <p class="rc-mline"><small>سُمع:</small> <b class="${x.heard ? 'quran' : 'muted'}">${esc(heard)}</b></p>
+          <p class="center"><span class="rc-mkind">${esc(MISTAKE_TYPE_AR[x.kind] || KIND_LABEL[x.kind] || '')}</span></p>
+          <div class="grid-2 mt">
+            ${canMine ? '<button class="btn ghost" type="button" data-m="mine">▶ صوتي</button>' : ''}
+            <button class="btn ghost" type="button" data-m="sheikh">▶ الشيخ</button>
+          </div>
+          ${canFix ? '<button class="btn block mt" type="button" data-m="right">كنت محقاً</button>' : ''}
+          <button class="btn ghost block mt" type="button" data-m="x">إغلاق</button>
+        </div>`, { onClose: () => { stopClip(); if (mSheet === sh) mSheet = null; } });
+        mSheet = sh;
+        const on = (k, fn) => { const b = sh.querySelector(`[data-m="${k}"]`); if (b) b.onclick = fn; };
+        on('mine', () => { if (!playClip(t - CLIP_PRE, t + CLIP_POST)) toast('لا يتوفر تسجيل'); });
+        on('sheikh', () => playWordAt(ws, fl.a, wn));
+        on('x', () => sh.close());
+        on('right', () => { sh.close(); markRight(i); });
+      }
+      bindFb();
       $('#rc-rev', el).onclick = e => {
         let r = false;
         for (const g of segs) r = addReview(g.s, g.from, g.to) || r;
