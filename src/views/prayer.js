@@ -51,6 +51,7 @@ export default {
           <div class="muted small mt">الأذان لكل صلاة</div>
           <div class="adhan-days" id="ad-days">${PRAYERS.filter(x => x.key !== 'sunrise').map(x => `<button type="button" class="chip ${(p.adhanOn || {})[x.key] === false ? '' : 'active'}" data-k="${x.key}" aria-pressed="${(p.adhanOn || {})[x.key] === false ? 'false' : 'true'}" style="cursor:pointer">${esc(x.name)}</button>`).join('')}</div>
           <button class="btn mt" id="tst">${icon('bell', 18)} تجربة الأذان</button>
+          ${web ? '' : '<div id="exact-box"></div>'}
         </div>
         <div class="card mt">
           <div class="section-title">الإعدادات</div>
@@ -65,10 +66,49 @@ export default {
         ${web ? '' : `<div class="card mt">
           <div class="section-title">ويدجت الشاشة الرئيسية</div>
           <p class="muted small">أضف ويدجت مواقيت الصلاة إلى الشاشة الرئيسية: اضغط مطولاً على الشاشة ← الأدوات (Widgets) ← نور</p>
-        </div>`}`;
+        </div>
+        <details class="card mt diag" id="diag" ${diagOpen ? 'open' : ''}>
+          <summary class="section-title">تشخيص التنبيهات</summary>
+          <div id="diag-body" class="muted small mt">جارٍ الفحص…</div>
+          <button class="btn ghost mt" id="diag-re">إعادة الجدولة</button>
+          <p class="muted small mt">إن لم يصلك الأذان: اسمح بالإشعارات و«المنبهات والتذكيرات»، وأزل التطبيق من توفير البطارية (الإعدادات ← التطبيقات ← نور ← البطارية ← غير مقيّد). على بعض الأجهزة (شاومي، هواوي، أوبو) فعّل «التشغيل التلقائي».</p>
+        </details>`}`;
       wire();
+      if (!web) { loadExact(); if (diagOpen) loadDiag(); }
       updatePrayerWidget(); // keep the home-screen widget in sync with the times shown here
       tick();
+    }
+
+    let diagOpen = false;
+    const fmtT = d => d ? new Intl.DateTimeFormat('ar', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(d) : '—';
+    async function loadExact() {
+      try {
+        const n = await import('../core/notify.js');
+        const st = await n.exactAlarmState();
+        const box = $('#exact-box', el);
+        if (!alive || !box) return;
+        if (st !== 'denied') { box.innerHTML = ''; return; }
+        box.innerHTML = '<p class="muted small mt">الجوال يمنع المنبهات الدقيقة، فقد يتأخر الأذان دقائق. اسمح بها ليصلك في وقته تمامًا.</p><button class="btn mt" id="exact-btn">السماح بالتنبيهات الدقيقة</button>';
+        $('#exact-btn', el).onclick = async () => {
+          const r = await n.openExactAlarmSettings();
+          toast(r === 'granted' ? 'تم السماح بالتنبيهات الدقيقة' : 'لم يتم السماح بعد');
+          if (r === 'granted') { await resched(false); loadExact(); loadDiag(); }
+        };
+      } catch (e) { /* ignore */ }
+    }
+    async function loadDiag() {
+      const body = $('#diag-body', el); if (!body) return;
+      try {
+        const n = await import('../core/notify.js');
+        const d = await n.diagnostics();
+        if (!alive || !$('#diag-body', el)) return;
+        const L = { granted: 'مسموح', denied: 'مرفوض', prompt: 'لم يُطلب بعد', unknown: 'غير معروف' };
+        const ch = (d.channels || []).filter(c => /^adhan|^reminders/.test(c.id)).map(c => `<div dir="ltr" style="text-align:left">${esc(c.id)} · imp ${N(c.importance)} · ${c.sound ? 'sound' : 'no sound'}</div>`).join('') || '—';
+        $('#diag-body', el).innerHTML = d.native ? `<div>إذن الإشعارات: <b>${L[d.perm] || esc(d.perm)}</b></div>
+          <div>المنبهات الدقيقة: <b>${L[d.exact] || esc(d.exact)}</b></div>
+          <div>تنبيهات مجدولة: <b>${N(d.pending)}</b> · التالي: <b>${esc(fmtT(d.next))}</b></div>
+          <div class="mt">القنوات:</div>${ch}${d.error ? '<div>خطأ: ' + esc(d.error) + '</div>' : ''}` : 'متاح في تطبيق الأندرويد فقط';
+      } catch (e) { body.textContent = 'تعذر الفحص'; }
     }
 
     function tick() {
@@ -126,13 +166,25 @@ export default {
         toast(r.ok ? 'تم تحديث موقعك' + (r.city ? ': ' + r.city : '') : r.fallback ? 'تعذر تحديد موقعك، نستخدم الرياض ويمكنك تغييره لاحقاً' : 'تعذر تحديث الموقع');
         resched(false);
       };
+      const dg = $('#diag', el);
+      if (dg) {
+        dg.ontoggle = () => { diagOpen = dg.open; if (diagOpen) loadDiag(); };
+        $('#diag-re', el).onclick = async () => {
+          if (!S.settings.prayer.notify) return toast('فعّل «تنبيهات الأذان» أولاً');
+          toast('جارٍ إعادة الجدولة…');
+          await resched(true); loadDiag();
+        };
+      }
       $('#tst', el).onclick = async () => {
         try {
           const n = await import('../core/notify.js');
           const choice = S.settings.prayer.adhan || 'full';
           if (web) { testStarted = true; playAdhanNow('تجربة الأذان', choice, ''); return; }
           const r = await n.testNotification(n.adhanChannel(choice), 10);
-          toast(r.sent ? 'سيصلك إشعار تجريبي خلال ١٠ ثوانٍ' : 'فعّل إذن الإشعارات لتصلك التجربة');
+          if (!r.sent) return toast('الإشعارات غير مسموحة: افتح إعدادات الجوال ← التطبيقات ← نور ← الإشعارات وفعّلها');
+          toast('سيصلك إشعار تجريبي الساعة ' + new Intl.DateTimeFormat('ar', { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(r.at));
+          if (r.exact === 'denied') loadExact();
+          if (diagOpen) setTimeout(loadDiag, 600);
         } catch (err) { toast('تعذر إرسال التنبيه'); }
       };
     }

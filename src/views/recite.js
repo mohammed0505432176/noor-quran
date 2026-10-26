@@ -15,7 +15,8 @@ import * as recordings from '../core/recordings.js';
 import { engineSupported, engineCached, downloadEngine, openEngine, mapVerdicts, freeSegments, ENGINE_MB } from '../core/quran-engine.js';
 import * as madani from '../core/madani.js';
 import { renderPageLines, pageGlyphs, fitLines, BASMALA } from '../core/madani-render.js';
-import { pageOf, pageContent, side, juzOfPage } from '../core/pages.js';
+import { pageOf, pageContent, side, juzOfPage, pageFirst, quarterOf, PAGE_COUNT } from '../core/pages.js';
+import '../styles/reader.css';
 import '../styles/recite.css';
 
 // free recitation / sard: per-viewer preferences (localStorage only, like the other noor.recite.* keys)
@@ -53,6 +54,19 @@ const CLIP_PRE = 1.2, CLIP_POST = 0.4;   // seconds around the moment a word's v
 const PCM_RATE = 16000;
 const WARN_KINDS = new Set(['possible_omission', 'possible_substitution', 'possible_skipped_ayah', 'unclear_ayah']);
 const clock = secs => { const t = Math.max(0, Math.round(secs || 0)); return N(Math.floor(t / 60)) + ':' + N(String(t % 60).padStart(2, '0')); };
+
+// reader chrome shared with the mushaf reader (src/styles/reader.css): same ink / frame preferences
+const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
+const XP = {
+  eyeoff: '<path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.6 8.5 2 12 2 12s4 7 10 7c1.6 0 3-.4 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  peekWord: '<path d="M15 6l-6 6 6 6"/>',
+  peekAyah: '<path d="M13 6l-6 6 6 6M19 6l-6 6 6 6"/>',
+  warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.2h.01"/>'
+};
+const ic = (n, size = 22) => XP[n] ? `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${XP[n]}</svg>` : icon(n, size);
+const hizbNo = p => { const f = pageFirst(p); return Math.ceil(quarterOf(f.s, f.a) / 4); };
+const pageNames = p => [...new Set(pageContent(p).map(g => g.s))].map(surahName).join(' · ');
 
 const MODE_KEY = 'noor.recite.mode';
 const MODES = ['quran', 'device', 'ai', 'hide'];
@@ -153,6 +167,7 @@ export default {
     let lastFree = 'free';       // kind of the last free session ('free' | 'sard'), for «إعادة»
     const cleanup = () => {
       alive = false; gen++; setupTok++;
+      document.body.classList.remove('rd-mode');
       stopClip(); hideFix();
       if (ctlSheet) { try { ctlSheet.close(); } catch (e) {} ctlSheet = null; }
       if (mSheet) { try { mSheet.close(); } catch (e) {} mSheet = null; }
@@ -1004,7 +1019,7 @@ export default {
     // No range: the on-device engine starts in discovery mode (whole Quran), locates the reciter from the first seconds
     // of audio and follows across ayahs, surahs and pages. The current page is shown as the Madinah Mushaf (QCF v2):
     // words stay hidden until recited (ink), mistakes red, unsure amber. Ends only with «إنهاء» (never on a pause).
-    async function startFree(kind, { auto = true } = {}) {
+    async function startFree(kind, { auto = true, page: pageArg = 0, hidden: hiddenArg = null } = {}) {
       cleanup(); alive = true;
       const myGen = gen;
       const isLive = () => alive && gen === myGen;
@@ -1012,7 +1027,8 @@ export default {
       lastFree = kind;
       if (!(engineSupported() && await engineCached())) { if (isLive()) { if (auto) toast('حمّل المحرك القرآني أولاً (مرة واحدة)'); showSetup(); } return; }
       if (!isLive()) return;
-      let showText = loadFlag(TEXT_KEY, false);
+      let showText = hiddenArg === null ? loadFlag(TEXT_KEY, false) : !hiddenArg;
+      if (hiddenArg !== null) saveFlag(TEXT_KEY, showText);
       // the tone context is created inside the start tap (a context made later may stay suspended)
       let tone = null, timer = 0;
       if (sard) tone = makeTone();
@@ -1026,35 +1042,36 @@ export default {
       };
       window.addEventListener('resize', onResize);
 
-      const title = sard ? 'السرد' : 'التسميع';
-      el.innerHTML = header(title, { actions: gearBtn }) + `
-        <div class="rc-ftools">
-          <div class="seg rc-txtseg" role="group" aria-label="عرض النص">
-            <button id="rc-hid" class="${showText ? '' : 'active'}" aria-pressed="${!showText}">مخفي</button>
-            <button id="rc-shw" class="${showText ? 'active' : ''}" aria-pressed="${showText}">ظاهر</button>
-          </div>
-          <button class="chip small${sard ? ' active' : ''}" id="rc-kind" aria-pressed="${sard}">السرد</button>
-          <button class="chip small" id="rc-range">تحديد مقطع</button>
-          <button class="chip small" id="rc-relock">إعادة تحديد الموضع</button>
-          <button class="chip small" id="rc-hint">${icon('eye', 14)} تلميح</button>
-        </div>
-        <div class="rc-fhead" id="rc-fhead">${sard ? 'اضغط المايك واسرد من حفظك من أي موضع، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع، وسأنتقل إلى الآية التي تقرؤها وأتابعك'}</div>
-        <div class="rc-fwrap${showText ? ' shown' : ''}" id="rc-fwrap"></div>
-        <div class="rc-spacer"></div>
-        <div class="rc-dock" id="rc-dock">
-          <div class="rc-dock-top"><span class="small muted" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : 'اضغط على المايك وابدأ القراءة'}</span><b class="small rc-fcount" id="rc-count"></b></div>
-          <div class="rc-dock-row">
-            <span class="small muted rc-ftime" id="rc-time">${clock(0)}</span>
-            <button class="mic-btn rc-mic" id="rc-mic" aria-label="تشغيل الميكروفون">${icon('mic', 30)}</button>
-            <button class="btn sm" id="rc-end">إنهاء</button>
-          </div>
-        </div>`;
-      { const hd = $('.page-head', el); if (hd) hd.classList.add('sticky-head'); }
+      const pos0 = loadPos();
+      const hasPg = pageArg >= 1 && pageArg <= PAGE_COUNT;
+      const startPage = hasPg ? pageArg | 0 : (pos0 ? pageOf(pos0.surah, pos0.ayah) : 1);
+      const hintPos = hasPg ? { surah: pageFirst(startPage).s, ayah: pageFirst(startPage).a } : pos0;
+      const inkK = lsGet('noor.rd.ink', 'auto'), framed = lsGet('noor.rd.frame', '0') === '1';
+      const metaHTML = p => `<span>صفحة ${N(p)}</span><i>|</i><span>جزء ${N(juzOfPage(p))}</span><i>|</i><span>حزب ${N(hizbNo(p))}</span>`;
+      el.innerHTML = `<div class="rd rc-rd${showText ? '' : ' rd-hidden'}${framed ? ' rd-framed' : ''} rd-ink-${['bright', 'warm'].includes(inkK) ? inkK : 'auto'}" id="rd">
+        <div class="rd-top"><button class="rd-ic" id="rc-menu" aria-label="القائمة">${ic('menu')}</button>
+          <div class="rd-cardbox"><div class="rd-card"><div class="rd-card-main"><div class="rd-sname" id="rc-sname">${esc(pageNames(startPage))}</div><div class="rd-meta" id="rc-meta">${metaHTML(startPage)}</div></div></div></div>
+          <button class="rd-ic" data-go="search" aria-label="بحث">${icon('search')}</button><button class="rd-ic" id="rc-gear" aria-label="إعدادات التسميع">${icon('gear', 22)}</button></div>
+        <div class="rc-strip"><span class="rc-status small" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : sard ? 'اضغط المايك واسرد من حفظك، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع'}</span>
+          <b class="small rc-fcount" id="rc-count"></b><span class="small muted rc-ftime" id="rc-time">${clock(0)}</span>
+          <button class="rc-endbtn" id="rc-end">إنهاء</button></div>
+        <div class="rd-stage"><div class="mp-book rc-fwrap${showText ? ' shown' : ''}" id="rc-fwrap"></div></div>
+        <div class="rd-bottom">
+          <div class="rd-peek" id="rdPeek"><button class="rd-pk" id="pkAyah" aria-label="كشف بقية الآية">${ic('peekAyah', 20)}<span>بقية الآية</span></button><button class="rd-pk" id="pkWord" aria-label="كشف الكلمة التالية">${ic('peekWord', 20)}<span>كلمة</span></button></div>
+          <div class="rd-bar"><div class="rd-tools">
+            <button class="rd-pill" id="rc-mist">${ic('warn', 18)}<span>أخطاء</span><b class="rd-badge" id="rc-mistn" hidden></b></button>
+            <button class="rd-tool" id="rc-relock" aria-label="إعادة تحديد الموضع">${icon('repeat', 22)}</button>
+            <button class="rd-tool rd-eye${showText ? '' : ' on'}" id="rc-eye" aria-pressed="${!showText}" aria-label="إخفاء الآيات">${ic(showText ? 'eye' : 'eyeoff', 22)}</button>
+          </div></div></div>
+        <button class="rd-fab" id="rc-mic" aria-label="تشغيل الميكروفون"><span class="rd-fab-mic">${icon('mic', 30)}</span></button>
+      </div>`;
+      document.body.classList.add('rd-mode');
       const micEl = $('#rc-mic', el), statusEl = $('#rc-status', el), countEl = $('#rc-count', el), timeEl = $('#rc-time', el);
-      const wrap = $('#rc-fwrap', el), headEl = $('#rc-fhead', el);
+      const wrap = $('#rc-fwrap', el), rootEl = $('#rd', el);
       const setStatus = t => { if (statusEl) statusEl.textContent = t; };
       const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
       const listenText = () => (cur ? (sard ? 'أتابعك… واصل السرد' : 'أتابعك… واصل القراءة') : 'أسمعك… أبحث عن الموضع');
+      const setCard = p => { const n = $('#rc-sname', el), m = $('#rc-meta', el); if (n) n.textContent = pageNames(p); if (m) m.innerHTML = metaHTML(p); };
 
       let rec = null, qe = null, starting = false, recState = 'idle', ending = false, finished = false;
       let recBlob = null, recSecs = 0, muteTill = 0, lastWarn = 0, warnCount = 0, mistakes = 0, pcmN = 0;
@@ -1076,31 +1093,56 @@ export default {
       let pageTok = 0, pageWant = 0, raf = 0, mdWarnedHere = false;
       const counts = () => (qe ? qe.counts() : {});
 
+      const hardIssues = () => [...issues].filter(([, k]) => hardKind(k));
       const updateCount = () => {
-        if (countEl) countEl.textContent = ayahsRead.size ? `${N(ayahsRead.size)} آية · ${N(mistakes)} ${mistakes === 1 ? 'خطأ' : 'أخطاء'}` : '';
-      };
-      const updateHead = () => {
-        if (!cur || !headEl) return;
-        const p = pageOf(cur.s, cur.a);
-        headEl.innerHTML = `<b class="gold">سورة ${esc(surahName(cur.s))}</b><span>الآية ${N(cur.a)}</span><span>الصفحة ${N(p)}</span><span>الجزء ${N(juzOfPage(p))}</span>`;
+        if (countEl) countEl.textContent = ayahsRead.size ? `${N(ayahsRead.size)} آية` : '';
+        const bd = $('#rc-mistn', el), n = hardIssues().length;
+        if (bd) { bd.hidden = !n; bd.textContent = N(n); }
       };
       timer = setInterval(() => { if (isLive() && rec && timeEl) timeEl.textContent = clock(rec.elapsed()); }, 1000);
 
-      const hidB = $('#rc-hid', el), shwB = $('#rc-shw', el);
-      const setText = v => {
-        showText = v; saveFlag(TEXT_KEY, v);
-        hidB.classList.toggle('active', !v); shwB.classList.toggle('active', v);
-        hidB.setAttribute('aria-pressed', String(!v)); shwB.setAttribute('aria-pressed', String(v));
-        wrap.classList.toggle('shown', v);
+      // eye = the reader's hidden mode («إخفاء الآيات»): rule lines + ayah medallions, recited words appear in ink
+      const eyeB = $('#rc-eye', el);
+      const setHidden = (on, quiet) => {
+        showText = !on; saveFlag(TEXT_KEY, showText);
+        eyeB.classList.toggle('on', on); eyeB.setAttribute('aria-pressed', String(on)); eyeB.innerHTML = ic(on ? 'eyeoff' : 'eye', 22);
+        rootEl.classList.toggle('rd-hidden', on); wrap.classList.toggle('shown', !on);
+        if (!quiet) toast(on ? 'إخفاء الآيات: مفعّل' : 'إخفاء الآيات: متوقف');
       };
-      hidB.onclick = () => setText(false);
-      shwB.onclick = () => setText(true);
-      const kindEl = $('#rc-kind', el);
+      eyeB.onclick = () => setHidden(showText);
+      $('#pkWord', el).onclick = () => hint();
+      $('#pkAyah', el).onclick = () => hint(3);
       // free <-> sard changes the tone/warnings, so it is only offered before the session starts (it never throws a running one away)
-      const syncKind = () => { if (kindEl) kindEl.disabled = recState !== 'idle' || starting || ending; };
-      kindEl.onclick = () => { if (recState !== 'idle' || starting || ending) return; startFree(sard ? 'free' : 'sard', { auto: false }); };
-      $('#rc-range', el).onclick = showSetup;
-      $('#rc-hint', el).onclick = () => hint();
+      const syncKind = () => {};
+      const idleNow = () => recState === 'idle' && !starting && !ending;
+      $('#rc-menu', el).onclick = () => {
+        if (mSheet) { try { mSheet.close(); } catch (e) {} }
+        const sh = sheet(`<div class="rd-sh-head"><div class="rd-sh-title">التسميع</div><button class="rd-x" data-x aria-label="إغلاق">${icon('close', 20)}</button></div>
+          <div class="rd-list">
+            <button class="rd-row" data-k role="switch" aria-checked="${sard}"><span class="rd-row-ic">${icon('book', 21)}</span><span class="rd-row-lb">السرد (تنبيه خفيف عند الخطأ)</span><span class="rd-sw${sard ? ' on' : ''}"><i></i></span></button>
+            <button class="rd-row" data-r><span class="rd-row-ic">${icon('mic', 21)}</span><span class="rd-row-lb">تسميع مقطع محدد</span><span class="rd-row-tr">${icon('back', 16)}</span></button>
+            <button class="rd-row" data-m><span class="rd-row-ic">${icon('book', 21)}</span><span class="rd-row-lb">فتح الصفحة في المصحف</span><span class="rd-row-tr">${icon('back', 16)}</span></button>
+          </div>`, { onClose: () => { if (mSheet === sh) mSheet = null; } });
+        sh.classList.add('rd-sheet'); mSheet = sh;
+        $('[data-x]', sh).onclick = () => sh.close();
+        $('[data-k]', sh).onclick = () => { if (!idleNow()) { toast('أنهِ الجلسة الجارية أولاً'); return; } sh.close(); startFree(sard ? 'free' : 'sard', { auto: false, page: page ? page.p : pageWant }); };
+        $('[data-r]', sh).onclick = () => { if (!idleNow()) { toast('أنهِ الجلسة الجارية أولاً'); return; } sh.close(); showSetup(); };
+        $('[data-m]', sh).onclick = () => { sh.close(); window.noorGo('mushaf/p' + (page ? page.p : pageWant || startPage)); };
+      };
+      // «أخطاء»: this session's mistakes, newest first
+      $('#rc-mist', el).onclick = () => {
+        if (mSheet) { try { mSheet.close(); } catch (e) {} }
+        const rows = hardIssues().reverse().map(([k, kind]) => {
+          const [ms, ma, mw] = k.split(':').map(Number), ws = splitWords(ayah(ms, ma));
+          return { s: ms, a: ma, w: mw, kind, word: ws[mw - 1] || '' };
+        });
+        const list = rows.length ? rows.slice(0, 80).map(r => `<div class="rd-mrow"><div class="rd-mw">${esc(r.word)}</div><div class="rd-mi"><b>${esc(surahName(r.s))} ${N(r.s)}:${N(r.a)}</b><span class="muted small">${esc(KIND_LABEL[r.kind] || 'خطأ')}</span></div><button class="rd-mb" data-mp="${r.s}:${r.a}:${r.w}" aria-label="استمع للكلمة">${icon('play', 18)}</button></div>`).join('')
+          : '<p class="muted center rd-empty">لا أخطاء في هذه الجلسة حتى الآن.</p>';
+        const sh = sheet(`<div class="rd-sh-head"><div class="rd-sh-title">أخطاء هذه الجلسة</div>${rows.length ? `<span class="rd-chip">${N(rows.length)}</span>` : ''}<button class="rd-x" data-x aria-label="إغلاق">${icon('close', 20)}</button></div><div class="rd-scroll">${list}</div>`, { onClose: () => { if (mSheet === sh) mSheet = null; } });
+        sh.classList.add('rd-sheet'); mSheet = sh;
+        $('[data-x]', sh).onclick = () => sh.close();
+        sh.addEventListener('click', e => { const b = e.target.closest('[data-mp]'); if (!b) return; const [ps, pa, pw] = b.dataset.mp.split(':').map(Number); playWordAt(ps, pa, pw); });
+      };
       // the engine sticks to the surah it locked on; this clears that lock and runs discovery again
       const relockB = $('#rc-relock', el);
       relockB.onclick = () => {
@@ -1128,6 +1170,7 @@ export default {
       async function showPage(p, dir) {
         const tok = ++pageTok;
         pageWant = p;
+        setCard(p);
         let L = null, fam = null;
         try { [L, fam] = await Promise.all([madani.loadPage(p), madani.loadFont(p)]); } catch (e) { L = null; }
         if (!isLive() || tok !== pageTok) return;
@@ -1137,9 +1180,7 @@ export default {
           ({ html, groups, ends } = textPage(p)); mode = 'text';
           if (!mdWarnedHere) { mdWarnedHere = true; toast('تعذّر تحميل خط مصحف المدينة، عُرضت الصفحة بالخط العادي'); }
         }
-        const names = [...new Set(pageContent(p).map(g => g.s))].map(s => 'سورة ' + surahName(s)).join(' · ');
         wrap.innerHTML = `<div class="mp-page rc-fpage page-${side(p)}${dir ? ' turn-' + dir : ''}" data-p="${p}">
-          <div class="mp-top"><span class="mp-surah">${esc(names)}</span><span class="mp-juz">الجزء ${N(juzOfPage(p))}</span></div>
           <div class="mp-body${mode === 'madani' ? ' madani' : ''}">${html}</div>
           <div class="mp-foot"><span class="mp-num">${N(p)}</span></div>
         </div>`;
@@ -1150,7 +1191,7 @@ export default {
         };
         if (mode === 'madani') { madani.setShown([p]); fitLines($('.mq-lines', wrap)); madani.prefetch(p); }
         paintPage();
-        try { const r = wrap.getBoundingClientRect(); if (r.top < 0 || r.top > window.innerHeight * 0.5) window.scrollTo({ top: Math.max(0, window.scrollY + r.top - 70), behavior: 'auto' }); } catch (e) {}
+        try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch (e) {}
       }
 
       /** Classes of every unit on the shown page from the engine verdicts + correction-rule issues. */
@@ -1209,15 +1250,16 @@ export default {
       };
 
       /** Graded peeking on the Madinah page: 1st = first letter in a bubble, 2nd = the word's glyph, 3rd = the rest of the ayah. */
-      function hint() {
+      function hint(force) {
         if (finished || ending || !page || !page.st) return;
-        if (showText) { toast('التلميح للنص المخفي — اختر «مخفي» أولاً'); return; }
+        if (showText) { toast('التلميح للنص المخفي — فعّل إخفاء الآيات أولاً'); return; }
         let i = -1;
         for (let k = page.lastJ + 1; k < page.spans.length; k++) if (!page.endSet.has(k) && page.st[k] === 'f-pend') { i = k; break; }
         const g = i >= 0 ? page.groups.find(x => i >= x.start && i < x.end) : null;
         if (!g) return;
         let step = 1;
-        if (pkStep === 1 && i === pkIdx && pkPage === page.p) step = 2;
+        if (force === 3) step = 3;
+        else if (pkStep === 1 && i === pkIdx && pkPage === page.p) step = 2;
         else if (pkStep === 2 && pkPage === page.p && i > pkIdx && pkIdx >= g.start) step = 3;
         const set = peekPages.get(page.p) || peekPages.set(page.p, new Set()).get(page.p);
         const key = k => g.s + ':' + g.a + ':' + (k - g.start);
@@ -1247,7 +1289,6 @@ export default {
         const p = pageOf(s, a);
         visited.add(p);
         if (p !== pageWant) showPage(p, page && !first ? (p > page.p ? 'next' : 'prev') : '');
-        updateHead();
         if (first) setStatus(listenText());
       }
       function applyWords(words) {
@@ -1358,7 +1399,7 @@ export default {
             onIssue: i => { if (isLive() && !finished) onIssue(i); },
             onError: () => { if (isLive() && !finished && !ending) { toast('توقف المحرك القرآني — عرضنا ما سُمع'); finish(); } },
             onSlow: () => { if (isLive() && !finished) toast('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); }
-          }, { hint: loadPos() });
+          }, { hint: hintPos });
           activeEngine = qe;
           for (const b of early) qe.pcm(b);
           early = []; earlyLen = 0; live = true;
@@ -1497,7 +1538,7 @@ export default {
         playWordAt(g.s, g.a, (page.mode === 'madani' ? i - g.start : en && en !== n ? Math.floor((i - g.start) * en / n) : i - g.start) + 1);
       });
       // the page where the last free session ended (or the first page) waits under the mic until the engine locates
-      { const h = loadPos(); showPage(h ? pageOf(h.surah, h.ayah) : 1, ''); }
+      showPage(startPage, '');
       if (auto) toggle();
     }
 
@@ -1604,6 +1645,7 @@ export default {
     }
 
     function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false, span = null, okN = 0, totalN = 0, stamps = null, peekN = 0, hifzN = 0 }) {
+      document.body.classList.remove('rd-mode');
       // span: a free / sard session ({ segs:[{s,from,to}], kind, pages, ayahs, warns, mistakes }); otherwise the cfg range
       const segs = span ? span.segs : [{ s: cfg.s, from: cfg.from, to: cfg.to }];
       const { s, from, to } = segs[0];
@@ -1792,8 +1834,11 @@ export default {
       }
     }
 
+    // recite?page=<p>&hidden=<0|1> (from the reader's «تلاوة»): free mode opens on that page with hidden mode preset
+    const qPage = parseInt(q.page, 10);
+    const pageOpt = qPage >= 1 && qPage <= PAGE_COUNT ? { auto: false, page: qPage, hidden: q.hidden === undefined ? null : q.hidden === '1' } : { auto: false };
     if (!params.id && !q.mode && engineSupported()) {
-      engineCached().then(ok => { if (!alive) return; if (ok) startFree('free', { auto: false }); else showSetup(); }).catch(() => { if (alive) showSetup(); });
+      engineCached().then(ok => { if (!alive) return; if (ok) startFree('free', pageOpt); else showSetup(); }).catch(() => { if (alive) showSetup(); });
     } else showSetup();
     return cleanup;
   }

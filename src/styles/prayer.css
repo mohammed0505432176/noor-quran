@@ -12,3 +12,8 @@
 @media (prefers-reduced-motion:reduce){.adhan-art,.adhan-ov{animation:none}}
 
 .adhan-days .chip{font:inherit;border:0;color:inherit}
+.diag summary{cursor:pointer;list-style:none}
+.diag summary::-webkit-details-marker{display:none}
+.diag summary::after{content:' ▾';opacity:.6}
+.diag[open] summary::after{content:' ▴'}
+#exact-box .btn{width:100%}

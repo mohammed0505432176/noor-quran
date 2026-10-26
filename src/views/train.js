@@ -7,6 +7,7 @@ import { haptic } from '../core/platform.js';
 import { esc, icon, toast, header, N } from '../ui.js';
 import { startRecorder } from '../core/recorder.js';
 import { engineSupported, engineCached, openEngine, mapVerdicts } from '../core/quran-engine.js';
+import { pageContent, PAGE_COUNT } from '../core/pages.js';
 import '../styles/train.css';
 
 const ROUNDS = 10;
@@ -63,7 +64,7 @@ function topMissed() {
 }
 
 export default {
-  async render(el) {
+  async render(el, params = {}) {
     try { await loadQuran(); } catch (e) { el.innerHTML = '<div class="card empty"><p>تعذر تحميل نص المصحف.</p></div>'; return; }
 
     let alive = true, timer = null, unsub = null;
@@ -493,7 +494,17 @@ export default {
       nextCard();
     }
 
-    home();
+    // train?page=<p> (from the reader's «اختبار»): flash-card test on that page's ayahs directly; plain «train» opens the centre
+    const pq = params.q instanceof URLSearchParams ? params.q : new URLSearchParams(params.q || '');
+    const pg = parseInt(pq.get('page'), 10);
+    if (pg >= 1 && pg <= PAGE_COUNT) {
+      const deck = [];
+      try { for (const g of pageContent(pg)) for (let a = g.from; a <= g.to; a++) { try { if (ayah(g.s, a)) deck.push({ s: g.s, a, rv: null }); } catch (e) { /* skip */ } } } catch (e) { /* ignore */ }
+      if (deck.length) {
+        for (let i = deck.length - 1; i > 0; i--) { const j = rnd(i + 1); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+        flashRun(deck.slice(0, 20), false);
+      } else home();
+    } else home();
     return () => { alive = false; killAudio(); flashCleanup(); };
   }
 };

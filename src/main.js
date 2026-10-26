@@ -14,6 +14,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
 import './styles/mushaf.css';
+import './styles/reader.css';
 import './styles/kids.css';
 import './styles/prayer.css';
 import './styles/hifz.css';
@@ -67,6 +68,7 @@ async function route() {
   const tab = TAB_OF[name] || name;
   nav.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.go === tab));
   document.body.dataset.route = name;
+  document.body.classList.remove('rd-mode'); // the reader re-adds it (full-screen, no tab bar)
   try {
     const mod = await ROUTES[name]();
     if (my !== seq) return;
@@ -119,7 +121,7 @@ function init() {
       });
     } catch (e) {}
   });
-  import('./core/prayer.js').then(p => { p.startAdhanWatcher(); p.refreshSchedule && p.refreshSchedule(); }).catch(() => {});
+  import('./core/prayer.js').then(p => { p.startAdhanWatcher(); /* startAdhanWatcher already triggers refreshSchedule on cold start */ }).catch(() => {});
   import('./core/widget.js').then(w => w.updatePrayerWidget()).catch(() => {});
   import('./core/family.js').then(f => f.startFamilySync && f.startFamilySync()).catch(() => {});
   const sp = document.getElementById('splash');

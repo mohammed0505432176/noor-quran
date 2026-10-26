@@ -1,0 +1,11 @@
+Kids prayer guide audio (public/kids/prayer/audio)
+
+istiftah, ruku, itidal1, itidal2, sujud, julus, tashahhud, ibrahimiyya:
+  Recitation by Fares Abbad (Hisn al-Muslim audio), https://hisnmuslim.com (items 28, 33, 38, 39, 41, 48, 52, 53).
+  Spoken chapter titles and trailing "three times" removed (cut, 30 ms fade-in, loudnorm -16 LUFS, mono 64 kbps).
+  No license stated by hisnmuslim; used for a free, non-commercial app with credit.
+takbir.mp3:
+  First "Allahu akbar" of "Beautiful adhan.ogg" by Adam-synagda, Wikimedia Commons, CC0 1.0
+  https://commons.wikimedia.org/wiki/File:Beautiful_adhan.ogg
+salam.mp3:
+  Wikimedia Commons "السلام عليكم.ogg" (user TwoThirty), public domain. Says only "assalamu alaykum".

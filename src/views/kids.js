@@ -322,7 +322,8 @@ async function quranDetail(el, ctx, sid, alive) {
 
 // ---------- prayer guide ----------
 const mediaUrl = a => (/^https?:/.test(a) ? a : BASE + a);
-const sayClips = it => it.surah ? Array.from({ length: FATIHA_AYAT }, (_, k) => ayahUrl(it.surah, k + 1)) : (it.audio ? [mediaUrl(it.audio)] : []);
+const sayClips = it => it.surah ? Array.from({ length: FATIHA_AYAT }, (_, k) => ayahUrl(it.surah, k + 1)) : (it.audio ? Array.from({ length: Math.max(1, it.repeat || 1) }, () => mediaUrl(it.audio)) : []);
+const REPEAT_GAP = 600; // ms of silence between repeats of the same phrase (not between Fatiha ayat)
 
 function prayer(el, ctx) {
   const au = ctx.au, S = PRAYER_STEPS, n = S.length;
@@ -344,14 +345,14 @@ function prayer(el, ctx) {
     const my = ++token; ctx.stop(); setPlaying(k);
     let c = 0;
     const fail = () => { if (my !== token) return; stop(); auto = false; paintAuto(); toast('تأكد من الإنترنت'); };
+    const play = src => { if (my !== token) return; au.src = src; const p = au.play(); if (p && p.catch) p.catch(fail); };
     const next = () => {
       if (my !== token) return;
       c++;
-      if (c < clips.length) { au.src = clips[c]; const p = au.play(); if (p && p.catch) p.catch(fail); } else { setPlaying(-1); if (cb) cb(); }
+      if (c < clips.length) { if (it.surah) play(clips[c]); else ctx.t(() => play(clips[c]), REPEAT_GAP); } else { setPlaying(-1); if (cb) cb(); }
     };
     au.onended = next; au.onerror = fail;
-    au.src = clips[0];
-    const p = au.play(); if (p && p.catch) p.catch(fail);
+    play(clips[0]);
   }
   function paintAuto() {
     const b = el.querySelector('#k-auto'); if (!b) return;

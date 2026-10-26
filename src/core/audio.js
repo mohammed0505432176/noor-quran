@@ -1,4 +1,4 @@
-// Shared ayah audio player (everyayah.com). One HTMLAudioElement for the whole app.
+// Shared ayah audio player (everyayah.com). Two HTMLAudioElements ping-pong for gapless playback.
 import { S } from './store.js';
 import { ayahCount } from './quran.js';
 
@@ -33,59 +33,141 @@ function emit(type) {
   subs.forEach(fn => { try { fn({ type, s: c.s, a: c.a }); } catch (e) { console.error(e); } });
 }
 
-let el = null, cur = null, q = null, rep = 0, rate = 1, playing = false, preloaded = null;
+let el = null, sb = null, cur = null, q = null, rep = 0, rate = 1, playing = false;
+let advanced = false, retried = false, tickId = 0, earlyTimer = 0;
+const EARLY = 0.08; // seconds of trailing silence to cut when the next ayah is already buffered
+
+/** ms until the early-advance point (duration - EARLY*rate), or null if unknown. Pure. */
+export function earlyDelayMs(duration, currentTime, playbackRate, early = EARLY) {
+  if (!isFinite(duration) || duration <= 0) return null;
+  const r = playbackRate > 0 ? playbackRate : 1;
+  return Math.max(0, (duration - currentTime - early * r) / r * 1000);
+}
+
+/** Pure repeat/loop logic. peek=true: what plays after the current play-through would finish (no rep side effects). */
+export function nextIndex(qq, c, repDone, peek) {
+  if (!qq || !c) return null;
+  if (repDone < qq.repeatEach) return { s: c.s, a: c.a, again: !peek };
+  if (c.a < qq.to) return { s: c.s, a: c.a + 1 };
+  if (qq.loopRange) return { s: qq.s, a: qq.from };
+  return null;
+}
+// What follows the current ayah once its play-through completes (rep is bumped by then).
+const upcoming = () => (q && cur ? nextIndex(q, cur, rep + 1, true) : null);
+
+function mk() {
+  const x = new Audio();
+  x.preload = 'auto';
+  x.addEventListener('ended', () => { if (x === el) advance(); });
+  x.addEventListener('timeupdate', () => { if (x === el) checkEarly(); });
+  x.addEventListener('error', () => {
+    if (!q) return;
+    if (x !== el) { x.dataset.u = ''; return; } // preloaded one failed: reloaded when needed
+    if (!retried) { // retry once
+      retried = true;
+      try { x.load(); x.playbackRate = rate; const pr = x.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (e) { /* ignore */ }
+      return;
+    }
+    playing = false; emit('error');
+    q = null;
+  });
+  x.addEventListener('pause', () => { if (x === el) { unschedule(); if (q && !x.ended && playing && !advanced) { playing = false; emit('pause'); } } });
+  x.addEventListener('play', () => { if (x === el && q) { if (!playing) { playing = true; emit('play'); } schedule(); } });
+  for (const ev of ['playing', 'loadedmetadata', 'ratechange', 'durationchange']) x.addEventListener(ev, () => { if (x === el) armEarlyTimer(); });
+  return x;
+}
 
 function player() {
-  if (!el && typeof Audio !== 'undefined') {
-    el = new Audio();
-    el.preload = 'auto';
-    el.addEventListener('ended', onEnded);
-    el.addEventListener('error', () => {
-      if (!q) return;
-      playing = false; emit('error');
-      q = null;
-    });
-    el.addEventListener('pause', () => { if (q && !el.ended && playing) { playing = false; emit('pause'); } });
-    el.addEventListener('play', () => { if (q && !playing) { playing = true; emit('play'); } });
-  }
+  if (!el && typeof Audio !== 'undefined') { el = mk(); sb = mk(); }
   return el;
 }
 
 function preloadNext() {
-  if (!q || typeof Audio === 'undefined') return;
-  const n = nextOf(cur, true);
-  if (!n) { preloaded = null; return; }
+  if (!q || !sb || typeof Audio === 'undefined') return;
+  const n = upcoming();
+  if (!n) { sb.dataset.u = ''; return; }
   const u = audioUrl(n.s, n.a);
-  if (preloaded && preloaded.src === u) return;
-  try { preloaded = new Audio(u); preloaded.preload = 'auto'; preloaded.src = u; } catch (e) { preloaded = null; }
+  if (sb.dataset.u === u && !sb.error) return;
+  try {
+    sb.dataset.u = u; sb.preload = 'auto'; sb.src = u;
+    sb.playbackRate = rate; sb.defaultPlaybackRate = rate; sb.load();
+  } catch (e) { sb.dataset.u = ''; }
 }
 
-function nextOf(c, peek) {
-  if (!q) return null;
-  if (!peek && rep < q.repeatEach) return { s: c.s, a: c.a, again: true };
-  if (peek && rep < q.repeatEach) return { s: c.s, a: c.a };
-  if (c.a < q.to) return { s: c.s, a: c.a + 1 };
-  if (q.loopRange) return { s: q.s, a: q.from };
-  return null;
+function standbyReady() {
+  const n = upcoming();
+  return !!(n && sb && sb.dataset.u === audioUrl(n.s, n.a) && !sb.error && sb.readyState >= 3);
 }
+
+function checkEarly() {
+  if (!q || !cur || advanced || !playing || !el) return;
+  const d = el.duration;
+  if (isFinite(d) && d > 0 && d - el.currentTime <= EARLY * rate + 0.02 && standbyReady()) advance();
+}
+// Background tabs throttle rAF/timeupdate: a one-shot timer aimed at the early-advance point keeps playback gapless.
+function armEarlyTimer() {
+  clearEarlyTimer();
+  if (!q || !cur || advanced || !playing || !el || el.paused) return;
+  const ms = earlyDelayMs(el.duration, el.currentTime, el.playbackRate || rate);
+  if (ms == null) return;
+  earlyTimer = setTimeout(() => { earlyTimer = 0; checkEarly(); if (q && !advanced && playing) armEarlyTimer(); }, ms + 10);
+}
+function clearEarlyTimer() { if (earlyTimer) { clearTimeout(earlyTimer); earlyTimer = 0; } }
+function tick() {
+  tickId = 0;
+  if (!q || advanced || !playing) return;
+  checkEarly();
+  if (q && !advanced && playing) schedule();
+}
+function schedule() {
+  if (tickId || !playing) return;
+  tickId = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(tick) : setTimeout(tick, 40);
+}
+function unschedule() {
+  clearEarlyTimer();
+  if (!tickId) return;
+  if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(tickId); else clearTimeout(tickId);
+  tickId = 0;
+}
+
+function fail() { if (q) { playing = false; emit('error'); q = null; } }
 
 function load(a) {
-  const p = player(); if (!p || !q) return;
+  if (!player() || !q) return;
   cur = { s: q.s, a };
-  p.src = audioUrl(q.s, a);
+  advanced = false; retried = false;
+  unschedule();
+  const url = audioUrl(q.s, a);
+  let p = el;
+  if (sb.dataset.u === url && !sb.error && sb.readyState >= 1) { // gapless: swap in the buffered element
+    const old = el;
+    p = sb; sb = old; el = p;
+    try { old.pause(); } catch (e) { /* ignore */ }
+    try { p.currentTime = 0; } catch (e) { /* ignore */ }
+  } else {
+    p.src = url; p.dataset.u = url;
+  }
   p.playbackRate = rate; p.defaultPlaybackRate = rate;
   emit('ayah');
   const pr = p.play();
-  if (pr && pr.catch) pr.catch(() => { if (q) { playing = false; emit('error'); q = null; } });
+  if (pr && pr.catch) pr.catch(() => {
+    if (!q || p !== el) return;
+    if (retried) { fail(); return; }
+    retried = true;
+    try { p.load(); const r2 = p.play(); if (r2 && r2.catch) r2.catch(fail); } catch (e) { fail(); }
+  });
   preloadNext();
+  schedule();
+  armEarlyTimer();
 }
 
-function onEnded() {
-  if (!q || !cur) return;
+function advance() {
+  if (!q || !cur || advanced) return;
+  advanced = true;
   rep++;
   if (rep < q.repeatEach) { load(cur.a); return; }
-  const n = nextOf(cur, false);
-  if (!n) { const last = cur; stop(); void last; return; }
+  const n = nextIndex(q, cur, rep, false);
+  if (!n) { stop(); return; }
   rep = 0;
   load(n.a);
 }
@@ -114,8 +196,8 @@ export function resume() {
 export function stop() {
   const p = el;
   const was = !!q;
-  q = null; playing = false; rep = 0; preloaded = null;
-  if (p) { try { p.pause(); p.removeAttribute('src'); p.load(); } catch (e) { /* ignore */ } }
+  q = null; playing = false; rep = 0; advanced = false; unschedule();
+  for (const x of [p, sb]) if (x) { try { x.dataset.u = ''; x.pause(); x.removeAttribute('src'); x.load(); } catch (e) { /* ignore */ } }
   if (was) emit('stop');
   cur = null;
 }
@@ -136,7 +218,7 @@ export function prev() {
 
 export function setRate(r) {
   rate = Math.min(1.5, Math.max(0.75, Number(r) || 1));
-  if (el) { el.playbackRate = rate; el.defaultPlaybackRate = rate; }
+  for (const x of [el, sb]) if (x) { x.playbackRate = rate; x.defaultPlaybackRate = rate; }
   return rate;
 }
 export const getRate = () => rate;

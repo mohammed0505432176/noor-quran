@@ -206,4 +206,14 @@ ${plugins.map((c) => '        registerPlugin(' + c + '.class);').join('\n')}
   if (!n) log('resources unchanged');
 }
 
+// ---------- verify what local notifications reference by name (a missing resource fails silently on device) ----------
+{
+  const need = ['drawable/ic_stat_noor.xml', 'raw/adhan.mp3', 'raw/adhan_short.mp3'];
+  for (const f of need) {
+    const file = p('app/src/main/res', f);
+    if (!existsSync(file) || !readFileSync(file).length) fail('notification resource missing or empty: res/' + f);
+  }
+  log('notification resources verified (ic_stat_noor, adhan, adhan_short)');
+}
+
 log('done');

@@ -103,7 +103,13 @@ function subscribeGoal() {
 subscribeGoal();
 
 /** Reschedule 7 days of adhan notifications + daily wird reminder. Safe no-op on errors. */
-export async function refreshSchedule() {
+let refreshing = null;
+export function refreshSchedule() {
+  if (refreshing) return refreshing;
+  refreshing = doRefreshSchedule().finally(() => { refreshing = null; });
+  return refreshing;
+}
+async function doRefreshSchedule() {
   try {
     const p = S.settings.prayer;
     if (!p.notify) return { scheduled: 0 };
@@ -256,9 +262,12 @@ async function bindReceived() {
   } catch (e) { recvBound = false; }
 }
 
+let lastResched = 0;
 export function startAdhanWatcher() {
   if (typeof document === 'undefined') return;
   bindReceived();
+  // keep the 7-day window topped up: re-schedule on resume at most every 3 hours
+  if (Date.now() - lastResched > 3 * 3600 * 1000 && S.settings.prayer.notify) { lastResched = Date.now(); refreshSchedule(); }
   if (!watcher) watcher = setInterval(adhanCheck, 4000);
   adhanCheck();
 }

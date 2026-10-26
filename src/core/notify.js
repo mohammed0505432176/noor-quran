@@ -22,22 +22,57 @@ async function LN() {
 
 /** adhan sound choice ('full'|'short'|'silent') -> notification channel id */
 export function adhanChannel(choice) {
-  return choice === 'short' ? 'adhan_short' : choice === 'silent' ? 'adhan_silent' : 'adhan_full';
+  return choice === 'short' ? 'adhan_short_v2' : choice === 'silent' ? 'adhan_silent_v2' : 'adhan_full_v2';
+}
+
+// Android channels are immutable once created (sound/importance never change), and a channel created by an
+// older build without the sound stays silent forever. So the sound channels use NEW ids (_v2) and the legacy
+// ids are deleted. Sound = file name in res/raw (extension optional; the plugin strips it).
+// NOTE: the plugin builds channel AudioAttributes as USAGE_NOTIFICATION (not ALARM) and offers no option to change
+// it; the full file still plays to the end, but it follows the notification volume and Do Not Disturb.
+const LEGACY_CHANNELS = ['adhan', 'adhan_full', 'adhan_short', 'adhan_silent'];
+async function ensureChannels(ln) {
+  for (const id of LEGACY_CHANNELS) { try { await ln.deleteChannel({ id }); } catch (e) { /* ignore */ } }
+  await ln.createChannel({ id: 'adhan_full_v2', name: 'الأذان كاملًا', description: 'أذان كامل عند دخول وقت الصلاة', importance: 5, visibility: 1, vibration: true, sound: 'adhan' });
+  await ln.createChannel({ id: 'adhan_short_v2', name: 'تكبيرات قصيرة', description: 'تكبيرات قصيرة عند دخول وقت الصلاة', importance: 5, visibility: 1, vibration: true, sound: 'adhan_short' });
+  await ln.createChannel({ id: 'adhan_silent_v2', name: 'إشعار صامت', description: 'إشعار وقت الصلاة بدون صوت', importance: 2, visibility: 1, vibration: false });
+  await ln.createChannel({ id: 'reminders', name: 'التذكيرات', importance: 3, visibility: 1, vibration: true });
+}
+
+/** Exact-alarm state: 'granted' | 'denied' | 'unknown' (Android 12+ "Alarms & reminders"). */
+export async function exactAlarmState() {
+  if (!isNative()) return 'unknown';
+  try { const ln = await LN(); return (await ln.checkExactNotificationSetting()).exact_alarm || 'unknown'; } catch (e) { return 'unknown'; }
+}
+/** Opens the system "Alarms & reminders" screen for this app; resolves with the new state. */
+export async function openExactAlarmSettings() {
+  try { const ln = await LN(); return (await ln.changeExactNotificationSetting()).exact_alarm || 'unknown'; } catch (e) { return 'unknown'; }
+}
+
+/** Snapshot for the diagnostics card. */
+export async function diagnostics() {
+  if (!isNative()) return { native: false };
+  const d = { native: true, perm: 'unknown', exact: 'unknown', channels: [], pending: 0, next: null, error: '' };
+  try {
+    const ln = await LN();
+    try { d.perm = (await ln.checkPermissions()).display; } catch (e) { d.error += 'perm '; }
+    d.exact = await exactAlarmState();
+    try { d.channels = (await ln.listChannels()).channels.map(c => ({ id: c.id, importance: c.importance, sound: c.sound || '' })); } catch (e) { d.error += 'channels '; }
+    try {
+      const { notifications } = await ln.getPending();
+      d.pending = notifications.length;
+      const ats = notifications.map(n => (n.schedule && n.schedule.at ? new Date(n.schedule.at).getTime() : 0)).filter(t => t > Date.now()).sort((x, y) => x - y);
+      d.next = ats.length ? new Date(ats[0]) : null;
+    } catch (e) { d.error += 'pending '; }
+  } catch (e) { d.error = String((e && e.message) || e); }
+  return d;
 }
 
 export async function ensurePermission() {
   if (isNative()) {
     try {
       const ln = await LN();
-      // channel creation needs no permission; do it first
-      try {
-        await ln.createChannel({ id: 'adhan', name: 'الأذان', importance: 5, visibility: 1, vibration: true });
-        // channels are immutable once created: sound changes need NEW ids (sound = res/raw file name, no extension)
-        await ln.createChannel({ id: 'adhan_full', name: 'الأذان كاملًا', description: 'أذان كامل عند دخول وقت الصلاة', importance: 5, visibility: 1, vibration: true, sound: 'adhan' });
-        await ln.createChannel({ id: 'adhan_short', name: 'تكبيرات قصيرة', description: 'تكبيرات قصيرة عند دخول وقت الصلاة', importance: 5, visibility: 1, vibration: true, sound: 'adhan_short' });
-        await ln.createChannel({ id: 'adhan_silent', name: 'إشعار صامت', description: 'إشعار وقت الصلاة بدون صوت', importance: 2, visibility: 1, vibration: false });
-        await ln.createChannel({ id: 'reminders', name: 'التذكيرات', importance: 3, visibility: 1, vibration: true });
-      } catch (e) { /* channels are Android-only */ }
+      try { await ensureChannels(ln); } catch (e) { /* channels are Android-only */ }
       const r = await ln.requestPermissions();
       const ok = r.display === 'granted';
       return { granted: ok, web: false };
@@ -100,18 +135,19 @@ export async function cancelIds(ids) {
 }
 
 /** Test notification after delaySec seconds on the given channel (default: full adhan). */
-export async function testNotification(channel = 'adhan_full', delaySec = 10) {
+export async function testNotification(channel = 'adhan_full_v2', delaySec = 10) {
   const p = await ensurePermission();
   if (!p.granted) return { ...p, sent: false };
   const at = new Date(Date.now() + delaySec * 1000);
-  const item = { id: 3099, title: 'تجربة الأذان', body: 'حيّ على الصلاة · هكذا سيصلك التنبيه', at, channel };
+  const item = { id: 9090 /* outside every cancelRange (1000-3099) */, title: 'تجربة الأذان', body: 'حيّ على الصلاة · هكذا سيصلك التنبيه', at, channel };
   if (isNative()) {
+    const exact = await exactAlarmState();
     const ln = await LN();
     await ln.schedule({ notifications: [{ id: item.id, title: item.title, body: item.body, schedule: { at, allowWhileIdle: true }, channelId: channel, smallIcon: 'ic_stat_noor' }] });
-    return { ...p, sent: true };
+    return { ...p, sent: true, at, exact };
   }
   setTimeout(() => { webNotify(item.title, { body: item.body, icon: 'icon-192.png' }); }, delaySec * 1000);
-  return { ...p, sent: true };
+  return { ...p, sent: true, at, exact: 'unknown' };
 }
 
 /** Remove delivered prayer notifications in [min,max] (stops their sound) when the in-app adhan takes over. */
