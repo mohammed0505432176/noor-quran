@@ -11,12 +11,14 @@ const stubs = {
 register('data:text/javascript,' + encodeURIComponent(`const m = ${JSON.stringify(stubs)};
 export async function resolve(s, c, n) { return m[s] ? { url: m[s], shortCircuit: true } : n(s, c); }`));
 
-const N = { 1: 12, 2: 5, 3: 6, 7: 4, 255: 10 };                            // ayah 1: 12 words, ayah 2: 5 words, ayah 7: 4 words (free mode test)
+const N = { 1: 12, 2: 5, 3: 6, 4: 5, 7: 4, 255: 10 };                    // words per ayah number (the fake ignores the surah)
+const AYAHS = { 1: 7, 2: 286, 3: 200, 112: 4, 113: 5 };                   // ayah counts of the surahs used below
 const v = (ayah, word, state) => ({ surah: 2, ayah, word, state, vowelErrors: 0, distance: 0 });
 let steps = [], finalMsgs = [];
 const fake = {
   engine: { track(s, a, w) { fake.tracked.push([s, a, w]); fake.engine.tracker = {}; return []; }, tracker: {}, tracer: { verdicts: () => [] }, isHeld: () => false, framesDecoded: 0, lastCharFrame: 0 },
   practiceEngine: null, decoder: { framesDecoded: 0, pendingFrame: null }, cur: [],
+  corpus: { surahs: Array.from({ length: 114 }, (_, i) => ({ ayahCount: AYAHS[i + 1] || 10 })) },
   wordCount: (s, a) => N[a] || 0,
   verdicts() { return this.cur; },
   async feed() {
@@ -118,18 +120,21 @@ test('free mode: a brief wrong lock on another surah (3 verdicts, then relocatio
   assert.ok(!fin.words.some(x => x.st === 'skipped'), 'no raw skip without a correction flag');
 });
 
-// ---- free mode stickiness: once locked on a surah, a stray match elsewhere never repaints another surah ----
+// ---- free mode stickiness: once locked on a surah, a match elsewhere is never taken silently ----
 const fv = (s, a, w, state = 'ok') => ({ surah: s, ayah: a, word: w, state, vowelErrors: 0, distance: 0 });
 const fr = (s, a, from, to) => Array.from({ length: to - from }, (_, k) => fv(s, a, from + k));
 async function freeRun(script, fin = []) {
   steps = script.slice(); finalMsgs = fin;
-  const seen = new Map(), shown = [];
-  onMsg = m => { if (m.type === 'verdicts') { shown.push(m.words); for (const x of m.words) seen.set(`${x.s}:${x.a}:${x.w}`, x.st); } };
+  const seen = new Map(), shown = [], msgs = [];
+  onMsg = m => {
+    msgs.push(m);
+    if (m.type === 'verdicts') { shown.push(m.words); for (const x of m.words) seen.set(`${x.s}:${x.a}:${x.w}`, x.st); }
+  };
   send({ type: 'start', sid: ++sid, free: true });
   await new Promise(r => setTimeout(r, 20));
   for (let i = 0; i < script.length; i++) { send({ type: 'pcm', sid, samples: new Float32Array(7680) }); await new Promise(r => setTimeout(r, 20)); }
   const stopped = next('stopped'); send({ type: 'stop', sid });
-  return { seen, shown, final: (await stopped).words };
+  return { seen, shown, msgs, final: (await stopped).words };
 }
 const inSurah = (seen, s) => [...seen.keys()].filter(k => k.startsWith(s + ':'));
 
@@ -144,21 +149,53 @@ test('free mode lock: a brief 3-word match on 3:2, then back on 2:255, never sho
   assert.ok(final.every(x => x.s === 2), 'no surah 3 in the final words');
 });
 
-test('free mode lock: a sustained 2-ayah match on 3:2-3 moves the lock (buffered words released)', async () => {
-  const { seen } = await freeRun([
+test('free mode lock: two consecutive ayahs of a similar text elsewhere do not move the lock; the user is offered a relocation', async () => {
+  const { seen, msgs } = await freeRun([
     { verdicts: fr(2, 255, 0, 10) },
-    { relocate: true, verdicts: fr(3, 2, 0, 2) },                              // pending: nothing shown yet
-    { verdicts: [...fr(3, 2, 0, 5), ...fr(3, 3, 0, 4)] }                       // two consecutive ayahs matched: commit
+    { relocate: true, verdicts: fr(3, 2, 0, 5) },
+    { verdicts: [...fr(3, 2, 0, 5), ...fr(3, 3, 0, 4)] }
   ]);
-  assert.ok(inSurah(seen, 3).length >= 9, 'moved to surah 3');
-  assert.equal(seen.get('3:2:0'), 'ok');
+  assert.equal(inSurah(seen, 3).length, 0, 'surah 3 is not taken over');
+  assert.ok(msgs.some(m => m.type === 'relocate_suggest' && m.surah === 3), 'relocation offered for surah 3');
 });
 
-test('free mode lock: >= 12 words read in the new surah also commit, 5 do not', async () => {
-  let r = await freeRun([{ verdicts: fr(2, 255, 0, 10) }, { relocate: true, verdicts: fr(3, 2, 0, 5) }]);
-  assert.equal(inSurah(r.seen, 3).length, 0);
-  r = await freeRun([{ verdicts: fr(2, 255, 0, 10) }, { relocate: true, verdicts: [...fr(3, 2, 0, 5), ...fr(1, 1, 0, 0)] }, { verdicts: fr(3, 7, 0, 4).concat(fr(3, 2, 0, 5), fr(3, 9, 0, 4)) }]);
-  assert.ok(inSurah(r.seen, 3).length >= 12, 'sustained 13 words commit');
+test('free mode lock: 15 words read elsewhere (no natural move) never commit a surah change', async () => {
+  const { seen, msgs } = await freeRun([
+    { verdicts: fr(2, 255, 0, 10) },
+    { relocate: true, verdicts: [...fr(3, 2, 0, 5), ...fr(3, 3, 0, 6), ...fr(3, 7, 0, 4)] }
+  ]);
+  assert.equal(inSurah(seen, 3).length, 0);
+  assert.ok(msgs.some(m => m.type === 'relocate_suggest' && m.surah === 3));
+});
+
+test('free mode lock: the natural move (last ayah of 112 read, then the opening of 113) takes the lock; buffered words released', async () => {
+  const done = [...fr(112, 1, 0, 12), ...fr(112, 2, 0, 5), ...fr(112, 3, 0, 6), ...fr(112, 4, 0, 5)];
+  const { seen } = await freeRun([
+    { verdicts: fr(112, 1, 0, 12) },
+    { verdicts: done },
+    { verdicts: [...done, ...fr(113, 1, 0, 5)] }
+  ], [{ type: 'final_sequence', verses: [{ surah: 112, ayah: 4 }, { surah: 113, ayah: 1 }] }]);
+  assert.ok(inSurah(seen, 113).length >= 5, 'moved to 113');
+  assert.equal(seen.get('113:1:0'), 'ok');
+});
+
+test('free mode lock: one read word of the last ayah plus the start of the next surah does not move the lock', async () => {
+  const head = [...fr(112, 1, 0, 12), ...fr(112, 2, 0, 5), ...fr(112, 3, 0, 6)];
+  const { seen, msgs } = await freeRun([
+    { verdicts: fr(112, 1, 0, 12) },
+    { verdicts: [...head, ...fr(112, 4, 0, 1)] },
+    { verdicts: [...head, ...fr(112, 4, 0, 1), ...fr(113, 1, 0, 5)] }
+  ]);
+  assert.equal(inSurah(seen, 113).length, 0, 'no move on one stray word of 112:4');
+  assert.ok(msgs.some(m => m.type === 'relocate_suggest' && m.surah === 113), 'relocation offered for 113 instead');
+});
+
+test('free mode lock: a text repeated in two surahs with near-equal counts does not lock either surah', async () => {
+  const { msgs } = await freeRun([
+    { verdicts: [...fr(2, 255, 0, 10), ...fr(3, 2, 0, 5), ...fr(3, 3, 0, 6)] },   // surah 3: 11 words, surah 2: 10
+    { verdicts: [...fr(2, 255, 0, 10), ...fr(3, 2, 0, 5), ...fr(3, 3, 0, 6), ...fr(2, 256, 0, 3)] }
+  ]);
+  assert.ok(!msgs.some(m => m.type === 'relocate_suggest'), 'no lock, so nothing is held back');
 });
 
 test('free mode lock: before the lock (< 8 words) a wrong first surah is replaceable', async () => {

@@ -11,3 +11,5 @@ __pycache__/
 .router/
 public/ort/
 public/models/
+*.b64
+*.jks

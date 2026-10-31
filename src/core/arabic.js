@@ -18,6 +18,12 @@ export function norm(text) {
     .trim();
 }
 
+/**
+ * Search skeleton: norm() without the alif letters. The Uthmani text writes long vowels with marks that norm() drops,
+ * so «السَّمَٰوَٰتِ» reads «السموت» while the usual spelling is «السماوات»: both give the same skeleton.
+ */
+export const skel = text => norm(text).replace(/ا/g, '');
+
 /** Split Quran text into display words, dropping standalone waqf/pause marks. */
 export function words(text) {
   return String(text).split(/\s+/).filter(w => norm(w).length > 0);

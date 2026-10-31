@@ -1,19 +1,19 @@
 // Search the Quran text, or jump straight to an ayah ("2:255" / "البقرة 255").
 import { esc, $, icon, header, N } from '../ui.js';
-import { loadQuran, search, surahName, ayahCount, SURAH_COUNT } from '../core/quran.js';
-import { norm } from '../core/arabic.js';
+import { loadQuran, searchMode, surahName, ayahCount, SURAH_COUNT } from '../core/quran.js';
+import { norm, skel } from '../core/arabic.js';
 
 const toLatinDigits = s => String(s).replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 1632)).replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 1776));
 
 /** Wrap the first normalized match of q inside the original (diacritized) text with <mark>. */
 function highlight(text, q) {
-  const nq = norm(q);
+  const nq = skel(q);
   let flat = '';
   const map = [];
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    const n = /\s/.test(ch) ? ' ' : norm(ch);
-    for (const c of n) { flat += c; map.push(i); }
+    if (/\s/.test(ch)) { if (!flat.endsWith(' ')) { flat += ' '; map.push(i); } continue; }
+    for (const c of skel(ch)) { flat += c; map.push(i); }
   }
   const at = nq ? flat.indexOf(nq) : -1;
   if (at < 0) return esc(text);
@@ -73,9 +73,12 @@ export default {
         html += `<div class="list mb"><div class="list-item" data-go="mushaf/${ref.s}?a=${ref.a}"><div class="li-start"><span class="num-diamond">${N(ref.s)}</span></div>` +
           `<div class="li-main"><div>انتقل إلى سورة ${esc(surahName(ref.s))} · الآية ${N(ref.a)}</div></div><div class="li-end">${icon('back', 18)}</div></div></div>`;
       }
-      const out = nq.length >= 2 ? search(raw, 60) : [];
+      const found = nq.length >= 2 ? searchMode(raw, 60) : { results: [], mode: 'none' };
+      const out = found.results;
       if (out.length) {
-        html += `<div class="section-title">${N(out.length)}${out.length >= 60 ? '+' : ''} نتيجة</div><div class="list">` +
+        html += `<div class="section-title">${N(out.length)}${out.length >= 60 ? '+' : ''} نتيجة</div>` +
+          (found.mode === 'words' ? '<p class="muted small">لم ترد هذه العبارة بنصها في آية، وهذه آيات تحوي كل كلماتك:</p>' : '') +
+          `<div class="list">` +
           out.map(r => `<div class="list-item" data-go="mushaf/${r.s}?a=${r.a}"><div class="li-start"><span class="num-diamond">${N(r.a)}</span></div>` +
             `<div class="li-main"><div class="gold small">${esc(surahName(r.s))} · الآية ${N(r.a)}</div>` +
             `<div class="quran">${highlight(r.text, raw)}</div></div></div>`).join('') + `</div>`;

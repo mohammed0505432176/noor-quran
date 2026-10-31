@@ -2,6 +2,7 @@
 import { S, save, updateSettings, exportData, importData, resetAll } from '../core/store.js';
 import { esc, icon, toast, sheet, header, N } from '../ui.js';
 import { cloudStatus } from '../core/cloud.js';
+import { sync, onSyncState, startGoogle, pushNow, fetchAccount, hasGoogle } from '../core/sync.js';
 
 const FALLBACK_RECITERS = [{ id: 'Alafasy_128kbps', name: 'مشاري العفاسي' }];
 const PREVIEW = 'بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ';
@@ -51,6 +52,9 @@ const ADD_PROVIDER_HTML = `<h3>إضافة مزود جديد</h3>
   </ol>
   <button class="btn ghost block mt" id="ai-add-ok">حسناً</button>`;
 
+const syText = () => ({ idle: 'لم تُحفظ بعد', syncing: 'جارٍ الحفظ…', ok: 'آخر حفظ: ' + new Date(sync.at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), offline: 'لا يوجد اتصال، سيُحفظ التقدم عند عودة الإنترنت', error: 'تعذّر الحفظ، سنعيد المحاولة' })[sync.state] || '';
+onSyncState(() => { const e = document.getElementById('sy-state'); if (e) e.textContent = syText(); });
+
 export default {
   async render(el) {
     let reciters = FALLBACK_RECITERS;
@@ -67,6 +71,12 @@ export default {
       el.innerHTML = `${header('الإعدادات', { back: 'more' })}
         <div class="card"><div class="section-title">الحساب</div>
           <div class="field"><label for="s-name">الاسم</label><input class="input" id="s-name" maxlength="30" value="${esc(S.profile.name)}" placeholder="اسمك"></div></div>
+
+        <div class="card mt"><div class="section-title">المزامنة والحساب</div>
+          <p class="muted small" id="sy-acc">جارٍ التحقق من الحساب…</p>
+          <p class="muted small" id="sy-state"></p>
+          <div class="row"><button class="btn sm" id="sy-link">ربط حسابي بجوجل</button><button class="btn sm ghost" id="sy-restore">استعادة تقدمي من جوجل</button><button class="btn sm ghost" id="sy-now">احفظ الآن</button></div>
+          <p class="muted small mt">يُحفظ تقدمك وأذكارك وتلاوتك في حسابك. إن حذفت التطبيق ثم استعدته، سجّل بحساب جوجل المربوط واستعد تقدمك، وتبدأ من موضعك الأخير في التسميع.</p></div>
 
         <div class="card mt"><div class="section-title">القراءة</div>
           <div class="field"><label>الهدف اليومي (آيات)</label>
@@ -110,7 +120,12 @@ export default {
       const q = id => el.querySelector(id);
       q('#s-name').oninput = e => { S.profile.name = e.target.value.trim(); save(); };
       const setGoal = v => { const g = Math.max(1, Math.min(200, v)); updateSettings({ goal: g }); q('#g-val').textContent = N(g); };
-      q('#g-minus').onclick = () => setGoal(S.settings.goal - 1);
+      q('#sy-state').textContent = syText();
+    fetchAccount().then(u => { const e = q('#sy-acc'); if (e) e.textContent = hasGoogle(u) ? 'مرتبط بجوجل' + (u.email ? ': ' + u.email : '') : 'غير مرتبط بجوجل بعد — اربطه لتستعيد تقدمك لاحقاً'; }).catch(() => { const e = q('#sy-acc'); if (e) e.textContent = 'تعذّر التحقق من الحساب الآن'; });
+    q('#sy-link').onclick = () => startGoogle('link').catch(e => toast(e && (e.status === 400 || e.status === 422) ? 'هذا الحساب مرتبط بتقدّم آخر — استخدم «استعادة تقدمي من جوجل»' : 'تعذّر بدء الربط، تحقق من الإنترنت'));
+    q('#sy-restore').onclick = () => startGoogle('restore').catch(() => toast('تعذّر فتح تسجيل جوجل'));
+    q('#sy-now').onclick = () => { toast('جارٍ الحفظ…'); pushNow().then(() => toast(sync.state === 'ok' ? 'تم الحفظ ✓' : 'لم يُحفظ الآن، سنعيد المحاولة')); };
+    q('#g-minus').onclick = () => setGoal(S.settings.goal - 1);
       q('#g-plus').onclick = () => setGoal(S.settings.goal + 1);
       q('#s-font').oninput = e => {
         const v = +e.target.value; q('#f-val').textContent = N(v); q('#f-prev').style.fontSize = v + 'px';

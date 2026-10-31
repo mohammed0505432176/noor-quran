@@ -2,6 +2,7 @@
 import { S, today, dayStat, streak, level, totalRead, dueReviews } from '../core/store.js';
 import { loadQuran, surahName, ayah, ayahCount, SURAH_COUNT } from '../core/quran.js';
 import { pageOf } from '../core/pages.js';
+import { ayahOfDay } from '../core/ayah-of-day.js';
 import { esc, icon, N } from '../ui.js';
 
 function greeting() {
@@ -35,21 +36,8 @@ function ring(done, goal) {
   </div>`;
 }
 
-/** Deterministic ayah of the day across all 6236 ayahs. */
-function ayahOfDay() {
-  const d = new Date();
-  const doy = Math.floor((d - new Date(d.getFullYear(), 0, 0)) / 864e5);
-  let h = (d.getFullYear() * 366 + doy) >>> 0;
-  h = (Math.imul(h ^ (h >>> 15), 2246822519) >>> 0);
-  h = (Math.imul(h ^ (h >>> 13), 3266489917) >>> 0);
-  let idx = (h ^ (h >>> 16)) % 6236;
-  for (let s = 1; s <= SURAH_COUNT; s++) {
-    const n = ayahCount(s);
-    if (idx < n) return { s, a: idx + 1 };
-    idx -= n;
-  }
-  return { s: 1, a: 1 };
-}
+/** The ayah of today (core/ayah-of-day.js). */
+const ayahOfToday = () => ayahOfDay(new Date(), ayahCount, SURAH_COUNT);
 
 function fmtCountdown(ms) {
   const t = Math.max(0, Math.floor(ms / 1000));
@@ -71,7 +59,7 @@ export default {
     try { await loadQuran(); } catch (e) { /* offline fallback below */ }
     if (!alive) return;
     let ad = null;
-    try { ad = ayahOfDay(); } catch (e) { ad = null; }
+    try { ad = ayahOfToday(); } catch (e) { ad = null; }
 
     let pg = '';
     try { if (last && last.s) pg = `صفحة ${N(pageOf(last.s, last.a))}`; } catch (e) { pg = ''; }

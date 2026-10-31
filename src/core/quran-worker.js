@@ -18,6 +18,8 @@
 //        { type:'counts', sid, counts:{ [a]: n } }               engine words per ayah (sent on start); free mode: keys 's:a',
 //                                                                 sent (to merge) whenever a new ayah shows up
 //        { type:'slow', sid }                                    backlog > 4 s of audio: oldest dropped down to 1 s (once per session)
+//        { type:'relocate_suggest', sid, surah }                 free mode: a match in another surah is held back (the lock stays);
+//                                                                 the UI offers the user a relocation (surah 0: no longer held back)
 import * as ort from 'onnxruntime-web/wasm';
 import { createZipformerSession } from '@tilawa/core';
 
@@ -28,11 +30,13 @@ const CHUNK = 7680;                      // 480 ms at 16 kHz: at most one model 
 const SETTLE = 12;                       // one model window (0.48 s, 25 frames/s) without a new phoneme: the reciter paused
 const QUIET = 8000;                      // ... and the model has been fed >= 0.5 s of low-energy audio since the voice stopped
 let lvl = 0, recv = 0, voiceEnd = 0;     // speech level (slow peak of block RMS); samples received; sample index where voice last was
-// Free-mode stickiness: once locked on a surah, a relocation to another surah only counts after sustained evidence
+// Free-mode stickiness: a locked surah is only left by the natural move (its last ayah read, then the next surah's start);
+// any other match elsewhere is held back and offered to the user as a relocation, never taken silently
 const LOCK_WORDS = 8;                    // words read in one surah before it becomes the lock
-const COMMIT_WORDS = 12;                 // ... a cross-surah move needs this many words read there,
-const COMMIT_SOFT = 6, COMMIT_SAMPLES = 128000;   // or this many over 8 s of audio,
-// ... or two consecutive ayahs (each at least half read)
+const LOCK_MARGIN = 2;                   // ... and no other surah has more than 1/LOCK_MARGIN of those words (a repeated text stays unlocked)
+const LAST_SHARE = 0.7;                  // natural move: this share of the locked surah's last ayah read (not one stray word) ...
+const NEXT_WORDS = 4;                    // ... then the next surah's first words read in a row, from its first word
+const SUGGEST_WORDS = 4;                 // a held-back match of this many words is offered as a relocation
 const MAX_BACKLOG = 64000, KEEP_BACKLOG = 16000;   // 4 s / 1 s of 16 kHz audio
 
 const post = m => self.postMessage(m);
@@ -58,7 +62,8 @@ let acc = new Map(), soft = new Map(), flagged = new Set();   // flagged: word k
 let tkOf = new Map(), tkIds = new WeakMap(), tkNext = 1;     // word key -> id of the tracker that judged it
 let countsSent = new Set();                                   // free mode: ayah keys whose word count was posted
 let stale = new Map();                                        // after a manual relock: word key -> tracker id; those verdicts do not count toward the new lock
-let lock = null, cand = null;                                 // free mode: { s } locked surah; cand: { s, words:Map, t0 } unconfirmed move elsewhere
+let lock = null, cand = null;                                 // free mode: { s } locked surah; cand: { s, words:Map } held-back match elsewhere
+let suggest = null, lastSuggest = null;                       // free mode: surah of the held-back match offered to the user
 const K = (s, a, w) => (s * 1000 + a) * 1000 + w;
 const inPassage = v => passage.free || (v.surah === passage.s && v.ayah >= passage.from && v.ayah <= passage.to);
 const judged = x => x && x.st !== 'pending';
@@ -68,21 +73,21 @@ const word = v => ({ s: v.surah, a: v.ayah, w: v.word, st: v.state, vowel: v.vow
 const ayahN = s => { try { return (session.corpus && session.corpus.surahs[s - 1].ayahCount) || 0; } catch (e) { return 0; } };
 
 const readIn = (m, s, a) => { let n = 0; for (const [k, x] of m) if (read(x) && Math.floor(k / 1000) === s * 1000 + a) n++; return n; };
-/** Has the unconfirmed location `c` earned the right to replace the lock? (the engine already left the old place) */
-function candidateWins(c) {
-  let n = 0;
-  const ay = new Set();
-  for (const [k, x] of c.words) if (read(x)) { n++; ay.add(Math.floor(k / 1000) % 1000); }
-  if (n >= COMMIT_WORDS || (n >= COMMIT_SOFT && recv - c.t0 >= COMMIT_SAMPLES)) return true;
-  const ok = a => readIn(c.words, c.s, a) >= Math.max(1, Math.ceil(session.wordCount(c.s, a) / 2));
-  for (const a of ay) if (ok(a) && ok(a + 1)) return true;
-  // the natural continuation: the locked surah's last ayah was reached and the reciter starts the next surah
-  if (lock && c.s === lock.s + 1 && n > 0 && Math.min(...ay) <= 2) {
-    const na = ayahN(lock.s);
-    if (na) for (const k of acc.keys()) if (Math.floor(k / 1000) === lock.s * 1000 + na && judged(acc.get(k))) return true;
-  }
-  return false;
+const readTotal = m => { let n = 0; for (const x of m.values()) if (read(x)) n++; return n; };
+/** Natural move: the locked surah's last ayah was read (most of its words, so one stray word does not count) and the
+ *  candidate opens the next surah from its first word. Only this path may move the lock by itself. */
+function naturalNext(c) {
+  if (!lock || c.s !== lock.s + 1) return false;
+  const na = ayahN(lock.s);
+  if (!na || readIn(acc, lock.s, na) < Math.max(1, Math.ceil(session.wordCount(lock.s, na) * LAST_SHARE))) return false;
+  const n1 = session.wordCount(c.s, 1);
+  if (!n1) return false;
+  let run = 0;
+  while (run < n1 && read(c.words.get(K(c.s, 1, run)))) run++;
+  return run >= Math.min(NEXT_WORDS, n1);
 }
+/** Has the unconfirmed location `c` earned the right to replace the lock? Stray words in another surah never do. */
+const candidateWins = c => naturalNext(c);
 /** A stray match elsewhere started: steer the engine back to the word after the last one read in the locked surah, so
  *  the words that follow the stray ones are tracked there (the candidate stays buffered; it can still win later). */
 function snapBack() {
@@ -102,9 +107,10 @@ function updateLock() {
   if (lock) return;
   const by = new Map();
   for (const [k, x] of acc) if (read(x) && !(stale.has(k) && stale.get(k) === tkOf.get(k))) by.set(x.s, (by.get(x.s) || 0) + 1);
-  let best = 0, bs = 0;
-  for (const [s, n] of by) if (n >= LOCK_WORDS && n > best) { best = n; bs = s; }
-  if (bs) lock = { s: bs };
+  let best = 0, bs = 0, second = 0;
+  for (const [s, n] of by) { if (n > best) { second = best; best = n; bs = s; } else if (n > second) second = n; }
+  // the start is trusted only when one surah clearly leads: a text repeated in several places stays unlocked
+  if (best >= LOCK_WORDS && second * LOCK_MARGIN <= best) lock = { s: bs };
 }
 
 /** Raw accumulator: what the live tracers judged (the input of settleFinal). */
@@ -113,18 +119,19 @@ function rawWords() {
   const eng = session.practiceEngine || session.engine, t = eng && eng.tracker;
   if (t && !tkIds.has(t)) tkIds.set(t, tkNext++);
   const tk = t ? tkIds.get(t) : 0;
-  let home = false, snap = false;                                 // free mode: the live tracker is inside the locked surah
-  for (const v of session.verdicts()) {
-    if (!inPassage(v)) continue;
-    if (passage.free && lock) {
-      if (v.surah !== lock.s) {                       // another surah: unconfirmed, kept apart until it earns the lock
-        if (!cand || cand.s !== v.surah) { cand = { s: v.surah, words: new Map(), t0: recv }; snap = true; }
-        const kk = K(v.surah, v.ayah, v.word), pv = cand.words.get(kk);
-        if (!(v.state === 'pending' && pv && pv.st !== 'pending')) cand.words.set(kk, word(v));
-        if (v.state !== 'pending') tkOf.set(kk, tk);
-        continue;
-      }
-      home = true;
+  // free mode: the live tracker is in the locked surah when its NEWEST verdict is there. A tracker that runs on across a
+  // surah boundary still reports the locked surah's older words, so the whole list says nothing about where it is now.
+  const vs = session.verdicts().filter(inPassage);
+  const newest = vs[vs.length - 1];
+  const home = !!(passage.free && lock && newest && newest.surah === lock.s);
+  let snap = false;
+  for (const v of vs) {
+    if (passage.free && lock && v.surah !== lock.s) {   // another surah: unconfirmed, kept apart until it earns the lock
+      if (!cand || cand.s !== v.surah) { cand = { s: v.surah, words: new Map() }; snap = true; }
+      const kk = K(v.surah, v.ayah, v.word), pv = cand.words.get(kk);
+      if (!(v.state === 'pending' && pv && pv.st !== 'pending')) cand.words.set(kk, word(v));
+      if (v.state !== 'pending') tkOf.set(kk, tk);
+      continue;
     }
     const k = K(v.surah, v.ayah, v.word), prev = acc.get(k);
     // a new tracker reports words it never heard as pending: never let that erase an earlier verdict
@@ -134,12 +141,13 @@ function rawWords() {
   }
   if (passage.free) {
     if (snap && !(cand && candidateWins(cand))) snapBack();
+    suggest = null;
     if (home) cand = null;                           // the engine is back in the locked surah: the stray match is dropped
-    else if (cand && lock && candidateWins(cand)) {  // sustained evidence: move the lock, release the buffered words
+    else if (cand && lock && candidateWins(cand)) {  // natural move to the next surah: take the lock, release the buffered words
       lock = { s: cand.s };
       for (const [kk, x] of cand.words) acc.set(kk, x);
       cand = null;
-    }
+    } else if (cand && lock && readTotal(cand.words) >= SUGGEST_WORDS) suggest = cand.s;   // held back: offered to the user
     updateLock();
   }
   // the live tracer keeps a word pending until ~6 phonemes of right context follow it, so an ayah's last word waits
@@ -280,6 +288,7 @@ function handle(msgs, sid) {
     }
     if (fresh) postS(sid, { type: 'counts', counts: fresh });
   }
+  if (suggest !== lastSuggest) { lastSuggest = suggest; postS(sid, { type: 'relocate_suggest', surah: suggest || 0 }); }
   const sig = words.map(x => x.st[0] + x.vowel).join('');
   if (sig !== lastSig) { lastSig = sig; postS(sid, { type: 'verdicts', words }); }
 }
@@ -337,7 +346,7 @@ self.onmessage = ev => {
         if (!session) throw new Error('not ready');
         passage = m.free ? { free: true } : { s: m.s | 0, from: m.from | 0, to: m.to | 0 };
         hintOn = false;
-        lock = cand = null; stale = new Map();
+        lock = cand = null; suggest = lastSuggest = null; stale = new Map();
         lastSig = ''; acc = new Map(); soft = new Map(); flagged = new Set(); tkOf = new Map(); countsSent = new Set();
         // a range stays inside its surah; free recitation must relocate across surahs (the session reads this
         // option whenever it rebuilds its engine: on reset and after a correction)
@@ -361,7 +370,7 @@ self.onmessage = ev => {
       } else if (m.type === 'relock') {
         // manual escape: forget the lock and the unconfirmed move, run discovery again from scratch (no hint)
         if (m.sid !== curSid || !session || !passage || !passage.free) return;
-        lock = cand = null; hintOn = false; lastSig = '';
+        lock = cand = null; suggest = lastSuggest = null; hintOn = false; lastSig = '';
         stale = new Map(tkOf);
         session.reset();
         handle(session.setMode('correction'), m.sid);

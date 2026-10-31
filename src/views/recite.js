@@ -16,6 +16,8 @@ import { engineSupported, engineCached, downloadEngine, openEngine, mapVerdicts,
 import * as madani from '../core/madani.js';
 import { renderPageLines, pageGlyphs, fitLines, BASMALA } from '../core/madani-render.js';
 import { pageOf, pageContent, side, juzOfPage, pageFirst, quarterOf, PAGE_COUNT } from '../core/pages.js';
+import { scoreSession } from '../core/recite-score.js';
+import { pageEndReached, pageAction } from '../core/page-turn.js';
 import '../styles/reader.css';
 import '../styles/recite.css';
 
@@ -100,6 +102,9 @@ function loadFs() {
   return Math.max(FS_MIN, Math.min(FS_MAX, v));
 }
 function saveFs(v) { try { localStorage.setItem(FS_KEY, String(v)); } catch (e) { /* ignore */ } }
+const AUTO_PAGE_KEY = 'noor.recite.autoPage';
+function loadAutoPage() { try { return localStorage.getItem(AUTO_PAGE_KEY) !== '0'; } catch (e) { return true; } }
+function saveAutoPage(v) { try { localStorage.setItem(AUTO_PAGE_KEY, v ? '1' : '0'); } catch (e) { /* ignore */ } }
 const pad3 = n => String(n).padStart(3, '0');
 /** quran.com word-by-word audio (word index is 1-based within the ayah). */
 const wordAudioUrl = (s, a, w) => `https://audio.qurancdn.com/wbw/${pad3(s)}_${pad3(a)}_${pad3(w)}.mp3`;
@@ -361,6 +366,7 @@ export default {
           </div>
           ${engineSupported() ? '' : '<div class="mt" id="rc-eng"></div>'}
           <div class="mt" id="rc-cloud">${chipHtml()}</div>
+          <p class="muted small mt" id="rc-privacy">القرآني ✨ يعمل على جهازك بلا إنترنت ولا يرسل صوتك. الفوري يستخدم خدمة التعرف على الصوت في جهازك أو متصفحك (وقد تحتاج إنترنتاً حسب الجهاز). <b>الدقيق (Whisper) يُرسل التسجيل الصوتي إلى خادم نور للمعالجة</b> ويحتاج إنترنتاً، فاختره وأنت تعلم ذلك.</p>
           <p class="muted small mt">عرض النص</p>
           <div class="row" id="rc-disp">
             ${dispChip('hidden', 'مخفي')}
@@ -671,7 +677,11 @@ export default {
             onState: st => { if (st === 'stopped' && !stopMic) { base = lastFull; setListening(false); } },
             onError: err => {
               stopListeningNow();
-              toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : err === 'unsupported' ? 'التعرف على الصوت غير متاح هنا' : 'تعذر تشغيل الميكروفون، حاول مجدداً');
+              toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً'
+                : err === 'unsupported' ? 'التعرف على الصوت غير متاح على هذا الجهاز أو المتصفح'
+                : err === 'network' ? 'انقطع الاتصال بخدمة التعرف على الصوت — تحقق من الإنترنت ثم اضغط المايك'
+                : err === 'microphone' ? 'تعذّر الوصول إلى الميكروفون — تأكد أنه غير مستخدم من تطبيق آخر'
+                : 'تعذر تشغيل الميكروفون، حاول مجدداً');
             }
           });
           if (!isLive() || !listening) { try { stop(); } catch (e) {} return; }
@@ -928,15 +938,12 @@ export default {
         if (pageEl) pageEl.classList.remove('rc-busy');
         // the on-device engine's states are final as they are (engine corrections must not be locked away)
         const pre = engine === 'quran' ? raw.slice() : voiceLike ? tracker.apply(raw, { final: true }).states : hst.slice();
-        // words after the last one reached (session ended early) are not mistakes: they are only left out
-        let reached = -1;
-        pre.forEach((x, i) => { if (x !== 'pending' || forced.has(i)) reached = i; });
-        let st = pre.map(x => (x === 'ok' || x === 'uns' ? 'ok' : 'bad'));
         try { matcher.finish(); } catch (e) { /* ignore */ }
         const vowelHard = i => engine === 'quran' && opts.strict === 'high' && pre[i] !== 'pending' && (qIssues.get(i) === 'vowel' || qVowel.has(i));
-        st = st.map((x, i) => (forced.has(i) || vowelHard(i) ? 'bad' : x));
-        const ok = st.filter(x => x === 'ok').length;
-        const acc = total ? Math.round(100 * ok / total) : 0;
+        // words after the last one reached (session ended early) were never recited: not scored, not mistakes, and not in
+        // the accuracy denominator. Words before it that were jumped over, cut short, substituted or revealed are mistakes.
+        const sc = scoreSession(pre, { forced, hard: vowelHard, groups });
+        const { st, reached, scoped, ok, acc } = sc;
         const missed = flat.filter((_, i) => st[i] === 'bad').map(x => x.w);
         // detailed verdict per word: skipped / substituted (with what was heard) / hinted, plus inserted words
         let analysis = { words: st.map((x, i) => ({ i, kind: x === 'ok' ? 'ok' : forced.has(i) ? 'peek' : 'skip', heard: '' })), extras: [] };
@@ -978,11 +985,7 @@ export default {
             if (similar.length >= 3) break;
           }
         } catch (e) { /* ignore */ }
-        const ayahStats = groups.map(g => {
-          let okN = 0;
-          for (let k = g.start; k < g.end; k++) if (st[k] === 'ok') okN++;
-          return { a: g.a, ok: okN, n: g.end - g.start, acc: g.end > g.start ? Math.round(100 * okN / (g.end - g.start)) : 100 };
-        });
+        const ayahStats = sc.ayahStats;
         const pts = addRecitation({ s, from, to, acc, miss: missed });
         const prev = lastAttempt(s, from, to, 1);
         // words peeked at are sent to review (their ayahs), and counted separately in the results
@@ -991,7 +994,7 @@ export default {
         const hifzN = noteHifz(ayahStats, s, acc / 100);
         const stamps = new Map(); stamp.forEach((n, i) => stamps.set(i, n / PCM_RATE));
         haptic('heavy');
-        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar, prev, hideMode: !voiceLike, okN: ok, totalN: total, stamps, peekN, hifzN });
+        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar, prev, hideMode: !voiceLike, okN: ok, totalN: scoped, stamps, peekN, hifzN });
       }
 
       if (noVoice) { $('#rc-tohide', el).onclick = () => { cfg.mode = 'hide'; startSession(); }; }
@@ -1060,7 +1063,10 @@ export default {
           <div class="rd-peek" id="rdPeek"><button class="rd-pk" id="pkAyah" aria-label="كشف بقية الآية">${ic('peekAyah', 20)}<span>بقية الآية</span></button><button class="rd-pk" id="pkWord" aria-label="كشف الكلمة التالية">${ic('peekWord', 20)}<span>كلمة</span></button></div>
           <div class="rd-bar"><div class="rd-tools">
             <button class="rd-pill" id="rc-mist">${ic('warn', 18)}<span>أخطاء</span><b class="rd-badge" id="rc-mistn" hidden></b></button>
-            <button class="rd-tool" id="rc-relock" aria-label="إعادة تحديد الموضع">${icon('repeat', 22)}</button>
+            <button class="rd-tool" id="rc-pgprev" aria-label="الصفحة السابقة" title="الصفحة السابقة">${icon('back', 22)}</button>
+            <button class="rd-tool" id="rc-pgnext" aria-label="الصفحة التالية" title="الصفحة التالية" style="transform:scaleX(-1)">${icon('back', 22)}</button>
+            <button class="rd-pill rc-auto" id="rc-auto" aria-pressed="${loadAutoPage()}" title="عند نهاية الصفحة تنتقل تلقائياً إلى التالية">انتقال تلقائي ${loadAutoPage() ? 'مفعّل' : 'متوقف'}</button>
+            <button class="rd-tool rc-relock" id="rc-relock" aria-label="إعادة تحديد الموضع" title="إن بدأت القراءة من موضع آخر في القرآن فاضغط هنا ليبحث التطبيق عن موضعك من جديد">${icon('repeat', 22)}<span>إعادة تحديد الموضع</span></button>
             <button class="rd-tool rd-eye${showText ? '' : ' on'}" id="rc-eye" aria-pressed="${!showText}" aria-label="إخفاء الآيات">${ic(showText ? 'eye' : 'eyeoff', 22)}</button>
           </div></div></div>
         <button class="rd-fab" id="rc-mic" aria-label="تشغيل الميكروفون"><span class="rd-fab-mic">${icon('mic', 30)}</span></button>
@@ -1091,6 +1097,25 @@ export default {
       let cur = null;                   // { s, a } where the reciter is now
       let page = null;                  // shown page: { p, mode:'madani'|'text', spans, base, prev, groups, ends, endSet, keys }
       let pageTok = 0, pageWant = 0, raf = 0, mdWarnedHere = false;
+      // page turn (core/page-turn.js): the next page follows at the end of the shown one, never early, never back and forth
+      let pendingPage = 0, manualPage = false, autoPage = loadAutoPage();
+      const lastWordIdx = () => { if (!page) return -1; for (let i = page.spans.length - 1; i >= 0; i--) if (!page.endSet.has(i)) return i; return -1; };
+      const pageEnded = () => !!page && pageEndReached({ lastJ: page.lastJ, lastWordIdx: lastWordIdx(), curI: page.curNow, samplesHeld: pcmN - (page.frontierAt || 0) });
+      const turnTo = p => { pendingPage = 0; if (p !== pageWant) showPage(p, p > pageWant ? 'next' : 'prev'); };
+      /** Waiting page turn: happens once the shown page's last word is reached (checked on every paint and on a timer:
+       *  silence produces no verdicts, and the hold rule needs the audio to keep coming). */
+      function checkTurn() {
+        if (pendingPage <= pageWant) { pendingPage = 0; return; }
+        if (pageAction({ shown: pageWant, target: pendingPage, ended: pageEnded(), manual: manualPage, auto: autoPage }) === 'turn') turnTo(pendingPage);
+      }
+      const turnTimer = setInterval(() => { if (isLive()) checkTurn(); else clearInterval(turnTimer); }, 300);
+      /** The reader turns the pages by hand: the reciter's place waits until the reader is back on it. */
+      function goPage(delta) {
+        const t = Math.max(1, Math.min(PAGE_COUNT, pageWant + delta));
+        if (t === pageWant) return;
+        manualPage = true; pendingPage = 0;
+        showPage(t, delta > 0 ? 'next' : 'prev');
+      }
       const counts = () => (qe ? qe.counts() : {});
 
       const hardIssues = () => [...issues].filter(([, k]) => hardKind(k));
@@ -1143,11 +1168,27 @@ export default {
         $('[data-x]', sh).onclick = () => sh.close();
         sh.addEventListener('click', e => { const b = e.target.closest('[data-mp]'); if (!b) return; const [ps, pa, pw] = b.dataset.mp.split(':').map(Number); playWordAt(ps, pa, pw); });
       };
-      // the engine sticks to the surah it locked on; this clears that lock and runs discovery again
+      // free mode: the engine keeps the surah it locked on and holds back a match elsewhere (the place stays). This button
+      // drops that lock and searches the whole Quran again: press it when you started reciting from a different place.
       const relockB = $('#rc-relock', el);
+      const relocHint = s => {
+        if (!s) { relockB.classList.remove('rc-attn'); if (recState === 'rec') setStatus(listenText()); return; }
+        relockB.classList.add('rc-attn');
+        setStatus(`يبدو أنك تقرأ من سورة ${surahName(s)} — إن كان ذلك صحيحاً فاضغط «إعادة تحديد الموضع»`);
+      };
       relockB.onclick = () => {
-        if (recState === 'rec' && qe && activeEngine === qe && !ending && !finished && qe.relock) { qe.relock(); toast('أعدت البحث عن موضعك — تابع القراءة'); }
-        else toast('ابدأ القراءة أولاً');
+        if (recState === 'rec' && qe && activeEngine === qe && !ending && !finished && qe.relock) {
+          qe.relock(); manualPage = false; pendingPage = 0; relockB.classList.remove('rc-attn'); toast('أعدت البحث عن موضعك — تابع القراءة');
+        } else toast('ابدأ القراءة أولاً');
+      };
+      $('#rc-pgprev', el).onclick = () => goPage(-1);
+      $('#rc-pgnext', el).onclick = () => goPage(1);
+      const autoB = $('#rc-auto', el);
+      autoB.onclick = () => {
+        autoPage = !autoPage; saveAutoPage(autoPage); pendingPage = 0;
+        autoB.setAttribute('aria-pressed', String(autoPage));
+        autoB.textContent = 'انتقال تلقائي ' + (autoPage ? 'مفعّل' : 'متوقف');
+        toast(autoPage ? 'الانتقال التلقائي للصفحة التالية مفعّل' : 'أوقفت الانتقال التلقائي — استخدم السهمين للتنقل بين الصفحات');
       };
       $('#rc-gear', el).onclick = openControls;
 
@@ -1231,7 +1272,8 @@ export default {
         // words shown by «تلميح» stay visible (blue outline) but are not counted as recited
         const pks = peekPages.get(page.p);
         if (pks) for (const i of pks) if (st[i] === 'f-pend') st[i] = 'f-pk';
-        page.lastJ = lastJ; page.st = st;
+        if (lastJ !== page.lastJ) page.frontierAt = pcmN;
+        page.lastJ = lastJ; page.curNow = curI; page.st = st;
         const sp = page.spans[curI >= 0 ? curI : lastJ];
         if (sp && curI !== page.curI) {
           page.curI = curI;
@@ -1243,6 +1285,7 @@ export default {
             }
           } catch (e) { /* ignore */ }
         }
+        checkTurn();
       }
       const schedulePaint = () => {
         if (document.hidden) { paintPage(); return; }
@@ -1286,10 +1329,15 @@ export default {
       function moveTo(s, a) {
         const first = !cur;
         cur = { s, a };
+        savePos(s, a);
         const p = pageOf(s, a);
         visited.add(p);
-        if (p !== pageWant) showPage(p, page && !first ? (p > page.p ? 'next' : 'prev') : '');
         if (first) setStatus(listenText());
+        if (!page || first) { pendingPage = 0; if (p !== pageWant) showPage(p, ''); return; }
+        if (manualPage && p === pageWant) manualPage = false;   // back on the reciter's page: following again
+        const act = pageAction({ shown: pageWant, target: p, ended: pageEnded(), manual: manualPage, auto: autoPage });
+        if (act === 'turn') turnTo(p);
+        else if (act === 'wait') pendingPage = p;
       }
       function applyWords(words) {
         if (!words.length && qWords.length) return;           // the engine dropped its tracker: keep the page
@@ -1398,7 +1446,8 @@ export default {
             onVerdicts: w => { if (isLive() && !finished) applyWords(w); },
             onIssue: i => { if (isLive() && !finished) onIssue(i); },
             onError: () => { if (isLive() && !finished && !ending) { toast('توقف المحرك القرآني — عرضنا ما سُمع'); finish(); } },
-            onSlow: () => { if (isLive() && !finished) toast('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); }
+            onSlow: () => { if (isLive() && !finished) toast('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); },
+            onRelocate: s => { if (isLive() && !finished) relocHint(s); },
           }, { hint: hintPos });
           activeEngine = qe;
           for (const b of early) qe.pcm(b);

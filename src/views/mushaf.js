@@ -6,6 +6,7 @@ import { PAGE_COUNT, pageOf, pageContent, pageFirst, side, quarterOf, quarterSta
 import * as audio from '../core/audio.js';
 import { loadTajweed, TAJWEED_LEGEND } from '../core/tajweed.js';
 import * as madani from '../core/madani.js';
+import { fitLines } from '../core/madani-render.js';
 import * as store from '../core/store.js';
 import { findSimilar } from '../core/mutashabih.js';
 import { norm } from '../core/arabic.js';
@@ -143,6 +144,7 @@ async function renderPages(el, page, focusS, focusA) {
   let shown = [];
   let rubs = new Set();
   let sel = null, playing = null;
+let manualNav = false;             // the reader turned the pages by hand since this playback started: audio does not pull the page
   let userStopped = false;
   let dead = false, tafsirAbort = null, openSheet = null, hiTimer = null, animTimer = null, tjSeq = 0;
   const tjCache = new Map();
@@ -191,35 +193,7 @@ async function renderPages(el, page, focusS, focusA) {
     }
     return h + '</div>';
   };
-  const fitPage = pg => {
-    const box = $('.mq-lines:not(.sk)', pg);
-    if (!box) return;
-    const W = box.clientWidth;
-    if (W < 40) return;
-    let fs = W / 15;
-    for (let i = 0; i < 3; i++) {
-      box.style.setProperty('--mq-fs', fs.toFixed(2) + 'px');
-      let mx = 1;
-      for (const ln of box.children) {
-        if (ln.querySelector('.mq-w')) {
-          let sum = 0; for (const c of ln.children) sum += c.getBoundingClientRect().width;
-          if (sum > mx) mx = sum;
-        }
-      }
-      if (mx <= 1) break;
-      const nf = fs * W / mx * 0.985;
-      if (Math.abs(nf - fs) < 0.2) { fs = Math.min(fs, nf); break; }
-      fs = nf;
-    }
-    box.style.setProperty('--mq-fs', Math.max(10, fs).toFixed(2) + 'px');
-    // short lines (end of a surah) are centred in print, not stretched edge to edge
-    for (const ln of box.children) {
-      if (!ln.querySelector('.mq-w')) continue;
-      ln.classList.remove('mq-center');
-      let sum = 0; for (const c of ln.children) sum += c.getBoundingClientRect().width;
-      if (sum < W * 0.72) ln.classList.add('mq-center');
-    }
-  };
+  const fitPage = pg => { const box = $('.mq-lines:not(.sk)', pg); if (box) fitLines(box); };   // shared fit (madani-render.js)
   const fitAll = () => { $$('.mp-page', el).forEach(fitPage); paintBand(); };
   const refreshPage = p => {
     const old = $(`.mp-page[data-p="${p}"]`, el);
@@ -405,7 +379,7 @@ async function renderPages(el, page, focusS, focusA) {
     sh.addEventListener('click', ev => {
       const b = ev.target.closest('[data-act]'); if (!b) return;
       sh.close();
-      if (b.dataset.act === 'play') audio.playRange(s, a, a);
+      if (b.dataset.act === 'play') { manualNav = false; audio.playRange(s, a, a); }
     });
   };
   const applyMarks = () => { if (sel) select(sel); if (playing) mark(playing); applyHeat(); applyReveal(); };
@@ -491,8 +465,8 @@ async function renderPages(el, page, focusS, focusA) {
     window.scrollTo(0, 0);
     if (tjOn) applyTj();
   };
-  const goNext = () => { const hi = shown[shown.length - 1]; if (hi < PAGE_COUNT) show(hi + 1, 'next'); };
-  const goPrev = () => { const lo = shown[0]; if (lo > 1) show(lo - 1, 'prev'); };
+  const goNext = () => { manualNav = true; const hi = shown[shown.length - 1]; if (hi < PAGE_COUNT) show(hi + 1, 'next'); };
+  const goPrev = () => { manualNav = true; const lo = shown[0]; if (lo > 1) show(lo - 1, 'prev'); };
 
   // ---- audio ui
   const rateIdx = () => Math.max(0, RATES.indexOf(audio.getRate()));
@@ -527,10 +501,9 @@ async function renderPages(el, page, focusS, focusA) {
     }
     bar.classList.add('show');
     if (ev.type === 'ayah' && ev.s >= 1) {
-      if (playing && onShown(playing.s, playing.a) && !onShown(ev.s, ev.a)) {
-        const np = pageOf(ev.s, ev.a);
-        show(np, np < shown[0] ? 'prev' : 'next');
-      }
+      // the audible ayah must be on screen: follow it to its page (also after a surah ended and nothing was marked),
+      // unless the reader turned the pages by hand during this playback
+      if (!manualNav && !onShown(ev.s, ev.a)) { const np = pageOf(ev.s, ev.a); show(np, np < shown[0] ? 'prev' : 'next'); }
       mark({ s: ev.s, a: ev.a });
     }
     setPlayIcon();
@@ -541,6 +514,7 @@ async function renderPages(el, page, focusS, focusA) {
     stopWord();
     if (audio.current()) { audio.isPlaying() ? audio.pause() : audio.resume(); return; }
     const st = sel && onShown(sel.s, sel.a) ? sel : pageFirst(shown[0]);
+    manualNav = false;
     audio.playRange(st.s, st.a, ayahCount(st.s));
   };
 
@@ -677,7 +651,7 @@ async function renderPages(el, page, focusS, focusA) {
       `<div class="rd-gorow"><input class="input" id="rdPg" type="number" inputmode="numeric" min="1" max="${PAGE_COUNT}" placeholder="رقم الصفحة ١ – ${N(PAGE_COUNT)}"><button class="btn" data-act="gopg">اذهب</button></div>` +
       `<div class="seg rd-seg"><button class="active" data-itab="s">السور</button><button data-itab="j">الأجزاء</button><button data-itab="b">العلامات</button></div>` +
       `<div class="rd-list rd-scroll" data-ipanel="s">${surahs}</div><div class="rd-list rd-scroll" data-ipanel="j" hidden>${juz}</div><div class="rd-list rd-scroll" data-ipanel="b" hidden>${bms}</div>`);
-    const goPg = () => { const n = Number($('#rdPg', sh).value); if (Number.isInteger(n) && n >= 1 && n <= PAGE_COUNT) { sh.close(); show(n, n >= cur ? 'next' : 'prev'); } else toast('أدخل رقمًا من ١ إلى ٦٠٤'); };
+    const goPg = () => { const n = Number($('#rdPg', sh).value); if (Number.isInteger(n) && n >= 1 && n <= PAGE_COUNT) { manualNav = true; sh.close(); show(n, n >= cur ? 'next' : 'prev'); } else toast('أدخل رقمًا من ١ إلى ٦٠٤'); };
     $('#rdPg', sh).addEventListener('keydown', e => { if (e.key === 'Enter') goPg(); });
     sh.addEventListener('click', e => {
       const t = e.target.closest('[data-itab]');
@@ -745,7 +719,7 @@ async function renderPages(el, page, focusS, focusA) {
   };
   const jumpTo = (s, a) => {
     const p = pageOf(s, a);
-    if (!shown.includes(p)) show(p, p >= cur ? 'next' : 'prev');
+    if (!shown.includes(p)) { manualNav = true; show(p, p >= cur ? 'next' : 'prev'); }
     select({ s, a });
     requestAnimationFrame(() => { const b = $('.rd-bandbox', el); if (b) b.scrollIntoView({ block: 'center', behavior: reduced() ? 'auto' : 'smooth' }); });
   };
@@ -818,7 +792,7 @@ async function renderPages(el, page, focusS, focusA) {
       const act = b.dataset.act;
       if (act === 'close' || act === 'recite' || act === 'ai') { sh.close(); return; }
       if (act === 'unveil') { const pv = b.classList.contains('rd-prev') ? b : $('.rd-prev', sh); if (pv) pv.classList.remove('rd-prev-hid'); const h = $('.rd-prev-hint', sh); if (h) h.remove(); return; }
-      if (act === 'play') { sh.close(); stopWord(); audio.playRange(s, a, ayahCount(s)); return; }
+      if (act === 'play') { sh.close(); stopWord(); manualNav = false; audio.playRange(s, a, ayahCount(s)); return; }
       if (act === 'read') {
         const r = markRead(s, a);
         addCls(s, a, 'read');
@@ -855,7 +829,7 @@ async function renderPages(el, page, focusS, focusA) {
       JUZ.map(([s, a], i) => `<button class="chip" data-gp="${pageOf(s, a)}">${N(i + 1)}</button>`).join('') + `</div>`;
     if (openSheet) openSheet.close();
     const sh = openSheet = sheet(html, { onClose: () => { if (openSheet === sh) openSheet = null; } });
-    const jump = p => { sh.close(); show(p, p >= cur ? 'next' : 'prev'); };
+    const jump = p => { manualNav = true; sh.close(); show(p, p >= cur ? 'next' : 'prev'); };
     const input = $('#gpIn', sh);
     const goInput = () => {
       const n = Number(input.value);
