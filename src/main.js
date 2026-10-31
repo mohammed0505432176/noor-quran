@@ -90,6 +90,22 @@ function applyTheme() {
   const t = S.settings.theme;
   if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
   document.documentElement.style.setProperty('--mushaf-size', S.settings.fontSize + 'px');
+  syncChrome(t);
+}
+
+// browser theme-color + native status bar follow the theme
+const CHROME = { dark: ['#06120d', true], oled: ['#000000', true], light: ['#faf6ec', false], paper: ['#f3ead3', false] };
+function syncChrome(t) {
+  try {
+    if (t === 'auto') t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    const [color, dark] = CHROME[t] || CHROME.dark;
+    const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', color);
+    import('./core/platform.js').then(async ({ isNative }) => {
+      if (!isNative()) return;
+      const { StatusBar, Style } = await import('@capacitor/status-bar');
+      await StatusBar.setStyle({ style: dark ? Style.Dark : Style.Light }); await StatusBar.setBackgroundColor({ color });
+    }).catch(() => {});
+  } catch (e) {}
 }
 
 function init() {
@@ -116,7 +132,7 @@ function init() {
   // Native extras: status bar + reschedule prayer alerts on launch
   import('./core/platform.js').then(async ({ isNative }) => {
     if (!isNative()) return;
-    try { const { StatusBar, Style } = await import('@capacitor/status-bar'); await StatusBar.setStyle({ style: Style.Dark }); await StatusBar.setBackgroundColor({ color: '#06120d' }); } catch (e) {}
+    try { syncChrome(S.settings.theme); } catch (e) {}
     try {
       const { App } = await import('@capacitor/app');
       App.addListener('resume', () => { openWidgetRoute(); import('./core/prayer.js').then(p => p.startAdhanWatcher()).catch(() => {}); });

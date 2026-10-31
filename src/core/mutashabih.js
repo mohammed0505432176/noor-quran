@@ -1,4 +1,10 @@
 // Similar-verse (mutashabihat) detection: finds other ayahs containing the words the user said by mistake.
+//
+// DATA SOURCE (what this module actually uses): there is NO curated/scholarly mutashabihat list here. The index is built at
+// runtime from the bundled Quran text (public/quran.json via quran.js surah(s).v), each ayah normalized with arabic.js norm().
+// A "similar verse" is therefore purely algorithmic: another ayah whose normalized text contains the same contiguous run of
+// >= 3 normalized words (first 10 words of the query ayah / heard words; max 3 results). Results are textual overlap, not an
+// authoritative list. Origin of quran.json itself (Tanzil, King Fahd complex, etc.) is not stated in the repo: source unverified.
 import { norm } from './arabic.js';
 import { SURAH_COUNT, isLoaded, surah } from './quran.js';
 

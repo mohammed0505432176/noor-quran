@@ -74,6 +74,17 @@ export default {
           <span class="hm-grow"><span class="muted small">ورد اليوم</span><b class="hm-big">ابدأ القراءة</b><span class="muted small">من سورة الفاتحة</span></span>
           <span class="hm-go">${icon('back', 20)}</span></button>`;
 
+    // latest 3 bookmarks (real data only: S.bookmarks); the row is omitted when there are none
+    let bmRow = '';
+    try {
+      const bms = (Array.isArray(S.bookmarks) ? S.bookmarks : []).filter(b => b && b.s >= 1 && b.s <= SURAH_COUNT && b.a >= 1)
+        .slice().sort((x, y) => (y.at || 0) - (x.at || 0)).slice(0, 3);
+      if (bms.length) {
+        bmRow = `<div class="hm-bms" role="group" aria-label="علاماتي"><span class="hm-bms-t muted small">${icon('bookmark', 16)} علاماتي</span>` +
+          bms.map(b => `<button class="hm-bm" data-go="mushaf/${b.s}?a=${b.a}" aria-label="${esc(surahName(b.s))} آية ${N(b.a)}">${esc(surahName(b.s))} · ${N(b.a)}</button>`).join('') + `</div>`;
+      }
+    } catch (e) { bmRow = ''; }
+
     const adCard = ad ? `<div class="card hm-ayah">
       <div class="hm-ayah-tag">آية اليوم</div>
       <p class="quran hm-ayah-text">${esc(ayah(ad.s, ad.a))}</p>
@@ -90,6 +101,7 @@ export default {
       <header class="hm-head"><div><div class="hm-date muted small">${esc(dateLine())}</div><h1 class="page-title">${esc(greeting())}</h1></div></header>
       <div class="card hero hm-prayer"><div id="prayer-box"></div></div>
       ${continueCard}
+      ${bmRow}
       <div class="card hm-goal"><div class="row" style="align-items:center;gap:16px;flex-wrap:nowrap">
           ${ring(done, goal)}
           <div style="flex:1;min-width:0">

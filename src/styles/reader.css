@@ -197,3 +197,16 @@ body.rd-mode #app { max-width: none; padding: 0; }
 /* ayah sheet preview stays veiled in hidden mode until tapped */
 .rd-prev.rd-prev-hid { filter: blur(9px); cursor: pointer; -webkit-user-select: none; user-select: none; }
 .rd-prev-hint { margin: -6px 0 10px; }
+
+/* ---- long press on an ayah (touch): no native selection / callout fighting the ayah sheet */
+@media (pointer: coarse) { .rd .mq-w, .rd .ayah { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+
+/* ---- similar-verse (mutashabihat) highlight + key + sheet rows */
+.rd-simbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rd-simbar[hidden] { display: none; }
+.rd-simkey { display: inline-flex; align-items: center; gap: 8px; font-size: .8rem; color: var(--muted); }
+.rd-simsw { width: 16px; height: 10px; border-radius: 3px; background: rgba(86, 160, 230, .35); box-shadow: inset 0 -2px 0 rgba(86, 160, 230, .95); }
+.rd .mq-w.sim-hl { background: rgba(86, 160, 230, .22); box-shadow: inset 0 -2px 0 rgba(86, 160, 230, .9); border-radius: 3px; }
+.rd-sim-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rd-sim-go { white-space: nowrap; }
+.rd-simw { background: rgba(86, 160, 230, .28); color: inherit; border-radius: 3px; padding: 0 1px; }
