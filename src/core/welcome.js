@@ -1,0 +1,25 @@
+// First launch: sign in with Google (progress kept for good) or continue as a guest (progress kept on this device).
+// The choice is remembered; Settings can change it later.
+import { sheet, toast } from '../ui.js';
+import { startGoogle } from './sync.js';
+
+const KEY = 'noor.account.chosen';
+export function accountChosen() { try { return localStorage.getItem(KEY) === '1'; } catch (e) { return true; } }
+function remember() { try { localStorage.setItem(KEY, '1'); } catch (e) { /* ignore */ } }
+
+export function showWelcome() {
+  if (accountChosen()) return;
+  const sh = sheet(`<div class="welcome" style="padding:8px 4px">
+      <h2 class="section-title" style="margin-top:0">أهلاً بك في نور</h2>
+      <p class="muted small">اختر طريقة الدخول. تقدمك وتلاوتك وأذكارك تُحفظ حسب اختيارك:</p>
+      <button class="btn block mt" id="w-google">سجّل الدخول بحساب Google</button>
+      <p class="muted small mt">يُحفظ تقدمك في حسابك دائماً، ويرجع إليك بعد حذف التطبيق وإعادة تثبيته.</p>
+      <button class="btn ghost block mt" id="w-guest">المتابعة كضيف</button>
+      <p class="muted small mt">الضيف يحفظ تقدمه على هذا الجهاز فقط، ويضيع إن حذفت التطبيق.</p>
+    </div>`);
+  sh.querySelector('#w-google').onclick = () => {
+    remember();
+    startGoogle().catch(() => toast('تعذّر فتح تسجيل جوجل، تحقق من الإنترنت'));
+  };
+  sh.querySelector('#w-guest').onclick = () => { remember(); sh.close(); };
+}

@@ -1,7 +1,7 @@
 // Progress sync helpers (src/core/sync-core.js): the snapshot that is saved and what is read back.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeSnapshot, readSnapshot, isEmptyProgress, parseAuthFragment, SNAPSHOT_VERSION } from '../src/core/sync-core.js';
+import { makeSnapshot, readSnapshot, isEmptyProgress, parseAuthFragment, progressScore, SNAPSHOT_VERSION } from '../src/core/sync-core.js';
 
 test('a snapshot keeps the whole state and the recitation position', () => {
   const snap = makeSnapshot({ pts: 40, read: { '1:1': 1 } }, '{"s":2,"a":255}');
@@ -38,4 +38,9 @@ test('the tokens of a Google round trip are read from the fragment', () => {
   const r = parseAuthFragment('#access_token=abc.def&refresh_token=r1&expires_in=3600&token_type=bearer');
   assert.deepEqual(r, { access_token: 'abc.def', refresh_token: 'r1', expires_in: 3600 });
   assert.equal(parseAuthFragment('#error=access_denied'), null, 'no token means null');
+});
+test('the progress score counts points and ayahs read; the higher account wins', () => {
+  assert.equal(progressScore(null), 0);
+  assert.equal(progressScore({ pts: 40, read: { '1:1': 1, '1:2': 1 } }), 42);
+  assert.ok(progressScore({ pts: 0, read: {} }) < progressScore({ pts: 5 }));
 });

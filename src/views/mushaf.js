@@ -479,7 +479,14 @@ let manualNav = false;             // the reader turned the pages by hand since 
       `<button class="icon-btn" data-pl="toggle" aria-label="إيقاف مؤقت">${icon(audio.isPlaying() ? 'pause' : 'play')}</button>` +
       `<button class="icon-btn" data-pl="next" aria-label="الآية التالية" style="transform:scaleX(-1)">${icon('back')}</button>` +
       `<button class="icon-btn" data-pl="stop" aria-label="إيقاف">${icon('stop')}</button>` +
+      `<select class="select" data-pl-rec aria-label="القارئ" style="max-width:150px;font-size:.8rem;padding:4px 6px">${audio.RECITERS.map(r => `<option value="${esc(r.id)}"${r.id === audio.reciterId() ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select>` +
       `<button class="chip" data-pl="rate">${N(audio.getRate())}×</button></div></div>`;
+    const recSel = bar.querySelector('[data-pl-rec]');
+    if (recSel) recSel.onchange = e => {
+      store.updateSettings({ reciter: e.target.value });
+      const c = audio.current();
+      if (c) audio.playAyah(c.s, c.a);       // the ayah on hand is heard with the new reciter
+    };
   };
   const unsub = audio.onAudio(ev => {
     if (dead) return;

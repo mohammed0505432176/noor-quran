@@ -38,3 +38,9 @@ export function parseAuthFragment(fragment) {
   if (!access_token) return null;
   return { access_token, refresh_token: p.get('refresh_token'), expires_in: Number(p.get('expires_in')) || 3600 };
 }
+/** How much progress a state holds (points and ayahs read): the higher one is kept when a guest signs in with Google. */
+export function progressScore(state) {
+  if (!state) return 0;
+  const read = state.read ? Object.keys(state.read).length : 0;
+  return (Number(state.pts) || 0) + read;
+}
