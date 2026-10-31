@@ -49,7 +49,9 @@ const emo = (code, cls = '') => `<img class="k-emo ${cls}" src="${BASE}kids/emoj
 const art = (name, fb, cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/img/${name}.webp" alt="" draggable="false" data-fb="${BASE}kids/emoji/${fb}.svg">`;
 // CSP forbids inline handlers: swap a missing 3D image for its emoji once, then hide it
 const onImgErr = e => { const i = e.target; if (!i || i.tagName !== 'IMG' || !(i.classList.contains('k-art') || i.classList.contains('k-emo'))) return; if (i.dataset.fb) { const f = i.dataset.fb; delete i.dataset.fb; i.src = f; } else i.style.visibility = 'hidden'; };
-const prayerArt = (name, fb, cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/prayer/${name}.webp" alt="" draggable="false" data-fb="${BASE}kids/emoji/${fb}.svg">`;
+// hand-drawn realistic-style SVGs (public/kids/real); the emoji fallback still applies if one is missing
+const realArt = (name, fb, cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/real/${name}.svg" alt="" draggable="false" data-fb="${BASE}kids/emoji/${fb}.svg">`;
+const prayerArt = (name, fb, cls = '') => realArt(name, fb, cls);
 const pill = () => `<span class="k-pill">${emo('2b50')}<b>${N(K.stars)}</b></span>`;
 const shuffle = a => { const r = [...a]; for (let i = r.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [r[i], r[j]] = [r[j], r[i]]; } return r; };
 const short = (t, n = 6) => { const w = String(t).split(/\s+/); return w.length > n ? w.slice(0, n).join(' ') + '…' : w.join(' '); };
@@ -98,11 +100,11 @@ const bars = '<span class="k-bars" aria-hidden="true"><i></i><i></i><i></i><i></
 // ---------- home ----------
 function home(el) {
   const tiles = [
-    ['prayer', 'صلاتي', prayerArt('takbir', '1f54c'), 'k-t5 k-wide'],
-    ['azkar', 'أذكاري', art('hands', '1f932'), 'k-t1'],
-    ['letters', 'حروفي', art('book', '1f4d6'), 'k-t2'],
-    ['quran', 'سوري القصيرة', art('mosque', '1f54c'), 'k-t3'],
-    ['quiz', 'لعبة الأسئلة', art('star', '2b50'), 'k-t4']
+    ['prayer', 'صلاتي', realArt('prayer-tile', '1f54c'), 'k-t5 k-wide'],
+    ['azkar', 'أذكاري', realArt('dua-hands', '1f932'), 'k-t1'],
+    ['letters', 'حروفي', realArt('letters-book', '1f4d6'), 'k-t2'],
+    ['quran', 'سوري القصيرة', realArt('surahs-mosque', '1f54c'), 'k-t3'],
+    ['quiz', 'لعبة الأسئلة', realArt('quiz-star', '2b50'), 'k-t4']
   ];
   el.innerHTML = `<div class="kids">${header('ركن الأطفال', { back: 'more', actions: pill() })}
     <section class="k-hero">
@@ -120,17 +122,33 @@ function home(el) {
 // ---------- azkar ----------
 function azkarIndex(el) {
   el.innerHTML = `<div class="kids">${header('أذكاري', { back: 'kids', actions: pill() })}
-    <div class="k-grid k-grid-sm">${KIDS_AZKAR.map((c, i) => `
+    ${[['hisn', 'من حصن المسلم'], ['quran', 'من القرآن الكريم']].map(([kind, label]) => `
+    <h3 class="k-h">${label}</h3>
+    <div class="k-grid k-grid-sm">${KIDS_AZKAR.map((c, i) => [c, i]).filter(([c]) => (c.kind || 'hisn') === kind).map(([c, i]) => `
       <button class="k-card" style="--k:${PASTEL[i % PASTEL.length]}" data-go="kids/azkar/${esc(c.id)}">
         ${catDone(c) ? `<span class="k-ribbon">✓</span>` : ''}
         <span class="k-card-art">${emo(c.emoji, 'k-emo-xl')}</span>
-        <b>${esc(c.title)}</b><small>${esc(c.when)}</small></button>`).join('')}</div>
+        <b>${esc(c.title)}</b><small>${esc(c.when)}</small></button>`).join('')}</div>`).join('')}
     <p class="k-credit">${esc(AZKAR_CREDIT)}</p></div>`;
 }
 
-function azkarDetail(el, ctx, id) {
+// a Quran item is a reference {s,from,to}: its text comes from the bundled Quran, its audio is read ayah by ayah
+const quranAyat = it => { const { s, from, to } = it.quran; return Array.from({ length: to - from + 1 }, (_, k) => from + k); };
+const itemText = it => it.quran ? quranAyat(it).map(a => ayah(it.quran.s, a) + ' \uFD3F' + N(a) + '\uFD3E').join(' ') : it.text;
+const itemUrls = it => it.quran ? quranAyat(it).map(a => ayahUrl(it.quran.s, a)) : [it.audio];
+const itemRef = it => {
+  if (!it.quran) return it.ref || '';
+  const { s, from, to } = it.quran;
+  return `${it.ref || 'القرآن الكريم'} · سورة ${surahName(s)} ${N(from)}${to > from ? ' إلى ' + N(to) : ''}`;
+};
+
+async function azkarDetail(el, ctx, id) {
   const cat = KIDS_AZKAR.find(c => c.id === id);
   if (!cat) { azkarIndex(el); return; }
+  if (cat.kind === 'quran') {
+    try { await loadQuran(); } catch (e) { toast('تأكد من الإنترنت'); azkarIndex(el); return; }
+    if (!el.isConnected) return;
+  }
   let i = 0, loops = false, token = 0;
   const au = ctx.au;
   const key = () => `az:${cat.id}:${i}:${todayKey()}`;
@@ -160,14 +178,19 @@ function azkarDetail(el, ctx, id) {
     let n = 0; const my = ++token;
     const run = () => {
       const c = el.querySelector('#k-count'); if (c && total > 1) c.textContent = `المرة ${N(n + 1)} من ${N(total)}`;
-      au.onended = () => {
-        if (my !== token) return;
-        n++;
-        if (n < total) { setUi(true); ctx.t(() => { if (my === token) run(); }, 2000); } else finish();
+      const urls = itemUrls(it); let u = 0;
+      const clip = () => {
+        au.onended = () => {
+          if (my !== token) return;
+          if (++u < urls.length) { clip(); return; }
+          n++;
+          if (n < total) { setUi(true); ctx.t(() => { if (my === token) run(); }, 2000); } else finish();
+        };
+        au.onerror = () => { if (my === token) fail(); };
+        au.src = urls[u];
+        const p = au.play(); if (p && p.catch) p.catch(() => { if (my === token) fail(); });
       };
-      au.onerror = () => { if (my === token) fail(); };
-      au.src = it.audio;
-      const p = au.play(); if (p && p.catch) p.catch(() => { if (my === token) fail(); });
+      clip();
     };
     setUi(true); run();
   }
@@ -178,8 +201,8 @@ function azkarDetail(el, ctx, id) {
     el.innerHTML = `<div class="kids">${header(cat.title, { back: 'kids/azkar', actions: pill() })}
       <div class="k-dua" style="--k:${PASTEL[KIDS_AZKAR.indexOf(cat) % PASTEL.length]}">
         <div class="k-dua-top">${emo(cat.emoji, 'k-emo-xl')}<span>${esc(cat.when)}</span></div>
-        <p class="k-text">${esc(it.text)}</p>
-        ${it.ref ? `<small class="k-ref">${esc(it.ref)}</small>` : ''}
+        <p class="k-text">${esc(itemText(it))}</p>
+        ${itemRef(it) ? `<small class="k-ref">${esc(itemRef(it))}</small>` : ''}
         <div class="k-player">
           <button id="k-play" class="k-play" aria-label="استمع"><span class="k-ico">▶</span>${bars}</button>
         </div>
@@ -192,7 +215,7 @@ function azkarDetail(el, ctx, id) {
         <div class="k-dots">${dots}</div>
         <button class="k-nbtn" id="k-next" ${i === cat.items.length - 1 ? 'disabled' : ''}>التالي</button>
       </div>
-      <p class="k-credit">${esc(AZKAR_CREDIT)}</p></div>`;
+      <p class="k-credit">${esc(cat.kind === 'quran' ? 'الصوت: الشيخ الحصري (المعلّم) من موقع everyayah.com' : AZKAR_CREDIT)}</p></div>`;
     el.querySelector('#k-play').onclick = () => { if (el.querySelector('#k-play').classList.contains('playing')) stop(); else play(); };
     el.querySelector('#k-loop').onchange = e => { loops = e.target.checked; };
     el.querySelector('#k-prev').onclick = () => { if (i > 0) { i--; draw(); } };
@@ -489,7 +512,7 @@ function quiz(el, ctx, kind) {
     if (kind === 'letters') {
       qs = shuffle(LETTERS).slice(0, ROUNDS).map(l => ({ l, opts: shuffle([l, ...shuffle(LETTERS.filter(x => x !== l)).slice(0, 3)]) }));
     } else {
-      const pool = KIDS_AZKAR.filter(c => c.items && c.items.length);
+      const pool = KIDS_AZKAR.filter(c => c.kind !== 'quran' && c.items && c.items.length);
       const txt = c => short(c.items[0].text);
       qs = shuffle(pool).slice(0, ROUNDS).map(c => {
         const seen = new Set([txt(c)]), d = [];

@@ -89,7 +89,7 @@ export default {
             <p class="quran center" id="f-prev" style="font-size:${esc(String(s.fontSize))}px;line-height:2">${PREVIEW}</p></div>
           <div class="field"><label for="s-rec">القارئ</label>
             <select class="select" id="s-rec">${reciters.map(r => `<option value="${esc(r.id)}"${r.id === s.reciter ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
-          <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح']], s.theme)}</div></div>
+          <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح'], ['paper', 'ورقي دافئ'], ['oled', 'أسود OLED']], s.theme)}</div></div>
 
         <div class="card mt"><div class="section-title">الذكاء الاصطناعي</div>
           <div id="ai-card" style="margin-bottom:.8rem"><p class="muted small">جارٍ فحص الخدمات…</p></div>

@@ -10,6 +10,7 @@ import { fitLines } from '../core/madani-render.js';
 import * as store from '../core/store.js';
 import { findSimilar } from '../core/mutashabih.js';
 import { norm } from '../core/arabic.js';
+import { sharedMask } from '../core/similar-words.js';
 
 const BASMALA = 'بِسۡمِ ٱللَّهِ ٱلرَّحۡمَٰنِ ٱلرَّحِيمِ';
 const ORD = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع', 'العاشر', 'الحادي عشر', 'الثاني عشر', 'الثالث عشر', 'الرابع عشر', 'الخامس عشر', 'السادس عشر', 'السابع عشر', 'الثامن عشر', 'التاسع عشر', 'العشرون', 'الحادي والعشرون', 'الثاني والعشرون', 'الثالث والعشرون', 'الرابع والعشرون', 'الخامس والعشرون', 'السادس والعشرون', 'السابع والعشرون', 'الثامن والعشرون', 'التاسع والعشرون', 'الثلاثون'];
@@ -18,6 +19,7 @@ const reduced = () => window.matchMedia && window.matchMedia('(prefers-reduced-m
 const TJ_KEY = 'noor.tajweed';
 const MD_KEY = 'noor.madani';
 const HEAT_KEY = 'noor.heat';
+const SIM_KEY = 'noor.rd.sim';
 const HID_KEY = 'noor.rd.hidden';
 const FRAME_KEY = 'noor.rd.frame';
 const INK_KEY = 'noor.rd.ink';
@@ -154,6 +156,8 @@ let manualNav = false;             // the reader turned the pages by hand since 
   try { mdOn = localStorage.getItem(MD_KEY) !== '0'; } catch (e) { /* ignore */ }
   let heatOn = false;
   try { heatOn = localStorage.getItem(HEAT_KEY) === '1'; } catch (e) { /* ignore */ }
+  let simOn = lsGet(SIM_KEY, '0') === '1';
+  let simSeq = 0;
   let hiddenOn = lsGet(HID_KEY, '0') === '1';
   let frameOn = lsGet(FRAME_KEY, '0') === '1';
   let ink = lsGet(INK_KEY, 'auto');
@@ -263,10 +267,11 @@ let manualNav = false;             // the reader turned the pages by hand since 
       `<button class="rd-bm${bm ? ' on' : ''}" id="rdBm" aria-pressed="${bm}" aria-label="إشارة مرجعية">${icon('bookmark', 22)}</button></div>`;
   };
   const dialBtn = (k, label, ico) => `<button class="rd-dial-it" data-dial="${k}" role="menuitem"><span class="rd-dial-bt">${icon(ico, 24)}</span><span class="rd-dial-lb">${label}</span></button>`;
-  el.innerHTML = `<div class="rd${hiddenOn ? ' rd-hidden' : ''}${frameOn ? ' rd-framed' : ''}${tjOn ? ' rd-tj' : ''} rd-ink-${ink}" id="rd">` +
+  el.innerHTML = `<div class="rd${hiddenOn ? ' rd-hidden' : ''}${frameOn ? ' rd-framed' : ''}${tjOn ? ' rd-tj' : ''} rd-ink-${ink}" id="rd" aria-description="اضغط مطولًا على آية لفتح قائمتها">` +
     `<div class="rd-top"><button class="rd-ic" id="rdMenu" aria-label="القائمة">${ic('menu')}</button>${'<div id="rdCardBox" class="rd-cardbox">' + cardHTML() + '</div>'}` +
     `<button class="rd-ic" data-go="search" aria-label="بحث">${icon('search')}</button><button class="rd-ic" id="rdSet" aria-label="إعدادات القارئ">${icon('gear')}</button>${progressHTML()}</div>` +
     `<div class="tj-bar rd-tjbar" id="tjBar"${tjOn ? '' : ' hidden'}><button class="chip" id="tjLegend">دليل الألوان</button><span class="small muted" id="tjState"></span></div>` +
+    `<div class="tj-bar rd-tjbar rd-simbar" id="simBar"${simOn ? '' : ' hidden'}><span class="rd-simkey"><i class="rd-simsw"></i> عبارة تتكرر في آية أخرى (المتشابهات)</span><button class="chip" id="simOff">إيقاف</button></div>` +
     `<div class="rd-stage">${bookHTML()}<button class="rd-edge rd-edge-r mp-prev" aria-label="الصفحة السابقة"${shown[0] <= 1 ? ' disabled' : ''}>${icon('back')}</button>` +
     `<button class="rd-edge rd-edge-l mp-next" aria-label="الصفحة التالية"${shown[shown.length - 1] >= PAGE_COUNT ? ' disabled' : ''}>${icon('back')}</button></div>` +
     `<div class="player-bar rd-player" id="playerBar"></div>` +
@@ -382,7 +387,40 @@ let manualNav = false;             // the reader turned the pages by hand since 
       if (b.dataset.act === 'play') { manualNav = false; audio.playRange(s, a, a); }
     });
   };
-  const applyMarks = () => { if (sel) select(sel); if (playing) mark(playing); applyHeat(); applyReveal(); };
+  // ---- repeated-phrase highlight (data: findSimilar only; Madani word view; off by default)
+  const applySim = () => {
+    const my = ++simSeq;
+    $$('.sim-hl', el).forEach(x => x.classList.remove('sim-hl'));
+    if (!simOn) return;
+    const todo = [], seen = new Set();
+    for (const sp of $$('.mq-w:not(.mq-end)', el)) {
+      const s = +sp.dataset.s, a = +sp.dataset.a, k = s + ':' + a;
+      if (!seen.has(k)) { seen.add(k); todo.push([s, a]); }
+    }
+    const step = () => {
+      if (dead || my !== simSeq || !simOn) return;
+      const t = todo.shift(); if (!t) return;
+      const [s, a] = t;
+      try {
+        const sims = similarOf(s, a);
+        if (sims.length) {
+          const mask = sharedMask(ayah(s, a).split(/\s+/).filter(Boolean).map(norm), sims.map(x => norm(ayah(x.s, x.a))));
+          for (const sp of $$(`.mq-w[data-s="${s}"][data-a="${a}"]`, el)) {
+            const w = +sp.dataset.w; if (w && mask[w - 1]) sp.classList.add('sim-hl');
+          }
+        }
+      } catch (e) { /* ignore */ }
+      setTimeout(step, 0);
+    };
+    setTimeout(step, 0);
+  };
+  const setSim = on => {
+    simOn = on;
+    lsSet(SIM_KEY, on ? '1' : '0');
+    const b = $('#simBar', el); if (b) b.hidden = !on;
+    applySim();
+  };
+  const applyMarks = () => { if (sel) select(sel); if (playing) mark(playing); applyHeat(); applyReveal(); applySim(); };
   const rerender = () => {
     $('.mp-book', el).outerHTML = bookHTML();
     applyMarks(); fitAll(); ensureMadani();
@@ -613,7 +651,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     const sh = rdSheet(shHead('القائمة') +
       `<div class="rd-list">${goLink('home', 'home', 'الرئيسية')}${goLink('mushaf?tab=s', 'list', 'فهرس السور')}${goLink('mushaf?tab=j', 'list', 'الأجزاء')}${goLink('mushaf?tab=p', 'list', 'الصفحات')}${goLink('mushaf?tab=b', 'bookmark', 'العلامات المرجعية')}` +
       row('goto', 'search', 'اذهب إلى صفحة') + row('markpage', 'check', 'تعليم الصفحة كمقروءة') + `</div>` +
-      `<div class="rd-sh-sub">العرض</div><div class="rd-list">${swRow('tg-heat', 'chart', 'خريطة أخطائي', heatOn)}${swRow('tg-tj', 'spark', 'ألوان التجويد', tjOn)}${swRow('tg-md', 'book', 'خط مصحف المدينة', mdOn)}</div>` +
+      `<div class="rd-sh-sub">العرض</div><div class="rd-list">${swRow('tg-heat', 'chart', 'خريطة أخطائي', heatOn)}${swRow('tg-sim', 'similar', 'تلوين العبارات المتشابهة', simOn)}${swRow('tg-tj', 'spark', 'ألوان التجويد', tjOn)}${swRow('tg-md', 'book', 'خط مصحف المدينة', mdOn)}</div>` +
       `<div class="rd-sh-sub">لون الحبر</div><div class="rd-inks">${[['auto', 'تلقائي'], ['bright', 'ساطع'], ['warm', 'دافئ']].map(([k, l]) => `<button class="rd-ink${ink === k ? ' on' : ''}" data-ink="${k}">${l}</button>`).join('')}</div>`);
     sh.addEventListener('click', e => {
       const ik = e.target.closest('[data-ink]');
@@ -624,6 +662,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
       if (a === 'goto') { sh.close(); openGoto(); return; }
       if (a === 'markpage') { sh.close(); markPage(); return; }
       if (a === 'tg-heat') { setHeat(!heatOn); setSw(b, heatOn); return; }
+      if (a === 'tg-sim') { setSim(!simOn); setSw(b, simOn); return; }
       if (a === 'tg-tj') { setTj(!tjOn); setSw(b, tjOn); return; }
       if (a === 'tg-md') { setMd(!mdOn); setSw(b, mdOn); }
     });
@@ -815,9 +854,21 @@ let manualNav = false;             // the reader turned the pages by hand since 
         if (!sims) sims = similarOf(s, a);
         if (!sims.length) { toast('لا توجد آيات متشابهة'); return; }
         box.hidden = false; box.dir = 'rtl';
-        box.innerHTML = '<div class="small gold mb">آيات متشابهة</div>' + sims.map(x => `<button class="rd-sim" data-go="mushaf/${x.s}?a=${x.a}" data-act="close"><b>${esc(surahName(x.s))} · ${N(x.a)}</b><span class="quran">${esc(ayah(x.s, x.a))}</span></button>`).join('');
+        const mine = [norm(ayah(s, a))];
+        const marked = x => {
+          const raw = ayah(x.s, x.a).split(/\s+/).filter(Boolean);
+          const m = sharedMask(raw.map(norm), mine);
+          return raw.map((w, k) => m[k] ? `<mark class="rd-simw">${esc(w)}</mark>` : esc(w)).join(' ');
+        };
+        box.innerHTML = '<div class="small gold mb">آيات متشابهة</div>' +
+          sims.map(x => `<div class="rd-sim"><div class="rd-sim-h"><b>سورة ${esc(surahName(x.s))} · الآية ${N(x.a)}</b>` +
+            `<button class="chip rd-sim-go" data-go="mushaf/${x.s}?a=${x.a}" data-act="close" aria-label="اذهب إلى سورة ${esc(surahName(x.s))} الآية ${N(x.a)}">اذهب إليها</button></div>` +
+            `<span class="quran">${marked(x)}</span></div>`).join('') +
+          `<div class="rd-list" style="margin-top:8px">${swRow('tg-sim', 'similar', 'تلوين العبارات المتشابهة في المصحف', simOn)}</div>` +
+          '<p class="small muted" style="margin:6px 0 0">المتشابه هنا تطابق نصي آلي لثلاث كلمات متتالية فأكثر، وليس قائمة علماء.</p>';
         return;
       }
+      if (act === 'tg-sim') { setSim(!simOn); setSw(b, simOn); return; }
       const text = `${ayah(s, a)} ﴿${N(a)}﴾ [سورة ${name}]`;
       if (act === 'copy') { const ok = await copyText(text); toast(ok ? 'تم النسخ' : 'تعذّر النسخ'); sh.close(); return; }
       if (act === 'share') {
@@ -893,6 +944,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     if (e.target.closest('#pkWord')) { peekWord(); return; }
     if (e.target.closest('#pkAyah')) { peekAyah(); return; }
     if (e.target.closest('#tjLegend')) { openLegend(); return; }
+    if (e.target.closest('#simOff')) { setSim(false); toast('أُوقف تلوين المتشابهات'); return; }
     if (e.target.closest('.mp-next')) { goNext(); return; }
     if (e.target.closest('.mp-prev')) { goPrev(); return; }
     if (e.target.closest('#rdGoto')) { openGoto(); return; }
@@ -902,19 +954,30 @@ let manualNav = false;             // the reader turned the pages by hand since 
     if (sp && el.contains(sp)) { const s = +sp.dataset.s, a = +sp.dataset.a; select({ s, a }); openAyahSheet(s, a); return; }
     if (sel && e.target.closest('.mp-page')) select(null);
   };
-  // long press on a word reveals just that word (hidden mode)
+  // long press: hidden mode reveals just that word; normal reading opens the ayah sheet (same as a tap)
   const lpCancel = () => { clearTimeout(lpTimer); lpTimer = 0; };
   const onPd = e => {
     lpFired = false;
     lpCancel();
-    if (!hiddenOn || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     const sp = e.target.closest && e.target.closest('.ayah, .mq-w');
-    if (!sp || sp.classList.contains('mq-end')) return;
+    if (!sp || !el.contains(sp)) return;
+    const hid = hiddenOn;
+    if (hid && sp.classList.contains('mq-end')) return;
     lpX = e.clientX; lpY = e.clientY;
-    lpTimer = setTimeout(() => { lpTimer = 0; lpFired = true; revealOne(sp); }, 450);
+    lpTimer = setTimeout(() => {
+      lpTimer = 0;
+      if (dead || openSheet) return;
+      lpFired = true;
+      if (hid) { revealOne(sp); return; }
+      try { if (navigator.vibrate) navigator.vibrate(12); } catch (er) { /* ignore */ }
+      const s = +sp.dataset.s, a = +sp.dataset.a;
+      select({ s, a });
+      openAyahSheet(s, a);
+    }, 450);
   };
-  const onPm = e => { if (lpTimer && Math.hypot(e.clientX - lpX, e.clientY - lpY) > 10) lpCancel(); };
-  const onCtx = e => { if (hiddenOn && e.target.closest && e.target.closest('.ayah, .mq-w')) e.preventDefault(); };
+  const onPm = e => { if (lpTimer && Math.hypot(e.clientX - lpX, e.clientY - lpY) > 8) lpCancel(); };
+  const onCtx = e => { if ((hiddenOn || lpFired) && e.target.closest && e.target.closest('.ayah, .mq-w')) e.preventDefault(); };
   const onKey = e => {
     if (e.key === 'Escape' && dialOpen) { setDial(false); return; }
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented || openSheet) return;

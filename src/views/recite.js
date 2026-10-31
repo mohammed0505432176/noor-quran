@@ -6,8 +6,8 @@ import { wrongRuns, findSimilar } from '../core/mutashabih.js';
 import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/quran.js';
 import { words as splitWords } from '../core/arabic.js';
 import { createMatcher, createLockedTracker, stripOpeners } from '../core/matcher.js';
-import { speechSupport, startListening } from '../core/speech.js';
-import { haptic } from '../core/platform.js';
+import { speechSupport, startListening, micState, micPermission, requestMicAccess } from '../core/speech.js';
+import { haptic, isNative } from '../core/platform.js';
 import { startRecorder, recorderSupported } from '../core/recorder.js';
 import { cloudStatus, transcribe, tajweedReview } from '../core/cloud.js';
 import { playRange, playAyah, stop as stopReciter, isPlaying as reciterPlaying } from '../core/audio.js';
@@ -64,8 +64,47 @@ const XP = {
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   peekWord: '<path d="M15 6l-6 6 6 6"/>',
   peekAyah: '<path d="M13 6l-6 6 6 6M19 6l-6 6 6 6"/>',
-  warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.2h.01"/>'
+  warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.2h.01"/>',
+  micoff: '<path d="M3 3l18 18"/><path d="M9 9v2a3 3 0 0 0 5 2.2M15 9.3V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.5 5.3M19 11c0 1-.2 1.8-.6 2.6M12 18v3"/>',
+  wifioff: '<path d="M3 3l18 18"/><path d="M2 9a15 15 0 0 1 5-3M22 9a15 15 0 0 0-8.5-3.9M5.5 12.5a10 10 0 0 1 3-1.9M18.5 12.5a10 10 0 0 0-3.5-2.2M9 16a5 5 0 0 1 6 0M12 20h.01"/>',
+  hourglass: '<path d="M6 3h12M6 21h12M7 3c0 5 5 6 5 9s-5 4-5 9M17 3c0 5-5 6-5 9s5 4 5 9"/>'
 };
+
+// ---- persistent mic status line: icon + text for every state (never colour only) ----
+let micPerm = 'unknown';          // last known microphone permission: 'granted' | 'denied' | 'prompt' | 'unknown'
+/** host: the element to fill; get(): the current inputs of micState() (core/speech.js). Returns { update }. */
+function mountMicState(host, get) {
+  if (!host) return { update() {} };
+  const draw = () => {
+    if (!host.isConnected) return;
+    const st = micState(get());
+    host.className = host.className.replace(/\brc-ms-\w+/g, '').trim() + ' rc-ms-' + st.key;
+    host.innerHTML = `<span class="rc-ms-main">${ic(st.icon, 16)}<b>${st.label}</b></span>`
+      + (st.detail ? `<span class="rc-ms-detail">${esc(st.detail)}</span>` : '')
+      + (st.allow ? '<button class="btn sm rc-ms-allow" type="button" data-ms="allow">السماح</button>' : '');
+  };
+  host.onclick = async e => {
+    if (!e.target.closest('[data-ms="allow"]')) return;
+    const b = e.target.closest('button'); if (b) b.disabled = true;
+    micPerm = await requestMicAccess();
+    toast(micPerm === 'granted' ? 'تم السماح بالميكروفون' : 'ما زال الميكروفون محظوراً — فعّله من إعدادات التطبيق أو المتصفح');
+    draw();
+  };
+  const onNet = () => { if (!host.isConnected) { window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet); return; } draw(); };
+  window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
+  micPermission().then(p => { if (p === 'denied') micPerm = 'denied'; draw(); }).catch(() => {});
+  host.setAttribute('role', 'status'); host.setAttribute('aria-live', 'polite');
+  draw();
+  return { update: draw };
+}
+const HINT_NOTE = 'التلميح يُحتسب على نتيجة الجلسة — الحرف الأول لا يُعدّ خطأً، أما كشف الكلمة أو بقية الآية فيُحتسب خطأً';
+/** The first hint of a session: a short note next to the hint buttons (once per session). */
+function showHintNote(host) {
+  if (!host) return;
+  host.textContent = HINT_NOTE; host.hidden = false;
+  clearTimeout(host._t); host._t = setTimeout(() => { host.hidden = true; }, 9000);
+}
+
 const ic = (n, size = 22) => XP[n] ? `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${XP[n]}</svg>` : icon(n, size);
 const hizbNo = p => { const f = pageFirst(p); return Math.ceil(quarterOf(f.s, f.a) / 4); };
 const pageNames = p => [...new Set(pageContent(p).map(g => g.s))].map(surahName).join(' · ');
@@ -486,6 +525,7 @@ export default {
       let finished = false, ending = false, listening = false, support = 'native';
       let base = '', lastFull = '', sess = 0;               // base = transcript of earlier device-mic sessions
       const keepBasmala = s === 1 && from === 1;
+      const t0 = Date.now();                            // wall-clock start (hide mode has no recording to measure)
       // AI engine state
       let rec = null, starting = false, aiState = 'idle', chain = Promise.resolve(), inflight = 0, fails = 0;
       let aiText = '', recBlob = null, recSecs = 0, allDone = false;
@@ -529,7 +569,9 @@ export default {
         <div class="rc-spacer"></div>
         <div class="rc-dock" id="rc-dock">
           <div class="rc-dock-top"><span class="small muted" id="rc-status">${voiceLike ? 'جارٍ تشغيل الميكروفون…' : 'تذكّر الآية التالية'}</span><b class="score" id="rc-score">٠٪</b></div>
+          ${voiceLike ? '<div class="rc-mstate" id="rc-mstate"></div>' : ''}
           <div class="progress rc-prog"><i id="rc-prog" style="width:0%"></i></div>
+          <div class="rc-hintnote small" id="rc-hintnote" hidden></div>
           <div class="rc-dock-row">
             <button class="btn ghost sm" id="rc-hint">${icon('eye', 16)} تلميح</button>
             ${centerBtn}
@@ -560,7 +602,12 @@ export default {
 
       const baseStates = () => (voiceLike ? mres.states : hst);
       const effective = () => baseStates().map((st, i) => (forced.has(i) ? 'peek' : st));
-      const setStatus = t => { if (statusEl) statusEl.textContent = t; };
+      let ms = { update() {} }, netErr = false, quranReady = false, hintTaps = 0, hintNoted = false;
+      const setStatus = t => { if (statusEl) statusEl.textContent = t; ms.update(); };
+      if (voiceLike) {
+        ms = mountMicState($('#rc-mstate', el), () => ({ perm: micPerm, online: navigator.onLine !== false, netError: netErr, engine, listening, paused: aiState === 'paused', busy: ending || starting, quranReady, native: isNative() }));
+        if (engineSupported()) engineCached().then(v => { quranReady = v; ms.update(); }).catch(() => {});
+      }
 
       // ---- keep the current line around the upper-middle of the viewport ----
       let curPtr = -1, lastLineTop = null;
@@ -662,6 +709,7 @@ export default {
       async function toggleMic() {
         if (finished || ending) return;
         if (listening) { stopListeningNow(); return; }
+        netErr = false; if (micPerm === 'denied') micPerm = 'unknown';
         setListening(true);
         const my = ++sess;
         try {
@@ -676,6 +724,8 @@ export default {
             },
             onState: st => { if (st === 'stopped' && !stopMic) { base = lastFull; setListening(false); } },
             onError: err => {
+              if (err === 'permission') micPerm = 'denied';
+              if (err === 'network') netErr = true;
               stopListeningNow();
               toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً'
                 : err === 'unsupported' ? 'التعرف على الصوت غير متاح على هذا الجهاز أو المتصفح'
@@ -732,6 +782,7 @@ export default {
 
       function onRecError(err) {
         if (!isLive() || engine !== 'ai') return;
+        if (err === 'permission') micPerm = 'denied';
         toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : 'تعذر تسجيل الصوت — سيُستخدم الوضع الفوري');
         switchToDevice(err !== 'permission');
       }
@@ -792,6 +843,7 @@ export default {
         if (finished || ending || starting) return;
         if (aiState === 'rec') { rec.pause(); aiState = 'paused'; listening = false; micEl.classList.remove('live'); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); setLevel(0); return; }
         if (aiState === 'paused') { rec.resume(); aiState = 'rec'; setListening(true); return; }
+        if (micPerm === 'denied') micPerm = 'unknown';
         starting = true;
         setStatus('جارٍ تجهيز المحرك القرآني…');
         // the recorder starts first, inside the user's tap (an AudioContext created later may stay suspended);
@@ -821,10 +873,11 @@ export default {
             if (earlyLen < 16000 * 20) { early.push(new Float32Array(pcm)); earlyLen += pcm.length; }
           }, onLevel: setLevel, onError: err => {
             if (!isLive() || engine !== 'quran') return;
+            if (err === 'permission') micPerm = 'denied';
             toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : 'تعذر تسجيل الصوت');
             setListening(false); aiState = 'idle';
           } });
-          if (!r) { starting = false; return; }        // onError already explained why
+          if (!r) { starting = false; ms.update(); return; }        // onError already explained why
           if (!isLive() || engine !== 'quran' || ending) { starting = false; r.stop().catch(() => {}); return; }
           rec = r; recCtl = r; aiState = 'rec';
           setListening(true);
@@ -841,18 +894,21 @@ export default {
           early = []; earlyLen = 0; live = true;
           setStatus('أسمعك… اقرأ الآن');
         } catch (e) {
-          starting = false;
+          starting = false; ms.update();
           await fallback('تعذّر تشغيل المحرك القرآني — سيُستخدم الفوري');
           return;
         }
-        starting = false;
+        starting = false; ms.update();
       }
 
       async function toggleAi() {
         if (finished || ending || starting) return;
         if (aiState === 'rec') { rec.pause(); aiState = 'paused'; listening = false; micEl.classList.remove('live'); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); setLevel(0); return; }
         if (aiState === 'paused') { rec.resume(); aiState = 'rec'; setListening(true); return; }
+        if (micPerm === 'denied') micPerm = 'unknown';
+        netErr = false;
         starting = true;
+        ms.update();
         let r = null;
         try {
           r = await startRecorder({
@@ -882,6 +938,8 @@ export default {
         const st = effective();
         const i = st.indexOf('pending');
         if (i < 0) return;
+        hintTaps++;
+        if (!hintNoted) { hintNoted = true; showHintNote($('#rc-hintnote', el)); }
         const g = groupOf[i];
         let step = 1;
         if (pkStep === 1 && i === pkIdx) step = 2;
@@ -994,7 +1052,7 @@ export default {
         const hifzN = noteHifz(ayahStats, s, acc / 100);
         const stamps = new Map(); stamp.forEach((n, i) => stamps.set(i, n / PCM_RATE));
         haptic('heavy');
-        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar, prev, hideMode: !voiceLike, okN: ok, totalN: scoped, stamps, peekN, hifzN });
+        showResult({ acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar, prev, hideMode: !voiceLike, okN: ok, totalN: scoped, stamps, peekN, hifzN, hintTaps, revealedN: forced.size, wallSecs: (Date.now() - t0) / 1000 });
       }
 
       if (noVoice) { $('#rc-tohide', el).onclick = () => { cfg.mode = 'hide'; startSession(); }; }
@@ -1055,11 +1113,13 @@ export default {
         <div class="rd-top"><button class="rd-ic" id="rc-menu" aria-label="القائمة">${ic('menu')}</button>
           <div class="rd-cardbox"><div class="rd-card"><div class="rd-card-main"><div class="rd-sname" id="rc-sname">${esc(pageNames(startPage))}</div><div class="rd-meta" id="rc-meta">${metaHTML(startPage)}</div></div></div></div>
           <button class="rd-ic" data-go="search" aria-label="بحث">${icon('search')}</button><button class="rd-ic" id="rc-gear" aria-label="إعدادات التسميع">${icon('gear', 22)}</button></div>
+        <div class="rc-mstate rc-mstate-free" id="rc-mstate"></div>
         <div class="rc-strip"><span class="rc-status small" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : sard ? 'اضغط المايك واسرد من حفظك، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع'}</span>
           <b class="small rc-fcount" id="rc-count"></b><span class="small muted rc-ftime" id="rc-time">${clock(0)}</span>
           <button class="rc-endbtn" id="rc-end">إنهاء</button></div>
         <div class="rd-stage"><div class="mp-book rc-fwrap${showText ? ' shown' : ''}" id="rc-fwrap"></div></div>
         <div class="rd-bottom">
+          <div class="rc-hintnote small" id="rc-hintnote" hidden></div>
           <div class="rd-peek" id="rdPeek"><button class="rd-pk" id="pkAyah" aria-label="كشف بقية الآية">${ic('peekAyah', 20)}<span>بقية الآية</span></button><button class="rd-pk" id="pkWord" aria-label="كشف الكلمة التالية">${ic('peekWord', 20)}<span>كلمة</span></button></div>
           <div class="rd-bar"><div class="rd-tools">
             <button class="rd-pill" id="rc-mist">${ic('warn', 18)}<span>أخطاء</span><b class="rd-badge" id="rc-mistn" hidden></b></button>
@@ -1074,12 +1134,15 @@ export default {
       document.body.classList.add('rd-mode');
       const micEl = $('#rc-mic', el), statusEl = $('#rc-status', el), countEl = $('#rc-count', el), timeEl = $('#rc-time', el);
       const wrap = $('#rc-fwrap', el), rootEl = $('#rd', el);
-      const setStatus = t => { if (statusEl) statusEl.textContent = t; };
+      let ms = { update() {} }, quranReady = true, hintTaps = 0, hintNoted = false;   // free mode only runs with the cached on-device engine
+      const setStatus = t => { if (statusEl) statusEl.textContent = t; ms.update(); };
       const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
       const listenText = () => (cur ? (sard ? 'أتابعك… واصل السرد' : 'أتابعك… واصل القراءة') : 'أسمعك… أبحث عن الموضع');
       const setCard = p => { const n = $('#rc-sname', el), m = $('#rc-meta', el); if (n) n.textContent = pageNames(p); if (m) m.innerHTML = metaHTML(p); };
 
+      const t0 = Date.now();
       let rec = null, qe = null, starting = false, recState = 'idle', ending = false, finished = false;
+      ms = mountMicState($('#rc-mstate', el), () => ({ perm: micPerm, online: navigator.onLine !== false, engine: 'quran', listening: recState === 'rec', paused: recState === 'paused', busy: ending || starting, quranReady, native: isNative() }));
       let recBlob = null, recSecs = 0, muteTill = 0, lastWarn = 0, warnCount = 0, mistakes = 0, pcmN = 0;
       const peekPages = new Map();      // page -> Set of glyph/word indices revealed by «تلميح»
       const peekedKeys = new Set(), forcedKeys = new Set();   // 's:a:k' (k = 0-based word of the ayah): peeked at / fully shown
@@ -1300,6 +1363,8 @@ export default {
         for (let k = page.lastJ + 1; k < page.spans.length; k++) if (!page.endSet.has(k) && page.st[k] === 'f-pend') { i = k; break; }
         const g = i >= 0 ? page.groups.find(x => i >= x.start && i < x.end) : null;
         if (!g) return;
+        hintTaps++;
+        if (!hintNoted) { hintNoted = true; showHintNote($('#rc-hintnote', el)); }
         let step = 1;
         if (force === 3) step = 3;
         else if (pkStep === 1 && i === pkIdx && pkPage === page.p) step = 2;
@@ -1419,6 +1484,7 @@ export default {
         if (finished || ending || starting) return;
         if (recState === 'rec') { rec.pause(); recState = 'paused'; micEl.classList.remove('live'); setLevel(0); setStatus('متوقف مؤقتاً — اضغط للمتابعة'); return; }
         if (recState === 'paused') { rec.resume(); recState = 'rec'; micEl.classList.add('live'); setStatus(listenText()); return; }
+        if (micPerm === 'denied') micPerm = 'unknown';
         starting = true; syncKind();
         setStatus('جارٍ تجهيز المحرك القرآني…');
         let early = [], earlyLen = 0, live = false, appTill = 0, r = null;
@@ -1434,12 +1500,13 @@ export default {
             if (earlyLen < 16000 * 20) { early.push(new Float32Array(pcm)); earlyLen += pcm.length; }
           }, onLevel: setLevel, onError: err => {
             if (!isLive()) return;
+            if (err === 'permission') micPerm = 'denied';
             toast(err === 'permission' ? 'اسمح للتطبيق باستخدام الميكروفون ثم حاول مجدداً' : 'تعذر تسجيل الصوت');
             recState = 'idle'; syncKind(); micEl.classList.remove('live'); setStatus('اضغط على الميكروفون للمحاولة مجدداً');
           } });
-          if (!r) { starting = false; return; }
+          if (!r) { starting = false; ms.update(); return; }
           if (!isLive() || ending) { starting = false; r.stop().catch(() => {}); return; }
-          rec = r; recCtl = r; recState = 'rec'; micEl.classList.add('live');
+          rec = r; recCtl = r; recState = 'rec'; micEl.classList.add('live'); ms.update();
           qe = await openEngine();
           if (!isLive() || ending) { starting = false; return; }
           qe.startFree({
@@ -1459,7 +1526,7 @@ export default {
           rec = null; recCtl = null; recState = 'idle'; micEl.classList.remove('live');
           setStatus('اضغط على الميكروفون للمحاولة مجدداً');
         }
-        starting = false; syncKind();
+        starting = false; syncKind(); ms.update();
       }
 
       async function finish() {
@@ -1571,7 +1638,7 @@ export default {
         haptic('heavy');
         showResult({
           acc, missed, pts, blob: recBlob && recBlob.size > 0 ? recBlob : null, secs: recSecs, analysis, flat, groupOf, ayahStats, similar: [], prev, hideMode: false,
-          okN, totalN: inScope.length, stamps, peekN, hifzN,
+          okN, totalN: inScope.length, stamps, peekN, hifzN, hintTaps, revealedN: forcedKeys.size, wallSecs: (Date.now() - t0) / 1000,
           span: { segs, kind, pages: visited.size, ayahs: ayahStats.length, warns: warnCount, mistakes: inScope.filter(x => st[x.i] === 'bad').length }
         });
       }
@@ -1693,7 +1760,7 @@ export default {
       return html;
     }
 
-    function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false, span = null, okN = 0, totalN = 0, stamps = null, peekN = 0, hifzN = 0 }) {
+    function showResult({ acc, missed, pts, blob, secs, analysis = { words: [], extras: [] }, flat = [], groupOf = [], ayahStats = [], similar = [], prev = null, hideMode = false, span = null, okN = 0, totalN = 0, stamps = null, peekN = 0, hifzN = 0, hintTaps = 0, revealedN = 0, wallSecs = 0 }) {
       document.body.classList.remove('rd-mode');
       // span: a free / sard session ({ segs:[{s,from,to}], kind, pages, ayahs, warns, mistakes }); otherwise the cfg range
       const segs = span ? span.segs : [{ s: cfg.s, from: cfg.from, to: cfg.to }];
@@ -1720,10 +1787,37 @@ export default {
       const tooLong = secs > MAX_REVIEW_SECS;
       if (blob) { try { resUrl = URL.createObjectURL(blob); } catch (e) { resUrl = null; } }
       let recId = null, pendingTj = null;
+      // ---- session report: every number is counted from this session's verdicts (nothing estimated) ----
+      const dateTxt = (() => { try { return new Date().toLocaleString('ar-SA-u-ca-gregory', { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } })();
+      const repCounts = () => {
+        const w = analysis.words, n = f => w.filter(f).length;
+        return {
+          confirmed: n(x => x.kind !== 'ok' && x.kind !== 'unreached' && x.kind !== 'unsure' && x.kind !== 'peek'),
+          unsure: n(x => x.kind === 'unsure'),
+          unreached: n(x => x.kind === 'unreached'),
+          weak: w.filter(x => x.kind !== 'ok' && x.kind !== 'unreached')
+        };
+      };
+      const repSecs = () => (secs > 0 ? secs : wallSecs);
+      const reportHtml = () => {
+        const c = repCounts(), stat = (n, t, cls = '') => `<div class="rc-stat ${cls}"><b>${N(n)}</b><span>${t}</span></div>`;
+        return `<b class="gold">تقرير الجلسة</b>
+          <p class="muted small">${span ? esc(where) : `${esc(surahName(s))} · الآيات ${N(from)}–${N(to)}`}${dateTxt ? ' · ' + esc(dateTxt) : ''}</p>
+          <div class="rc-stats">
+            <div class="rc-stat"><b>${N(acc)}٪</b><span>الدقة</span></div>
+            <div class="rc-stat"><b>${repSecs() > 0 ? clock(repSecs()) : '—'}</b><span>المدة</span></div>
+            ${stat(c.confirmed, 'أخطاء مؤكدة', 'skip')}${stat(c.unsure, 'مواضع غير واضحة', 'unsure')}${stat(c.unreached, 'كلمات لم تصل إليها')}
+            ${stat(hintTaps, 'مرات التلميح', 'peek')}${stat(revealedN, 'كلمات كُشفت (تُحتسب خطأً)', 'peek')}
+          </div>
+          ${hintTaps ? '<p class="muted small mt">التلميح يُحتسب على نتيجة الجلسة: كشف الكلمة أو بقية الآية خطأ، والحرف الأول وحده لا يُعدّ خطأً.</p>' : ''}`;
+      };
+      const snapshot = () => { const c = repCounts(); return { bad: c.confirmed, unsure: c.unsure, unreached: c.unreached, hints: hintTaps, revealed: revealedN, secs: Math.round(repSecs()), weak: c.weak.slice(0, 30).map(x => (flat[x.i] ? flat[x.i].w : '')).filter(Boolean) }; };
       if (blob) {
         recordings.save({ blob, s, from, to, acc, durationMs: Math.round((secs || 0) * 1000) }).then(id => {
           recId = id;
-          if (id && pendingTj != null) recordings.update(id, { tajweedScore: pendingTj });
+          if (!id) return;
+          // sequential merges: each update re-reads the record, so they must not overlap
+          return recordings.update(id, { report: snapshot() }).then(() => (pendingTj != null ? recordings.update(id, { tajweedScore: pendingTj }) : null));
         }).catch(() => {});
       }
       const heroHtml = () => `
@@ -1738,6 +1832,7 @@ export default {
       el.innerHTML = header('نتيجة التسميع') + `
         <div class="card hero center" id="rc-hero">${heroHtml()}</div>
         ${summary}
+        <div class="card rc-report" id="rc-rep">${reportHtml()}</div>
         <div id="rc-fb">${fbHtml()}</div>
         ${!analysis.words.length && missed.length ? `<h2 class="section-title">الكلمات التي تحتاج مراجعة</h2><div class="card"><div class="row">${missed.map(w => `<span class="chip quran">${esc(w)}</span>`).join('')}</div></div>` : ''}
         ${retry ? `<button class="btn block mt" id="rc-retry">${icon('repeat', 18)} أعد الآيات التي أخطأت فيها (${N(retry.from)}–${N(retry.to)})</button>` : ''}
@@ -1753,8 +1848,9 @@ export default {
         ${resUrl ? `<div id="rc-tj" class="mt">${tooLong
           ? '<div class="card"><p class="muted small center">التسجيل أطول من ٤ دقائق، قسّمه إلى مقاطع أقصر للحصول على تقييم التجويد.</p></div>'
           : '<button class="btn block" id="rc-tjbtn">تقييم التجويد بالذكاء ✨</button>'}</div>` : ''}
+        <button class="btn ghost block mt" id="rc-weak"${repCounts().weak.length ? '' : ' hidden'}>${icon('eye', 18)} مراجعة المواضع</button>
         <div class="grid-2 mt">
-          <button class="btn" id="rc-again">${icon('repeat', 18)} إعادة</button>
+          <button class="btn" id="rc-again">${icon('repeat', 18)} إعادة التسميع</button>
           <button class="btn ghost" id="rc-rev">أضف للمراجعة</button>
         </div>
         <button class="btn ghost block mt" id="rc-new">تسميع جديد</button>`;
@@ -1769,7 +1865,9 @@ export default {
         $$('.rc-mrow', el).forEach(b => b.onclick = () => openMistake(+b.dataset.i));
       };
       const paintFb = () => {
-        const hero = $('#rc-hero', el), fb = $('#rc-fb', el);
+        const hero = $('#rc-hero', el), fb = $('#rc-fb', el), rep = $('#rc-rep', el), wk = $('#rc-weak', el);
+        if (rep) rep.innerHTML = reportHtml();
+        if (wk) wk.hidden = !repCounts().weak.length;
         if (hero) hero.innerHTML = heroHtml();
         if (fb) fb.innerHTML = fbHtml();
         bindFb();
@@ -1830,6 +1928,17 @@ export default {
         on('right', () => { sh.close(); markRight(i); });
       }
       bindFb();
+      // «مراجعة المواضع»: jump to the first weak word of the session (its row in the notes, and its detail sheet)
+      $('#rc-weak', el).onclick = () => {
+        const first = repCounts().weak[0];
+        if (!first) { toast('لا توجد مواضع ضعيفة'); return; }
+        const row = el.querySelector(`.rc-mrow[data-i="${first.i}"]`);
+        if (row) {
+          try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+          row.classList.add('rc-flash'); setTimeout(() => row.classList.remove('rc-flash'), 2200);
+        }
+        openMistake(first.i);
+      };
       $('#rc-rev', el).onclick = e => {
         let r = false;
         for (const g of segs) r = addReview(g.s, g.from, g.to) || r;

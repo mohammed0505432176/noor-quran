@@ -113,3 +113,71 @@ html[data-theme='light'] {
 html[data-theme='dark'] {
   color-scheme: dark;
 }
+
+/* ---- paper: warm cream ink-on-paper, deep green accent, muted gold ---- */
+html[data-theme='paper'] {
+  color-scheme: light;
+  --bg: #f3ead3;
+  --bg-2: #ebe0c4;
+  --bg-grad: linear-gradient(180deg, #f6eed9 0%, #ede2c6 100%);
+  --card: rgba(252, 247, 233, 0.9);
+  --card-2: rgba(255, 251, 240, 0.97);
+  --surface-1: rgba(60, 45, 15, 0.04);
+  --surface-2: rgba(60, 45, 15, 0.07);
+  --surface-3: rgba(60, 45, 15, 0.1);
+  --line: rgba(110, 80, 20, 0.26);
+  --hairline: rgba(60, 45, 15, 0.14);
+  --gold: #765510;
+  --gold-2: #1c5a3f;
+  --gold-soft: rgba(118, 85, 16, 0.12);
+  --gold-glow: rgba(118, 85, 16, 0.24);
+  --ink: #2a2418;
+  --muted: #5e5642;
+  --ok: #1b6b44;
+  --bad: #a52f26;
+  --on-gold: #fff8e6;
+  --paper: #f8f0da;
+  --paper-edge: rgba(118, 85, 16, 0.55);
+  --tint-a: #1b6b52; --tint-b: #84601a; --tint-c: #2a64a0; --tint-d: #a0426a; --tint-e: #6048a8;
+  --shadow-1: 0 1px 2px rgba(70, 50, 10, 0.1), 0 2px 8px rgba(70, 50, 10, 0.07);
+  --shadow-2: 0 6px 18px rgba(70, 50, 10, 0.14);
+  --shadow-3: 0 16px 40px rgba(70, 50, 10, 0.2);
+  --pattern-op: 0.05;
+  /* reader.css / tajweed.css default to dark values; mirror their light overrides for paper */
+  --rd-green: #1b6b44; --rd-green-2: #0f4f31; --rd-band: rgba(118, 85, 16, .16); --rd-rule: rgba(118, 85, 16, .32); --rd-rv: rgba(42, 100, 160, .16); --rd-rv-ink: #2a64a0;
+  --tj-silent: #7d8782; --tj-madd-normal: #a8661a; --tj-madd-perm: #d9690a; --tj-madd-oblig: #d03a1e; --tj-madd-nec: #9c0f1c;
+  --tj-qalaqah: #1565c0; --tj-ghunnah: #12803f; --tj-ikhafa: #3f8a14; --tj-ikhafa-sh: #7a8a00; --tj-idgham: #5d7f6c; --tj-iqlab: #00877a;
+}
+html[data-theme='paper'] .rd-ink-bright { --rd-ink: #000; }
+html[data-theme='paper'] .rd-ink-warm { --rd-ink: #4a3208; }
+
+/* ---- oled: true black, near-black cards, same accents as dark ---- */
+html[data-theme='oled'] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-2: #060807;
+  --bg-grad: linear-gradient(180deg, #000000 0%, #000000 100%);
+  --card: rgba(16, 20, 18, 0.94);
+  --card-2: rgba(24, 30, 27, 0.97);
+  --surface-1: rgba(255, 255, 255, 0.04);
+  --surface-2: rgba(255, 255, 255, 0.07);
+  --surface-3: rgba(255, 255, 255, 0.1);
+  --line: rgba(212, 175, 98, 0.24);
+  --hairline: rgba(255, 255, 255, 0.1);
+  --gold: #d4af62;
+  --gold-2: #ecd495;
+  --gold-soft: rgba(212, 175, 98, 0.14);
+  --gold-glow: rgba(212, 175, 98, 0.28);
+  --ink: #f6efd9;
+  --muted: #a3b8ab;
+  --ok: #4ccf8f;
+  --bad: #f2776b;
+  --on-gold: #2a1d05;
+  --paper: #050706;
+  --paper-edge: rgba(212, 175, 98, 0.5);
+  --tint-a: #5fc7a4; --tint-b: #e0b862; --tint-c: #7fb2e5; --tint-d: #d98aa8; --tint-e: #a894e0;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.7);
+  --shadow-3: 0 16px 40px rgba(0, 0, 0, 0.8);
+  --pattern-op: 0.02;
+}

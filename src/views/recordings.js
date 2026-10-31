@@ -13,7 +13,34 @@ function dayLabel(t) {
   if (k === dayKey(now - 864e5)) return 'أمس';
   try { return new Date(t).toLocaleDateString('ar-SA-u-ca-gregory', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return new Date(t).toDateString(); }
 }
-const dur = ms => { const s = Math.max(0, Math.round((ms || 0) / 1000)); return `${N(Math.floor(s / 60))}:${N(String(s % 60).padStart(2, '0'))}`; };
+const dur = ms => { const s = Math.max(0, Math.round((ms || 0) / 1000)); return `${N(Math.floor(s / 60))}:${String(s % 60).padStart(2, '0').replace(/[0-9]/g, d => N(+d))}`; };
+const clockAt = t => { try { return new Date(t).toLocaleTimeString('ar-SA-u-ca-gregory', { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } };
+const dateAt = t => { try { return new Date(t).toLocaleDateString('ar-SA-u-ca-gregory', { day: 'numeric', month: 'short' }); } catch (e) { return ''; } };
+/** Real numbers only: counted from the stored recordings (their own accuracy and measured duration), never estimated. */
+function periodStats(items, since) {
+  const rows = items.filter(x => x.at >= since && Number.isFinite(x.acc));
+  const ms = rows.reduce((t, x) => t + (x.durationMs || 0), 0);
+  return { n: rows.length, avg: rows.length ? Math.round(rows.reduce((t, x) => t + x.acc, 0) / rows.length) : null, ms };
+}
+const dayStart = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+function summaryHtml(items) {
+  const now = Date.now(), today = periodStats(items, dayStart(now)), week = periodStats(items, dayStart(now) - 6 * 864e5);
+  const col = (title, p) => `<div><b>${title}</b><div class="muted small">${p.n ? `${N(p.n)} ${p.n === 1 ? 'تلاوة' : 'تلاوات'} · متوسط الدقة ${N(p.avg)}٪ · ${dur(p.ms)}` : 'لا تلاوات'}</div></div>`;
+  return `<div class="card tight" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${col('اليوم', today)}${col('آخر ٧ أيام', week)}</div>
+    <p class="muted small center">الأرقام محسوبة من تسجيلاتك المحفوظة هنا فقط (حتى ${N(30)} تسجيلاً) وبمدتها الفعلية.</p>`;
+}
+function reportHtml(r) {
+  const rp = r.report, stat = (n, t) => `<div style="text-align:center"><b>${n}</b><div class="muted small">${t}</div></div>`;
+  let h = `<div class="rec-report" style="flex-basis:100%;margin-top:10px;cursor:default"><b class="gold">تقرير التلاوة</b>
+    <p class="muted small">${esc(surahName(r.s))} · الآيات ${N(r.from)}–${N(r.to)} · ${esc(dateAt(r.at))} ${esc(clockAt(r.at))}</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:8px">
+      ${stat(N(r.acc) + '٪', 'الدقة')}${stat(dur(r.durationMs), 'المدة')}${r.tajweedScore != null ? stat(N(r.tajweedScore), 'التجويد') : ''}`;
+  if (rp) h += `${stat(N(rp.bad), 'أخطاء مؤكدة')}${stat(N(rp.unsure), 'مواضع غير واضحة')}${stat(N(rp.unreached), 'كلمات لم تصل إليها')}${stat(N(rp.hints), 'مرات التلميح')}${stat(N(rp.revealed), 'كلمات كُشفت')}`;
+  h += '</div>';
+  if (rp && rp.weak && rp.weak.length) h += `<div class="row mt" style="flex-wrap:wrap;gap:6px">${rp.weak.map(w => `<span class="chip quran">${esc(w)}</span>`).join('')}</div>`;
+  else if (!rp) h += '<p class="muted small mt">تفاصيل الأخطاء والتلميحات لم تُحفظ مع هذا التسجيل (سُجّل قبل إضافة التقرير).</p>';
+  return h + '</div>';
+}
 const mb = b => N((b / 1048576).toFixed(1));
 function canShare() {
   if (isNative()) return false;
@@ -41,6 +68,7 @@ export default {
       if (!items.length) {
         html += `<div class="card empty"><div class="gold">${icon('mic', 40)}</div><p>لا توجد تلاوات محفوظة بعد.</p><p class="muted small">سمّع مقطعاً من صفحة التسميع وسيُحفظ تسجيلك هنا لتسمعه وتقارنه بالقارئ.</p><button class="btn" data-go="recite">ابدأ التسميع</button></div>`;
       } else {
+        html += summaryHtml(items);
         let last = '';
         html += '<div class="list">';
         for (const r of items) {
@@ -49,9 +77,9 @@ export default {
           const open = r.id === openId;
           html += `<div class="list-item" data-rec="${esc(r.id)}" style="flex-wrap:wrap;cursor:pointer">
             <div class="li-main"><b>${esc(surahName(r.s))}</b> <span class="muted small">الآيات ${N(r.from)}–${N(r.to)}</span>
-              <div class="li-sub">${dur(r.durationMs)}${r.tajweedScore != null ? ` · التجويد ${N(r.tajweedScore)}` : ''}</div></div>
+              <div class="li-sub">${esc(dateAt(r.at))} ${esc(clockAt(r.at))} · ${dur(r.durationMs)}${r.tajweedScore != null ? ` · التجويد ${N(r.tajweedScore)}` : ''}</div></div>
             <div class="li-end"><span class="chip" style="color:${accColor(r.acc)}">${N(r.acc)}٪</span></div>
-            ${open ? `<div class="rec-open" style="flex-basis:100%;margin-top:10px;cursor:default">
+            ${open ? reportHtml(r) + `<div class="rec-open" style="flex-basis:100%;margin-top:10px;cursor:default">
               <audio id="rec-audio" controls preload="metadata" style="width:100%"></audio>
               <div class="row mt">
                 <button class="btn ghost sm" data-act="cmp">${icon('play', 16)} قارن بالقارئ</button>
@@ -84,7 +112,7 @@ export default {
     function wire() {
       $$('[data-rec]', el).forEach(row => {
         row.addEventListener('click', e => {
-          if (e.target.closest('.rec-open')) return;
+          if (e.target.closest('.rec-open, .rec-report')) return;
           const id = row.dataset.rec;
           const was = openId;
           collapse();

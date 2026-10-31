@@ -244,3 +244,71 @@ function startWeb({ onText, onState, onError, pick }) {
     onState('stopped');
   };
 }
+// ---------------------------------------------------------------------------------------------------------------
+// Mic status line (shown in the recite views): one pure function decides the state, so it is testable.
+// What really works without internet (checked in this file, quran-engine.js and quran-worker.js):
+//  - 'quran' engine (on-device model): the one-time model download needs internet; once cached the audio is
+//    recorded (getUserMedia) and decoded in a worker with the local onnx runtime: no network at all.
+//  - 'device' engine on the web: browsers' SpeechRecognition sends audio to the vendor: needs internet.
+//  - 'device' engine on Android: the OS recognizer; this code never asks it for offline mode, so it works offline
+//    only if the phone has an offline Arabic pack: not guaranteed, so the UI never promises it.
+//  - 'ai' engine (Whisper server): needs internet.
+//  - hide mode (no mic): needs no internet.
+// ---------------------------------------------------------------------------------------------------------------
+/**
+ * @param {{ perm?: 'granted'|'denied'|'prompt'|'unknown', online?: boolean, netError?: boolean, engine?: 'quran'|'device'|'ai',
+ *   listening?: boolean, paused?: boolean, busy?: boolean, quranReady?: boolean, native?: boolean }} c
+ * @returns {{ key: 'ready'|'listening'|'processing'|'paused'|'permission'|'offline', icon: string, label: string, detail: string, allow: boolean }}
+ */
+export function micState({ perm = 'unknown', online = true, netError = false, engine = 'device', listening = false, paused = false, busy = false, quranReady = false, native = false } = {}) {
+  if (perm === 'denied') {
+    return { key: 'permission', icon: 'micoff', label: 'يحتاج إذن الميكروفون', allow: true,
+      detail: 'اضغط «السماح». إن لم يظهر طلب الإذن فالميكروفون محظور: افتح إعدادات التطبيق أو المتصفح (الأذونات) وفعّل الميكروفون ثم عُد.' };
+  }
+  const needsNet = engine !== 'quran';
+  if (needsNet && (online === false || netError)) {
+    const still = quranReady ? 'يمكنك استخدام «المحرك القرآني» لأنه محمّل على جهازك ويعمل دون إنترنت، أو اختبار الحفظ (إخفاء).'
+      : 'يعمل دون إنترنت اختبار الحفظ (إخفاء) فقط؛ وللتسميع الصوتي دون إنترنت حمّل «المحرك القرآني» مرة واحدة وأنت متصل.';
+    const why = engine === 'ai' ? 'الوضع الدقيق يحتاج إنترنت.'
+      : native ? 'التعرف الفوري على الجهاز قد لا يعمل دون اتصال.' : 'التعرف الفوري في المتصفح يحتاج إنترنت.';
+    return { key: 'offline', icon: 'wifioff', label: 'لا يوجد اتصال', allow: false, detail: why + ' ' + still };
+  }
+  if (busy) return { key: 'processing', icon: 'hourglass', label: 'يعالج', allow: false, detail: '' };
+  if (paused) return { key: 'paused', icon: 'pause', label: 'متوقف مؤقتاً', allow: false, detail: '' };
+  if (listening) return { key: 'listening', icon: 'mic', label: 'يستمع', allow: false, detail: '' };
+  return { key: 'ready', icon: 'check', label: 'جاهز', allow: false, detail: '' };
+}
+
+/** 'granted' | 'denied' | 'prompt' | 'unknown' (never throws; Permissions API on the web, the plugin on Android). */
+export async function micPermission() {
+  try {
+    if (isNative() && await hasNoorSpeech()) {
+      const p = await NoorSpeech.checkPermissions();
+      return p && p.microphone === 'granted' ? 'granted' : p && p.microphone === 'denied' ? 'denied' : 'prompt';
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    if (typeof navigator !== 'undefined' && navigator.permissions && navigator.permissions.query) {
+      const r = await navigator.permissions.query({ name: 'microphone' });
+      return r.state === 'granted' || r.state === 'denied' || r.state === 'prompt' ? r.state : 'unknown';
+    }
+  } catch (e) { /* not supported */ }
+  return 'unknown';
+}
+
+/** Ask for the microphone again (a user tap). Resolves 'granted' | 'denied'. */
+export async function requestMicAccess() {
+  try {
+    if (isNative() && await hasNoorSpeech()) {
+      const p = await NoorSpeech.requestPermissions();
+      return p && p.microphone === 'granted' ? 'granted' : 'denied';
+    }
+  } catch (e) { return 'denied'; }
+  try {
+    const md = typeof navigator !== 'undefined' ? navigator.mediaDevices : null;
+    if (!md || !md.getUserMedia) return 'denied';
+    const st = await md.getUserMedia({ audio: true });
+    st.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+    return 'granted';
+  } catch (e) { return 'denied'; }
+}
