@@ -29,14 +29,19 @@ function strip(w) {
   return r;
 }
 
+// the lam of ال assimilates into a following lam: الله is recognised as لله (and the reverse)
+const assim = w => w.replace(/^ال(?=ل)/, 'ل');
 function similar(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
+  a = assim(a); b = assim(b);
+  if (a === b) return true;
   const sa = strip(a), sb = strip(b);
   if (sa === sb) return true;
   if (Math.min(a.length, b.length) <= 2) return false;
-  const long = Math.max(a.length, b.length) >= 6;
-  const th = long ? 0.6 : 0.7;
+  // a recognised word must be the expected one with at most a letter or two off in longer words: 'الرحمن' is not 'الرحيم'
+  // (a 0.6 similarity used to accept it as a correct word); three-letter words must match exactly
+  const th = Math.max(a.length, b.length) >= 4 ? 0.8 : 1;
   return similarity(a, b) >= th || (sa.length > 2 && sb.length > 2 && similarity(sa, sb) >= th);
 }
 

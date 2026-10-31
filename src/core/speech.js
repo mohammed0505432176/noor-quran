@@ -114,7 +114,7 @@ function choose(alts, prefix, pick) {
 
 async function startNative({ onText, onState, onError, pick }) {
   const SR = await nativePlugin();
-  let active = true, committed = '', cur = '', starting = false, restartTimer = null;
+  let active = true, committed = '', cur = '', starting = false, restartTimer = null, failed = 0;
   const handles = [];
 
   try {
@@ -134,8 +134,12 @@ async function startNative({ onText, onState, onError, pick }) {
       // partialResults streams hypotheses (~200 ms); popup:false is required for partials on Android.
       await SR.start({ language: LANG, partialResults: true, popup: false, maxResults: 3 });
       onState('listening');
+      failed = 0;
     } catch (e) {
-      if (active) { onError('error'); }
+      if (!active) return;
+      // a start that keeps failing (no engine, no service) gives up: no endless restart loop
+      if (++failed >= 3) { active = false; onState('stopped'); onError('error'); }
+      else { clearTimeout(restartTimer); restartTimer = setTimeout(begin, 300 * failed); }
     } finally { starting = false; }
   }
   function scheduleRestart() {
@@ -163,7 +167,8 @@ async function startNative({ onText, onState, onError, pick }) {
   begin();
   // Watchdog: Android's recognizer can end on silence/errors without a 'stopped' event.
   const watchdog = setInterval(async () => {
-    if (!active || starting) return;
+    if (!active) { clearInterval(watchdog); return; }
+    if (starting) return;
     try { const r = await SR.isListening(); if (active && !starting && r && r.listening === false) scheduleRestart(); } catch (e) {}
   }, 800);
 
@@ -181,14 +186,19 @@ async function startNative({ onText, onState, onError, pick }) {
 function startWeb({ onText, onState, onError, pick }) {
   const Ctor = webCtor();
   let active = true, committed = '', cur = '', rec = null, restartTimer = null;
+  let failed = 0, lastErr = '';            // recognizer ends in a row after an error (silence is not an error)
 
   const emitText = (fin = false) => onText(join(committed, cur), fin);
 
   function make() {
     const r = new Ctor();
+    let errored = false;
     r.lang = LANG; r.continuous = true; r.interimResults = true; r.maxAlternatives = 3;
-    r.onstart = () => onState('listening');
+    // every handler belongs to one recognizer: a late event of an old instance never writes into the current segment
+    r.onstart = () => { if (rec === r && active) onState('listening'); };
     r.onresult = ev => {
+      if (rec !== r || !active) return;
+      failed = 0;
       let t = '';
       const n = ev.results.length;
       for (let i = 0; i < n - 1; i++) t = join(t, String(ev.results[i][0].transcript || '').trim());
@@ -201,15 +211,22 @@ function startWeb({ onText, onState, onError, pick }) {
       cur = t; emitText(!!(lastRes && lastRes.isFinal));
     };
     r.onerror = ev => {
-      const err = ev && ev.error;
-      if (err === 'not-allowed' || err === 'service-not-allowed') { active = false; onState('stopped'); onError('permission'); }
-      else if (err === 'audio-capture') { active = false; onState('stopped'); onError('error'); }
-      // 'no-speech' / 'aborted' / 'network': let onend restart
+      if (rec !== r) return;
+      const err = (ev && ev.error) || 'error';
+      if (err === 'not-allowed' || err === 'service-not-allowed') { active = false; onState('stopped'); onError('permission'); return; }
+      if (err === 'audio-capture') { active = false; onState('stopped'); onError('microphone'); return; }
+      if (err === 'no-speech' || err === 'aborted') return;      // normal pauses: the recognizer ends and is restarted
+      errored = true; lastErr = err;                             // network and the rest: onend decides
     };
     r.onend = () => {
+      if (rec !== r) return;
       if (cur) { committed = join(committed, cur); cur = ''; emitText(true); }
-      if (active) { clearTimeout(restartTimer); restartTimer = setTimeout(begin, 40); }
-      else onState('stopped');
+      failed = errored ? failed + 1 : 0;
+      if (!active) { onState('stopped'); return; }
+      // the recognizer keeps failing (no network, no engine): say so and stop, instead of restarting forever
+      if (failed >= 3) { active = false; onState('stopped'); onError(lastErr === 'network' ? 'network' : 'error'); return; }
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(begin, failed ? 300 * failed : 40);
     };
     return r;
   }
@@ -223,7 +240,7 @@ function startWeb({ onText, onState, onError, pick }) {
     if (!active && !rec) return;
     active = false;
     clearTimeout(restartTimer);
-    try { rec && rec.stop(); } catch (e) {}
+    try { rec && rec.stop(); } catch (e) { /* ignore */ }
     onState('stopped');
   };
 }

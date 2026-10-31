@@ -1,7 +1,10 @@
 // Azkar data (from Hisn al-Muslim). Quran passages are referenced, not typed:
 // { quran: { s, from, to } } is rendered by the view from the bundled mushaf.
 
-export const CATEGORIES = [
+import { MORE_CATEGORIES, MORE_AZKAR } from './azkar-more.js';
+import { MORE2_CATEGORIES, MORE2_AZKAR } from './azkar-more2.js';
+
+const BASE_CATEGORIES = [
   { id: 'morning', title: 'أذكار الصباح', icon: '☀️' },
   { id: 'evening', title: 'أذكار المساء', icon: '🌙' },
   { id: 'afterPrayer', title: 'أذكار بعد الصلاة', icon: '🕌' },
@@ -66,7 +69,7 @@ const ASHHADU = (when) => ({
   virtue: 'أعتقه الله من النار'
 });
 
-export const AZKAR = {
+const BASE_AZKAR = {
   morning: [
     KURSI,
     IKHLAS(3), FALAQ(3), NAS(3),
@@ -191,3 +194,7 @@ export const AZKAR = {
     { text: 'الله أكبر', count: 34, source: 'رواه البخاري ومسلم' }
   ]
 };
+
+// the four core sections above, then the occasions (azkar-more.js)
+export const CATEGORIES = [...BASE_CATEGORIES, ...MORE_CATEGORIES, ...MORE2_CATEGORIES];
+export const AZKAR = { ...BASE_AZKAR, ...MORE_AZKAR, ...MORE2_AZKAR };

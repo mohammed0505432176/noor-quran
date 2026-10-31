@@ -21,6 +21,23 @@ jobs:
         with:
           persist-credentials: false
 
+      # Release signing comes only from repository secrets. There is no fallback key: the key that used to be bundled in
+      # this repository is public, so it is treated as compromised (see android-signing/README.md). Fail before any work.
+      - name: Check signing secrets
+        env:
+          KS_B64: ${{ secrets.NOOR_KEYSTORE_B64 }}
+          STORE_PW: ${{ secrets.NOOR_STORE_PASSWORD }}
+          KEY_PW: ${{ secrets.NOOR_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$KS_B64" ] || missing="$missing NOOR_KEYSTORE_B64"
+          [ -n "$STORE_PW" ] || missing="$missing NOOR_STORE_PASSWORD"
+          [ -n "$KEY_PW" ] || missing="$missing NOOR_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error title=Signing secrets missing::Add these repository secrets to build a release APK:$missing. See android-signing/README.md. No APK was built."
+            exit 1
+          fi
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -82,21 +99,28 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      # SECURITY: the bundled fallback key is public; set NOOR_KEYSTORE_B64 / NOOR_STORE_PASSWORD / NOOR_KEY_PASSWORD secrets, then delete this fallback (see SECURITY.md).
       - name: Decode keystore
         env:
           KS_B64: ${{ secrets.NOOR_KEYSTORE_B64 }}
+          STORE_PW: ${{ secrets.NOOR_STORE_PASSWORD }}
+          KEY_PW: ${{ secrets.NOOR_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.NOOR_KEY_ALIAS || 'noor' }}
         run: |
-          # Prefer a keystore stored in repo secrets; fall back to the bundled family key.
-          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/noor.keystore"; else base64 -d android-signing/release.keystore.b64 > "$RUNNER_TEMP/noor.keystore"; fi
+          set -o pipefail
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/noor.keystore"
+          # the keystore must open with these passwords and hold the alias (nothing secret is printed)
+          if ! keytool -list -keystore "$RUNNER_TEMP/noor.keystore" -storepass "$STORE_PW" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error title=Signing keystore::The keystore, its password or the key alias is wrong (NOOR_KEYSTORE_B64, NOOR_STORE_PASSWORD, NOOR_KEY_ALIAS)."
+            exit 1
+          fi
 
       - name: Build release APK
         working-directory: android
         env:
           NOOR_KEYSTORE: ${{ runner.temp }}/noor.keystore
-          NOOR_STORE_PASSWORD: ${{ secrets.NOOR_STORE_PASSWORD || 'noorQuran2026' }}
-          NOOR_KEY_ALIAS: noor
-          NOOR_KEY_PASSWORD: ${{ secrets.NOOR_KEY_PASSWORD || 'noorQuran2026' }}
+          NOOR_STORE_PASSWORD: ${{ secrets.NOOR_STORE_PASSWORD }}
+          NOOR_KEY_ALIAS: ${{ secrets.NOOR_KEY_ALIAS || 'noor' }}
+          NOOR_KEY_PASSWORD: ${{ secrets.NOOR_KEY_PASSWORD }}
           NOOR_VERSION_CODE: ${{ github.run_number }}
           NOOR_VERSION_NAME: 2.1.${{ github.run_number }}
         run: |

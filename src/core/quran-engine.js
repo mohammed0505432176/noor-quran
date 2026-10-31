@@ -10,8 +10,8 @@
 //   Engine.start(s, from, to, { onVerdicts(words), onIssue(issue), onError(msg), onSlow() }) -> sid ; Engine.pcm(Float32Array) ;
 //   Engine.startFree(handlers, { hint:{surah,ayah} }?) -> sid   free recitation: no passage, the engine discovers where the
 //     reciter is (whole Quran) and follows across ayahs and surahs; engine word counts arrive per ayah as they are reached
-//   Engine.relock() free mode only: clears the surah lock (the engine otherwise sticks to the surah it locked on until a
-//     sustained match elsewhere) and re-runs discovery
+//   Engine.relock() free mode only: clears the surah lock (the engine keeps the surah it locked on and holds back matches
+//     elsewhere; onRelocate(surah) says when one is held back, surah 0 when none is) and re-runs discovery
 //   Engine.stop() -> Promise<words> (current session; [] on 20 s timeout) ; Engine.cancel() abandons the session
 //   words: [{ s, a, w, st, vowel }]  (w is 0-based within ayah, as the engine numbers words; st 'ok'|'unsure'|'wrong'|'skipped'|'pending')
 //   Engine.counts() -> { [a] | ['s:a']: n }  engine words per ayah of the current session
@@ -136,6 +136,7 @@ function route(d) {
   else if (d.type === 'verdicts') c.handlers.onVerdicts(d.words);
   else if (d.type === 'issue') c.handlers.onIssue(d.issue);
   else if (d.type === 'slow') c.handlers.onSlow();
+  else if (d.type === 'relocate_suggest') c.handlers.onRelocate(d.surah | 0);
   else if (d.type === 'stopped') finishStop(c, d.words || []);
   else if (d.type === 'error') { if (c.handlers.onError) c.handlers.onError(d.message); finishStop(c, []); }
 }
@@ -155,7 +156,7 @@ function begin(msg, h) {
     sid, stopResolvers: [], done: false, result: null, timer: null,
     handlers: {
       onVerdicts: h.onVerdicts || (() => {}), onIssue: h.onIssue || (() => {}),
-      onError: h.onError || null, onSlow: h.onSlow || (() => {}),
+      onError: h.onError || null, onSlow: h.onSlow || (() => {}), onRelocate: h.onRelocate || (() => {}),
     },
   };
   worker.postMessage({ type: 'start', sid, ...msg });

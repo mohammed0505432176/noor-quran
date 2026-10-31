@@ -10,7 +10,7 @@
 
 export const SUPABASE_URL = 'https://xdrrrquzxoinqwknfrgt.supabase.co';
 // Public (publishable) anon key — safe to ship; it only allows anonymous sign-in. Protected by RLS + per-user limits.
-const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhkcnJycXV6eG9pbnF3a25mcmd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIyNTkzNTMsImV4cCI6MjEwNzgzNTM1M30.AP6KmxaymJ7JT-mD5si3Xe4mFJLCujUfEExJnBp9dHM';
+export const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhkcnJycXV6eG9pbnF3a25mcmd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIyNTkzNTMsImV4cCI6MjEwNzgzNTM1M30.AP6KmxaymJ7JT-mD5si3Xe4mFJLCujUfEExJnBp9dHM';
 const FN_URL = SUPABASE_URL + '/functions/v1/noor-ai';
 const AUTH_KEY = 'noor.auth';
 
@@ -21,6 +21,7 @@ export class CloudError extends Error {
 
 const now = () => Math.floor(Date.now() / 1000);
 function loadSession() { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch (e) { return null; } }
+export function setSession(s) { saveSession(s); }
 function saveSession(s) { try { s ? localStorage.setItem(AUTH_KEY, JSON.stringify(s)) : localStorage.removeItem(AUTH_KEY); } catch (e) {} }
 
 async function authCall(path, body) {

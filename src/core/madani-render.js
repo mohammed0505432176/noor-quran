@@ -69,28 +69,45 @@ export function renderPageLines(layout, opts = {}) {
   return h + '</div>';
 }
 
-/** Fit the page font to the box width (the widest printed line spans it), centre short lines (as in print). */
+/** Smallest page font that is still readable. Below it nothing is shrunk further: the page is flagged (mq-overflow), never clipped. */
+export const FS_MIN = 12;
+
+/**
+ * Fit the page font to the box. The widest printed line spans the box width; then every line and the whole block must fit
+ * their height as well (a glyph taller than its line, a line wider than the box or a block taller than its frame shrinks
+ * the font). Short lines are centred, as in print. Measuring waits for the page font: the fallback font has other widths.
+ */
 export function fitLines(box) {
   if (!box) return;
+  const fam = (getComputedStyle(box).fontFamily || '').split(',')[0].trim().replace(/^['"]|['"]$/g, '');
+  if (fam && typeof document !== 'undefined' && document.fonts && !document.fonts.check(`40px "${fam}"`)) {
+    if (!box.dataset.fitWait) {
+      box.dataset.fitWait = '1';
+      document.fonts.load(`40px "${fam}"`).catch(() => {}).then(() => { delete box.dataset.fitWait; if (box.isConnected) fitLines(box); });
+    }
+    return;
+  }
   const W = box.clientWidth;
   if (W < 40) return;
+  const setFs = v => box.style.setProperty('--mq-fs', v.toFixed(2) + 'px');
+  const all = [...box.children];
+  const lines = all.filter(ln => ln.querySelector('.mq-w'));
   let fs = W / 15;
-  for (let k = 0; k < 3; k++) {
-    box.style.setProperty('--mq-fs', fs.toFixed(2) + 'px');
+  setFs(fs);
+  for (let k = 0; k < 3; k++) {                       // width
     let mx = 1;
-    for (const ln of box.children) {
-      if (!ln.querySelector('.mq-w')) continue;
-      let sum = 0; for (const c of ln.children) sum += c.getBoundingClientRect().width;
-      if (sum > mx) mx = sum;
-    }
+    for (const ln of lines) { let sum = 0; for (const c of ln.children) sum += c.getBoundingClientRect().width; if (sum > mx) mx = sum; }
     if (mx <= 1) break;
     const nf = fs * W / mx * 0.985;
     if (Math.abs(nf - fs) < 0.2) { fs = Math.min(fs, nf); break; }
-    fs = nf;
+    fs = nf; setFs(fs);
   }
-  box.style.setProperty('--mq-fs', Math.max(10, fs).toFixed(2) + 'px');
-  for (const ln of box.children) {
-    if (!ln.querySelector('.mq-w')) continue;
+  const fitsNow = () => box.scrollHeight <= box.clientHeight + 1
+    && all.every(ln => ln.scrollHeight <= ln.clientHeight + 1 && ln.scrollWidth <= ln.clientWidth + 1);
+  for (let k = 0; k < 12 && fs > FS_MIN && !fitsNow(); k++) { fs = Math.max(FS_MIN, fs * 0.97); setFs(fs); }   // height
+  setFs(Math.max(FS_MIN, fs));
+  box.classList.toggle('mq-overflow', !fitsNow());
+  for (const ln of lines) {
     ln.classList.remove('mq-center');
     let sum = 0; for (const c of ln.children) sum += c.getBoundingClientRect().width;
     if (sum < W * 0.72) ln.classList.add('mq-center');
