@@ -27,3 +27,14 @@ export function isEmptyProgress(S) {
   const recs = Array.isArray(S.rec) ? S.rec.length : 0;
   return read === 0 && days === 0 && !(S.pts > 0) && recs === 0;
 }
+
+/**
+ * The tokens of a finished Google round trip, from the URL fragment (`#access_token=…&refresh_token=…`).
+ * null when the fragment carries no access token.
+ */
+export function parseAuthFragment(fragment) {
+  const p = new URLSearchParams(String(fragment || '').replace(/^#/, ''));
+  const access_token = p.get('access_token');
+  if (!access_token) return null;
+  return { access_token, refresh_token: p.get('refresh_token'), expires_in: Number(p.get('expires_in')) || 3600 };
+}

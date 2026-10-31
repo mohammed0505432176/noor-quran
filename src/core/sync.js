@@ -1,13 +1,16 @@
 // Progress sync with the signed-in account (table noor_progress, RLS: a user reads and writes only their own row).
 // The app keeps working offline: changes are pushed a few seconds after they happen. Google links the account, so a
-// reinstall can sign back in and restore the progress (web for now; the Android return URL still needs its own handler).
+// reinstall can sign back in and restore the progress. On the web the round trip returns to the page; in the app it
+// opens the system browser and comes back through the noor://auth link (AndroidManifest, scripts/patch-android.mjs).
 import { S, save, on } from './store.js';
 import { SUPABASE_URL, ANON_KEY, ensureSession, setSession } from './cloud.js';
-import { makeSnapshot, readSnapshot } from './sync-core.js';
+import { makeSnapshot, readSnapshot, parseAuthFragment } from './sync-core.js';
+import { isNative } from './platform.js';
 
 const POS_KEY = 'noor.recite.lastpos';          // same key as the recitation view
 const MODE_KEY = 'noor.sync.mode';              // 'link' | 'restore' while the Google round trip is out
 const ROW = SUPABASE_URL + '/rest/v1/noor_progress';
+const NATIVE_RETURN = 'noor://auth';
 
 export const sync = { state: 'idle', at: 0 };   // idle | syncing | ok | offline | error
 const subs = new Set();
@@ -83,45 +86,56 @@ export async function fetchAccount() {
 }
 export const hasGoogle = user => !!(user && Array.isArray(user.identities) && user.identities.some(i => i.provider === 'google'));
 
+const returnUrl = () => (isNative() ? NATIVE_RETURN : location.origin + location.pathname);
+
 /**
  * Start the Google round trip. 'link': attach Google to this account (its progress stays). 'restore': sign in to the
- * account that was saved with Google earlier (use it on a reinstall). Both come back to this page with the tokens.
+ * account that was saved with Google earlier (use it on a reinstall). The round trip returns with the tokens.
  */
 export async function startGoogle(mode) {
   try { sessionStorage.setItem(MODE_KEY, mode); } catch (e) { /* ignore */ }
-  const redirect = encodeURIComponent(location.origin + location.pathname);
+  const redirect = encodeURIComponent(returnUrl());
+  let url;
   if (mode === 'link') {
     const token = await ensureSession();
     const r = await fetch(`${SUPABASE_URL}/auth/v1/user/identities/authorize?provider=google&redirect_to=${redirect}&skip_http_redirect=true`, { headers: headers(token) });
     if (!r.ok) throw httpError('link', r);
-    const { url } = await r.json();
-    location.href = url;
+    url = (await r.json()).url;
+  } else {
+    url = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${redirect}`;
+  }
+  if (isNative()) {
+    const { Browser } = await import('@capacitor/browser');
+    await Browser.open({ url });
     return;
   }
-  location.href = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${redirect}`;
-}
-
-/** Back from Google: the tokens are in the URL fragment. Clears the fragment and returns 'link' | 'restore' | null. */
-export function handleAuthReturn() {
-  const h = location.hash || '';
-  if (!h.includes('access_token=')) return null;
-  const p = new URLSearchParams(h.slice(1));
-  let mode = null;
-  try { mode = sessionStorage.getItem(MODE_KEY); sessionStorage.removeItem(MODE_KEY); } catch (e) { /* ignore */ }
-  history.replaceState(null, '', location.pathname + '#/home');
-  const access = p.get('access_token');
-  if (!access) return null;
-  setSession({ access_token: access, refresh_token: p.get('refresh_token'), expires_at: Math.floor(Date.now() / 1000) + Number(p.get('expires_in') || 3600) });
-  return mode === 'restore' ? 'restore' : 'link';
+  location.href = url;
 }
 
 /**
- * Start-up hook (before the router reads the URL): saves on every change, and completes a Google round trip.
- * toast(message) shows the result.
+ * Finish a Google round trip from the URL fragment: stores the session and returns 'link' | 'restore' (null when the
+ * fragment carries no tokens). The mode was remembered before leaving for Google.
  */
-export function initSync(toast = () => {}) {
-  on('change', () => schedule());
-  const mode = handleAuthReturn();
+export function completeAuth(fragment) {
+  const tokens = parseAuthFragment(fragment);
+  if (!tokens) return null;
+  let mode = null;
+  try { mode = sessionStorage.getItem(MODE_KEY); sessionStorage.removeItem(MODE_KEY); } catch (e) { /* ignore */ }
+  setSession({ ...tokens, expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in });
+  return mode === 'restore' ? 'restore' : 'link';
+}
+
+/** Web: the tokens come back in the page's URL fragment; the fragment is cleared afterwards. */
+function handleWebReturn() {
+  const h = location.hash || '';
+  if (!h.includes('access_token=')) return null;
+  const mode = completeAuth(h);
+  history.replaceState(null, '', location.pathname + '#/home');
+  return mode;
+}
+
+/** After a finished round trip: 'link' saves the progress now; 'restore' replaces the local progress with the account's. */
+function afterReturn(mode, toast) {
   if (mode === 'link') {
     toast('تم ربط حسابك بجوجل — تقدّمك محفوظ الآن');
     pushNow();
@@ -131,4 +145,26 @@ export function initSync(toast = () => {}) {
       toast('لا يوجد تقدّم محفوظ لهذا الحساب بعد');
     }).catch(() => toast('تعذّر استعادة التقدم، تحقق من الإنترنت وحاول مجدداً'));
   }
+}
+
+/**
+ * Start-up hook (before the router reads the URL): saves on every change and completes a web round trip.
+ * In the app, the return comes through the noor://auth link: see initNativeReturn.
+ */
+export function initSync(toast = () => {}) {
+  on('change', () => schedule());
+  if (!isNative()) afterReturn(handleWebReturn(), toast);
+}
+
+/** In the app: a noor://auth link brings the tokens back; the system browser is closed first. */
+export async function initNativeReturn(toast = () => {}) {
+  if (!isNative()) return;
+  const { App } = await import('@capacitor/app');
+  const { Browser } = await import('@capacitor/browser');
+  App.addListener('appUrlOpen', ({ url }) => {
+    if (!url || !url.startsWith(NATIVE_RETURN)) return;
+    Browser.close().catch(() => {});
+    const i = url.indexOf('#');
+    afterReturn(completeAuth(i >= 0 ? url.slice(i) : ''), toast);
+  });
 }

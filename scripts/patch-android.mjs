@@ -36,7 +36,22 @@ function read(file) {
     xml = xml.replace('android:allowBackup="true"', 'android:allowBackup="false"');
     log('manifest: set allowBackup=false');
   }
-  // home-screen prayer times widget (receiver class: scripts/android/PrayerWidget.java)
+  // Google sign-in returns to the app through noor://auth (src/core/sync.js)
+  if (!xml.includes('android:scheme="noor"')) {
+    const deepLink = `<intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="noor" android:host="auth" />
+            </intent-filter>
+        `;
+    const i = xml.indexOf('android:name=".MainActivity"');
+    if (i < 0) fail('MainActivity not found in AndroidManifest.xml');
+    const end = xml.indexOf('</activity>', i);
+    if (end < 0) fail('</activity> of MainActivity not found');
+    xml = xml.slice(0, end) + '    ' + deepLink + xml.slice(end);
+    log('manifest: added noor://auth deep link to MainActivity');
+  }  // home-screen prayer times widget (receiver class: scripts/android/PrayerWidget.java)
   if (!xml.includes('android:name=".PrayerWidget"')) {
     if (!xml.includes('</application>')) fail('anchor </application> not found in AndroidManifest.xml');
     const receiver = `<receiver
