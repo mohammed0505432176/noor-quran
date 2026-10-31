@@ -21,7 +21,7 @@ import './styles/hifz.css';
 import { S, on } from './core/store.js';
 import { icon, celebrate, toast } from './ui.js';
 import { loadQuran } from './core/quran.js';
-import { initSync } from './core/sync.js';
+import { initSync, initNativeReturn } from './core/sync.js';
 
 const ROUTES = {
   home: () => import('./views/home.js'),
@@ -104,6 +104,7 @@ function init() {
   applyTheme();
   loadQuran().catch(() => toast('تعذر تحميل نص المصحف'));
   initSync(toast);
+  initNativeReturn(toast).catch(() => {});
   route();
   const openWidgetRoute = () => import('./core/widget.js').then(w => w.consumeWidgetRoute()).then(r => { if (r === 'prayer') go('prayer'); }).catch(() => {});
   openWidgetRoute();
