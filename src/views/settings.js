@@ -2,7 +2,7 @@
 import { S, save, updateSettings, exportData, importData, resetAll } from '../core/store.js';
 import { esc, icon, toast, sheet, header, N } from '../ui.js';
 import { cloudStatus } from '../core/cloud.js';
-import { sync, onSyncState, startGoogle, pushNow, fetchAccount, hasGoogle } from '../core/sync.js';
+import { sync, onSyncState, startGoogle, signOut, pushNow, fetchAccount, hasGoogle } from '../core/sync.js';
 
 const FALLBACK_RECITERS = [{ id: 'Alafasy_128kbps', name: 'مشاري العفاسي' }];
 const PREVIEW = 'بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ';
@@ -75,8 +75,8 @@ export default {
         <div class="card mt"><div class="section-title">المزامنة والحساب</div>
           <p class="muted small" id="sy-acc">جارٍ التحقق من الحساب…</p>
           <p class="muted small" id="sy-state"></p>
-          <div class="row"><button class="btn sm" id="sy-link">ربط حسابي بجوجل</button><button class="btn sm ghost" id="sy-restore">استعادة تقدمي من جوجل</button><button class="btn sm ghost" id="sy-now">احفظ الآن</button></div>
-          <p class="muted small mt">يُحفظ تقدمك وأذكارك وتلاوتك في حسابك. إن حذفت التطبيق ثم استعدته، سجّل بحساب جوجل المربوط واستعد تقدمك، وتبدأ من موضعك الأخير في التسميع.</p></div>
+          <div class="row"><button class="btn sm" id="sy-link">سجّل الدخول بحساب Google</button><button class="btn sm ghost" id="sy-now">احفظ الآن</button></div>
+          <p class="muted small mt">الضيف يحفظ تقدمه على هذا الجهاز فقط. سجّل الدخول بحساب Google ليُحفظ تقدمك دائماً، ويرجع إليك بعد حذف التطبيق وإعادة تثبيته.</p></div>
 
         <div class="card mt"><div class="section-title">القراءة</div>
           <div class="field"><label>الهدف اليومي (آيات)</label>
@@ -121,9 +121,16 @@ export default {
       q('#s-name').oninput = e => { S.profile.name = e.target.value.trim(); save(); };
       const setGoal = v => { const g = Math.max(1, Math.min(200, v)); updateSettings({ goal: g }); q('#g-val').textContent = N(g); };
       q('#sy-state').textContent = syText();
-    fetchAccount().then(u => { const e = q('#sy-acc'); if (e) e.textContent = hasGoogle(u) ? 'مرتبط بجوجل' + (u.email ? ': ' + u.email : '') : 'غير مرتبط بجوجل بعد — اربطه لتستعيد تقدمك لاحقاً'; }).catch(() => { const e = q('#sy-acc'); if (e) e.textContent = 'تعذّر التحقق من الحساب الآن'; });
-    q('#sy-link').onclick = () => startGoogle('link').catch(e => toast(e && (e.status === 400 || e.status === 422) ? 'هذا الحساب مرتبط بتقدّم آخر — استخدم «استعادة تقدمي من جوجل»' : 'تعذّر بدء الربط، تحقق من الإنترنت'));
-    q('#sy-restore').onclick = () => startGoogle('restore').catch(() => toast('تعذّر فتح تسجيل جوجل'));
+    let isG = false;
+    fetchAccount().then(u => {
+      isG = hasGoogle(u);
+      const e = q('#sy-acc'); if (e) e.textContent = isG ? 'مسجّل بحساب Google' + (u.email ? ': ' + u.email : '') + ' — تقدمك محفوظ دائماً' : 'ضيف — تقدمك محفوظ على هذا الجهاز فقط';
+      const b = q('#sy-link'); if (b) b.textContent = isG ? 'تسجيل الخروج' : 'سجّل الدخول بحساب Google';
+    }).catch(() => { const e = q('#sy-acc'); if (e) e.textContent = 'تعذّر التحقق من الحساب الآن'; });
+    q('#sy-link').onclick = () => {
+      if (isG) { signOut(); toast('تم تسجيل الخروج — أنت ضيف الآن'); draw(); return; }
+      startGoogle().catch(() => toast('تعذّر فتح تسجيل جوجل، تحقق من الإنترنت'));
+    };
     q('#sy-now').onclick = () => { toast('جارٍ الحفظ…'); pushNow().then(() => toast(sync.state === 'ok' ? 'تم الحفظ ✓' : 'لم يُحفظ الآن، سنعيد المحاولة')); };
     q('#g-minus').onclick = () => setGoal(S.settings.goal - 1);
       q('#g-plus').onclick = () => setGoal(S.settings.goal + 1);

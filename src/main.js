@@ -19,9 +19,10 @@ import './styles/kids.css';
 import './styles/prayer.css';
 import './styles/hifz.css';
 import { S, on } from './core/store.js';
-import { icon, celebrate, toast } from './ui.js';
+import { icon, celebrate, toast, keepFocusVisible } from './ui.js';
 import { loadQuran } from './core/quran.js';
 import { initSync, initNativeReturn } from './core/sync.js';
+import { showWelcome } from './core/welcome.js';
 
 const ROUTES = {
   home: () => import('./views/home.js'),
@@ -105,9 +106,11 @@ function init() {
   loadQuran().catch(() => toast('تعذر تحميل نص المصحف'));
   initSync(toast);
   initNativeReturn(toast).catch(() => {});
+  keepFocusVisible();
   route();
   const openWidgetRoute = () => import('./core/widget.js').then(w => w.consumeWidgetRoute()).then(r => { if (r === 'prayer') go('prayer'); }).catch(() => {});
   openWidgetRoute();
+  showWelcome();
   // Native extras: status bar + reschedule prayer alerts on launch
   import('./core/platform.js').then(async ({ isNative }) => {
     if (!isNative()) return;

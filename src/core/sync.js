@@ -1,14 +1,14 @@
-// Progress sync with the signed-in account (table noor_progress, RLS: a user reads and writes only their own row).
-// The app keeps working offline: changes are pushed a few seconds after they happen. Google links the account, so a
-// reinstall can sign back in and restore the progress. On the web the round trip returns to the page; in the app it
-// opens the system browser and comes back through the noor://auth link (AndroidManifest, scripts/patch-android.mjs).
+// Progress sync with the account (table noor_progress, RLS: a user reads and writes only their own row).
+// Two kinds of account: a guest (an anonymous account kept on this device) and a Google account, which keeps the progress
+// for good, also after a reinstall. Changes are pushed a few seconds after they happen, and the app works offline.
+// The Google round trip returns to the page on the web, and through the noor://auth link in the app.
 import { S, save, on } from './store.js';
 import { SUPABASE_URL, ANON_KEY, ensureSession, setSession } from './cloud.js';
-import { makeSnapshot, readSnapshot, parseAuthFragment } from './sync-core.js';
+import { makeSnapshot, readSnapshot, parseAuthFragment, progressScore } from './sync-core.js';
 import { isNative } from './platform.js';
 
 const POS_KEY = 'noor.recite.lastpos';          // same key as the recitation view
-const MODE_KEY = 'noor.sync.mode';              // 'link' | 'restore' while the Google round trip is out
+const MODE_KEY = 'noor.sync.mode';              // 'signin' while the Google round trip is out
 const ROW = SUPABASE_URL + '/rest/v1/noor_progress';
 const NATIVE_RETURN = 'noor://auth';
 
@@ -77,7 +77,7 @@ export function applyRemote(row) {
   return true;
 }
 
-/** The account's identities (Google linked or not). */
+/** The account (its email and identities). */
 export async function fetchAccount() {
   const token = await ensureSession();
   const r = await fetch(SUPABASE_URL + '/auth/v1/user', { headers: headers(token) });
@@ -89,21 +89,12 @@ export const hasGoogle = user => !!(user && Array.isArray(user.identities) && us
 const returnUrl = () => (isNative() ? NATIVE_RETURN : location.origin + location.pathname);
 
 /**
- * Start the Google round trip. 'link': attach Google to this account (its progress stays). 'restore': sign in to the
- * account that was saved with Google earlier (use it on a reinstall). The round trip returns with the tokens.
+ * Sign in with Google. The browser opens Google's page; the round trip comes back with the tokens of the Google account.
+ * The guest progress on this device is not lost: afterSignIn keeps whichever of the two has more progress.
  */
-export async function startGoogle(mode) {
-  try { sessionStorage.setItem(MODE_KEY, mode); } catch (e) { /* ignore */ }
-  const redirect = encodeURIComponent(returnUrl());
-  let url;
-  if (mode === 'link') {
-    const token = await ensureSession();
-    const r = await fetch(`${SUPABASE_URL}/auth/v1/user/identities/authorize?provider=google&redirect_to=${redirect}&skip_http_redirect=true`, { headers: headers(token) });
-    if (!r.ok) throw httpError('link', r);
-    url = (await r.json()).url;
-  } else {
-    url = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${redirect}`;
-  }
+export async function startGoogle() {
+  try { sessionStorage.setItem(MODE_KEY, 'signin'); } catch (e) { /* ignore */ }
+  const url = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(returnUrl())}`;
   if (isNative()) {
     const { Browser } = await import('@capacitor/browser');
     await Browser.open({ url });
@@ -112,39 +103,41 @@ export async function startGoogle(mode) {
   location.href = url;
 }
 
-/**
- * Finish a Google round trip from the URL fragment: stores the session and returns 'link' | 'restore' (null when the
- * fragment carries no tokens). The mode was remembered before leaving for Google.
- */
+/** Sign out of the Google account: this device goes back to a guest account (the saved progress stays on the account). */
+export function signOut() {
+  setSession(null);
+  setState('idle');
+}
+
+/** Finish a round trip from the URL fragment: stores the session. Returns true when tokens were found. */
 export function completeAuth(fragment) {
   const tokens = parseAuthFragment(fragment);
-  if (!tokens) return null;
-  let mode = null;
-  try { mode = sessionStorage.getItem(MODE_KEY); sessionStorage.removeItem(MODE_KEY); } catch (e) { /* ignore */ }
+  if (!tokens) return false;
+  try { sessionStorage.removeItem(MODE_KEY); } catch (e) { /* ignore */ }
   setSession({ ...tokens, expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in });
-  return mode === 'restore' ? 'restore' : 'link';
+  return true;
+}
+
+/** After a Google sign-in: the account's progress is restored when it has more than this device's; otherwise this device's
+ *  progress is saved to the account. Both are reported to the reader. */
+async function afterSignIn(toast) {
+  let row;
+  try { row = await fetchRemote(); } catch (e) { toast('تعذّر التحقق من حسابك، سنحفظ تقدمك عند عودة الاتصال'); pushNow(); return; }
+  const remote = row ? readSnapshot(row.data) : null;
+  if (remote && progressScore(remote.state) > progressScore(S)) {
+    if (applyRemote(row)) { toast('تم تسجيل الدخول واستعادة تقدمك من حسابك'); location.reload(); return; }
+  }
+  toast('تم تسجيل الدخول — تقدمك محفوظ في حسابك الآن');
+  pushNow();
 }
 
 /** Web: the tokens come back in the page's URL fragment; the fragment is cleared afterwards. */
-function handleWebReturn() {
+function handleWebReturn(toast) {
   const h = location.hash || '';
-  if (!h.includes('access_token=')) return null;
-  const mode = completeAuth(h);
+  if (!h.includes('access_token=')) return;
+  const ok = completeAuth(h);
   history.replaceState(null, '', location.pathname + '#/home');
-  return mode;
-}
-
-/** After a finished round trip: 'link' saves the progress now; 'restore' replaces the local progress with the account's. */
-function afterReturn(mode, toast) {
-  if (mode === 'link') {
-    toast('تم ربط حسابك بجوجل — تقدّمك محفوظ الآن');
-    pushNow();
-  } else if (mode === 'restore') {
-    fetchRemote().then(row => {
-      if (row && applyRemote(row)) { location.reload(); return; }
-      toast('لا يوجد تقدّم محفوظ لهذا الحساب بعد');
-    }).catch(() => toast('تعذّر استعادة التقدم، تحقق من الإنترنت وحاول مجدداً'));
-  }
+  if (ok) afterSignIn(toast);
 }
 
 /**
@@ -153,7 +146,7 @@ function afterReturn(mode, toast) {
  */
 export function initSync(toast = () => {}) {
   on('change', () => schedule());
-  if (!isNative()) afterReturn(handleWebReturn(), toast);
+  if (!isNative()) handleWebReturn(toast);
 }
 
 /** In the app: a noor://auth link brings the tokens back; the system browser is closed first. */
@@ -165,6 +158,6 @@ export async function initNativeReturn(toast = () => {}) {
     if (!url || !url.startsWith(NATIVE_RETURN)) return;
     Browser.close().catch(() => {});
     const i = url.indexOf('#');
-    afterReturn(completeAuth(i >= 0 ? url.slice(i) : ''), toast);
+    if (completeAuth(i >= 0 ? url.slice(i) : '')) afterSignIn(toast);
   });
 }

@@ -81,3 +81,14 @@ export const ayahMark = n => `<span class="ayah-no">${N(n)}</span>`;
 export function header(title, { back = null, actions = '' } = {}) {
   return `<header class="page-head">${back ? `<button class="icon-btn" data-go="${back}" aria-label="رجوع">${icon('back')}</button>` : ''}<h1 class="page-title">${esc(title)}</h1><div class="head-actions">${actions}</div></header>`;
 }
+
+/**
+ * The on-screen keyboard covers the field being typed in. When a text field takes focus, or the visible area changes
+ * (keyboard shown or hidden), scroll that field into the middle of the screen.
+ */
+export function keepFocusVisible() {
+  const isField = el => !!el && el.matches && el.matches('input:not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable="true"]');
+  const fit = el => setTimeout(() => { try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { /* ignore */ } }, 300);
+  document.addEventListener('focusin', e => { if (isField(e.target)) fit(e.target); });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { if (isField(document.activeElement)) fit(document.activeElement); });
+}
