@@ -44,3 +44,31 @@ export function progressScore(state) {
   const read = state.read ? Object.keys(state.read).length : 0;
   return (Number(state.pts) || 0) + read;
 }
+/** True for the app's return link: noor://auth, optionally followed by # or ?. */
+export function isAuthReturnUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('noor://auth')) return false;
+  const n = url.charAt('noor://auth'.length);
+  return n === '' || n === '#' || n === '?';
+}
+/** The fragment of a return link (from the first #), or ''. */
+export function authFragmentOf(url) {
+  const i = typeof url === 'string' ? url.indexOf('#') : -1;
+  return i >= 0 ? url.slice(i) : '';
+}
+/** A short key of the tokens in a fragment, to ignore the same link when it is delivered twice. Null without a token. */
+export function authReturnId(fragment) {
+  const t = parseAuthFragment(fragment);
+  return t ? t.access_token.slice(-24) : null;
+}
+/** True when the JWT belongs to an anonymous (guest) account; malformed or missing tokens count as anonymous. */
+export function isAnonymousToken(jwt) {
+  try {
+    const seg = String(jwt).split('.')[1];
+    if (!seg) return true;
+    let b = seg.replace(/-/g, '+').replace(/_/g, '/');
+    while (b.length % 4) b += '=';
+    return JSON.parse(atob(b)).is_anonymous === true;
+  } catch (e) { return true; }
+}
+/** The first-launch welcome shows until a choice was made or a Google account is already signed in. */
+export function shouldShowWelcome(flagSet, signedInWithGoogle) { return !flagSet && !signedInWithGoogle; }

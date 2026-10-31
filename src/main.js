@@ -105,12 +105,14 @@ function init() {
   applyTheme();
   loadQuran().catch(() => toast('تعذر تحميل نص المصحف'));
   initSync(toast);
-  initNativeReturn(toast).catch(() => {});
-  keepFocusVisible();
   route();
   const openWidgetRoute = () => import('./core/widget.js').then(w => w.consumeWidgetRoute()).then(r => { if (r === 'prayer') go('prayer'); }).catch(() => {});
   openWidgetRoute();
-  showWelcome();
+  (async () => {
+    await initNativeReturn(toast).catch(() => {});
+    keepFocusVisible();
+    showWelcome();
+  })();
   // Native extras: status bar + reschedule prayer alerts on launch
   import('./core/platform.js').then(async ({ isNative }) => {
     if (!isNative()) return;

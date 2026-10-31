@@ -4,7 +4,7 @@
 // The Google round trip returns to the page on the web, and through the noor://auth link in the app.
 import { S, save, on } from './store.js';
 import { SUPABASE_URL, ANON_KEY, ensureSession, setSession } from './cloud.js';
-import { makeSnapshot, readSnapshot, parseAuthFragment, progressScore } from './sync-core.js';
+import { makeSnapshot, readSnapshot, parseAuthFragment, progressScore, isAuthReturnUrl, authFragmentOf, authReturnId } from './sync-core.js';
 import { isNative } from './platform.js';
 
 const POS_KEY = 'noor.recite.lastpos';          // same key as the recitation view
@@ -115,6 +115,8 @@ export function completeAuth(fragment) {
   if (!tokens) return false;
   try { sessionStorage.removeItem(MODE_KEY); } catch (e) { /* ignore */ }
   setSession({ ...tokens, expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in });
+  try { localStorage.setItem('noor.account.chosen', '1'); } catch (e) { /* ignore */ }
+  try { window.dispatchEvent(new Event('noor:auth-done')); } catch (e) { /* ignore */ }
   return true;
 }
 
@@ -122,7 +124,11 @@ export function completeAuth(fragment) {
  *  progress is saved to the account. Both are reported to the reader. */
 async function afterSignIn(toast) {
   let row;
-  try { row = await fetchRemote(); } catch (e) { toast('تعذّر التحقق من حسابك، سنحفظ تقدمك عند عودة الاتصال'); pushNow(); return; }
+  try { row = await fetchRemote(); } catch (e) {
+    toast('تم تسجيل الدخول، تعذّر جلب تقدمك الآن وسنعيد المحاولة');
+    try { localStorage.setItem('noor.sync.pendingRestore', '1'); } catch (e2) { /* ignore */ }
+    return;
+  }
   const remote = row ? readSnapshot(row.data) : null;
   if (remote && progressScore(remote.state) > progressScore(S)) {
     if (applyRemote(row)) { toast('تم تسجيل الدخول واستعادة تقدمك من حسابك'); location.reload(); return; }
@@ -149,15 +155,27 @@ export function initSync(toast = () => {}) {
   if (!isNative()) handleWebReturn(toast);
 }
 
-/** In the app: a noor://auth link brings the tokens back; the system browser is closed first. */
+/** One return link: ignored when not ours or already handled; an error means the user cancelled. */
+export async function handleNativeUrl(url, toast = () => {}) {
+  if (!isAuthReturnUrl(url)) return;
+  const fragment = authFragmentOf(url);
+  const id = authReturnId(fragment);
+  try {
+    if (id) {
+      if (localStorage.getItem('noor.auth.consumed') === id) return;
+      localStorage.setItem('noor.auth.consumed', id);
+    }
+  } catch (e) { /* ignore */ }
+  try { const { Browser } = await import('@capacitor/browser'); await Browser.close(); } catch (e) { /* ignore */ }
+  if (fragment.includes('error=')) { toast('تم إلغاء تسجيل الدخول بجوجل'); return; }
+  if (completeAuth(fragment)) afterSignIn(toast);
+}
+
+/** In the app: a noor://auth link brings the tokens back (also when it launched the app); the system browser is closed first. */
 export async function initNativeReturn(toast = () => {}) {
   if (!isNative()) return;
   const { App } = await import('@capacitor/app');
-  const { Browser } = await import('@capacitor/browser');
-  App.addListener('appUrlOpen', ({ url }) => {
-    if (!url || !url.startsWith(NATIVE_RETURN)) return;
-    Browser.close().catch(() => {});
-    const i = url.indexOf('#');
-    if (completeAuth(i >= 0 ? url.slice(i) : '')) afterSignIn(toast);
-  });
+  App.addListener('appUrlOpen', ({ url }) => { handleNativeUrl(url, toast); });
+  const l = await App.getLaunchUrl();
+  if (l && l.url) handleNativeUrl(l.url, toast);
 }
