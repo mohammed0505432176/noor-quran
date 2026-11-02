@@ -55,31 +55,30 @@ const icon = (name, cls = '') => `<img class="k-icon ${cls}" src="${BASE}kids/ic
 const iconTile = (name, cls = '') => `<span class="k-ic ${cls}" style="--k:${PASTEL[Math.max(0, ICONS.indexOf(name)) % PASTEL.length]}">${icon(name)}</span>`;
 const art = (name, ic = 'general', cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/img/${name}.webp" alt="" draggable="false" data-fb="${BASE}kids/icons/${esc(ic)}.svg">`;
 // Per-photo framing, checked by eye against each 640x640 source: --pos is the object-position,
-// fit:'contain' shows the whole picture on a blurred copy of itself when no crop keeps the subject (qiyam: head is cut by the
-// source; quiz-star: tip and base are both near the edges). wudu is cropped to hands + faucet so the cut-off face never shows.
+// fit:'contain' shows the whole picture on a blurred copy of itself when no crop keeps the subject (quiz-star: tip and base
+// are both near the edges). Home / quiz-menu tiles only: the prayer steps use the illustrated set below.
 const PHOTOS = {
   'prayer-tile': { icon: 'mosque', pos: '50% 62%' },
   'dua-hands': { icon: 'hands-dua', pos: '50% 45%' },
   'letters-book': { icon: 'quran-book', pos: '50% 75%' },
   'surahs-mosque': { icon: 'mosque', pos: '50% 20%' },
-  'quiz-star': { icon: 'star', fit: 'contain' },
-  wudu: { icon: 'wudu-drop', pos: '50% 60%' },
-  takbir: { icon: 'mosque', pos: '50% 15%' },
-  qiyam: { icon: 'mosque', fit: 'contain' }
+  'quiz-star': { icon: 'star', fit: 'contain' }
 };
+// Prayer steps: one illustrated set (scripts/gen-prayer-art.mjs -> public/kids/steps/<name>.webp + .svg), same boy, same
+// direction, same mosque. Names match PRAYER_STEPS[].img; tests/kids-steps.test.js checks every file exists.
 const STEP_ICON = { wudu: 'wudu-drop', takbir: 'mosque', qiyam: 'mosque', ruku: 'mosque', itidal: 'mosque', sujud: 'mosque', julus: 'mosque', salam: 'star' };
 // Every picture sits in a .k-ph frame: shimmer skeleton behind it while loading, and a tile with the matching icon when it fails
 const frame = (img, ic, cls = '', style = '') => `<span class="k-ph ${cls}" style="${style}">${img}<span class="k-ph-fb" aria-hidden="true">${icon(ic)}</span></span>`;
-// hand-drawn vector pictures (public/kids/real) for steps that have no photo
-const realArt = (name, cls = '') => frame(`<img class="k-art k-fb ${cls}" src="${BASE}kids/real/${esc(name)}.svg" alt="" draggable="false">`, STEP_ICON[name] || 'general', 'k-ph-contain');
-// photographs (public/kids/photo); a missing photo falls back to the vector set, then to the icon tile
+// webp -> svg of the same picture -> icon tile. object-fit: contain on a matching background: the figure is never cropped.
+const stepArt = (name, cls = '') => frame(`<img class="k-art k-step ${cls}" src="${BASE}kids/steps/${esc(name)}.webp" alt="" draggable="false" decoding="async" data-fb="${BASE}kids/steps/${esc(name)}.svg">`, STEP_ICON[name] || 'mosque', 'k-ph-contain k-ph-step');
+// photographs (public/kids/photo) for the home / menu tiles; a missing photo falls back to the vector set, then to the icon tile
 const photoArt = (name, _fb, cls = '') => {
   const p = PHOTOS[name];
-  if (!p) return realArt(name, cls);
+  if (!p) return stepArt(name, cls);
   const src = `${BASE}kids/photo/${name}.webp`;
   return frame(`<img class="k-art k-photo ${cls}" src="${src}" alt="" draggable="false" decoding="async" loading="lazy" data-fb="${BASE}kids/real/${name}.svg">`, p.icon, p.fit === 'contain' ? 'k-ph-contain' : '', `--pos:${p.pos || '50% 50%'};--bg:url('${new URL(src, document.baseURI).href}')`);
 };
-const prayerArt = (name, fb, cls = '') => photoArt(name, fb, cls);
+const prayerArt = (name, _fb, cls = '') => stepArt(name, cls);
 // CSP forbids inline handlers: delegated capture listeners on the view root.
 // photo -> vector fallback -> icon tile (the frame never collapses and never touches the text next to it)
 const onImgErr = e => {
