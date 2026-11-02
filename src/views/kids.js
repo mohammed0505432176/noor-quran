@@ -6,11 +6,13 @@ import { KIDS_AZKAR, AZKAR_CREDIT } from '../data/kids-azkar.js';
 import { LETTERS } from '../data/kids-letters.js';
 import { PRAYER_STEPS, FATIHA_AYAT, ayahUrl } from '../data/kids-prayer.js';
 import { KIDS_SURAHS, TEACHER, teacherUrl } from '../data/kids-surahs.js';
+import { iconFor, ICONS } from '../data/kids-icons.js';
 
 const BASE = import.meta.env.BASE_URL;
 const KEY = 'noor.kids';
-const BADGES = [[5, 'نجمة صغيرة', '1f31f'], [15, 'بطل الأذكار', '1f3c6'], [30, 'حافظ صغير', '1f4d6'], [60, 'نور الأطفال', '2b50']];
-const PASTEL = ['#ffb4a2', '#ffd27d', '#b8e0a0', '#9fd8e8', '#c9b6f2', '#f5a9d0', '#a8d5ba'];
+const BADGES = [[5, 'نجمة صغيرة', 'star'], [15, 'بطل الأذكار', 'shield'], [30, 'حافظ صغير', 'quran-book'], [60, 'نور الأطفال', 'lantern']];
+// one calm 4-colour tile palette (teal / cream / sky / blush) shared by every tile, card and row
+const PASTEL = ['#d7eee8', '#fff0c9', '#dcebf4', '#f6e3df'];
 const reduced = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } };
 
 // ---------- storage / rewards ----------
@@ -36,7 +38,7 @@ function addStars(n, key) {
   for (const [need, name, em] of BADGES) {
     if (K.stars >= need && !K.badges.includes(need)) {
       K.badges.push(need);
-      setTimeout(() => { celebrate(emo(em, 'k-emo-lg'), 'وسام جديد: ' + name, 'أحسنت يا بطل!'); }, 600);
+      setTimeout(() => { celebrate(icon(em, 'k-icon-lg'), 'وسام جديد: ' + name, 'أحسنت يا بطل!'); }, 600);
       toast('وسام جديد: ' + name);
     }
   }
@@ -45,16 +47,51 @@ function addStars(n, key) {
 }
 
 // ---------- html helpers ----------
+// emoji svgs are kept ONLY for the letter-word pictures (the teaching content), never as decoration
 const emo = (code, cls = '') => `<img class="k-emo ${cls}" src="${BASE}kids/emoji/${esc(code)}.svg" alt="" draggable="false">`;
-const art = (name, fb, cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/img/${name}.webp" alt="" draggable="false" data-fb="${BASE}kids/emoji/${fb}.svg">`;
-// CSP forbids inline handlers: swap a missing 3D image for its emoji once, then hide it
-const onImgErr = e => { const i = e.target; if (!i || i.tagName !== 'IMG' || !(i.classList.contains('k-art') || i.classList.contains('k-emo'))) return; if (i.dataset.fb) { const f = i.dataset.fb; delete i.dataset.fb; i.classList.add('k-fb'); i.src = f; } else i.style.visibility = 'hidden'; };
-// hand-drawn realistic-style SVGs (public/kids/real); the emoji fallback still applies if one is missing
-const realArt = (name, fb, cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/real/${name}.svg" alt="" draggable="false" data-fb="${BASE}kids/emoji/${fb}.svg">`;
-// photographs (public/kids/photo, produced with Canva); a missing photo falls back to the vector set, then to the emoji
-const photoArt = (name, fb, cls = '') => `<img class="k-art k-photo ${cls}" src="${BASE}kids/photo/${name}.webp" alt="" draggable="false" loading="lazy" data-fb="${BASE}kids/real/${name}.svg">`;
+/** Unified duotone icon (public/kids/icons). */
+const icon = (name, cls = '') => `<img class="k-icon ${cls}" src="${BASE}kids/icons/${esc(name)}.svg" alt="" draggable="false">`;
+/** Icon inside a rounded tile whose colour comes from the shared 4-colour palette. */
+const iconTile = (name, cls = '') => `<span class="k-ic ${cls}" style="--k:${PASTEL[Math.max(0, ICONS.indexOf(name)) % PASTEL.length]}">${icon(name)}</span>`;
+const art = (name, ic = 'general', cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/img/${name}.webp" alt="" draggable="false" data-fb="${BASE}kids/icons/${esc(ic)}.svg">`;
+// Per-photo framing, checked by eye against each 640x640 source: --pos is the object-position,
+// fit:'contain' shows the whole picture on a blurred copy of itself when no crop keeps the subject (qiyam: head is cut by the
+// source; quiz-star: tip and base are both near the edges). wudu is cropped to hands + faucet so the cut-off face never shows.
+const PHOTOS = {
+  'prayer-tile': { icon: 'mosque', pos: '50% 62%' },
+  'dua-hands': { icon: 'hands-dua', pos: '50% 45%' },
+  'letters-book': { icon: 'quran-book', pos: '50% 75%' },
+  'surahs-mosque': { icon: 'mosque', pos: '50% 20%' },
+  'quiz-star': { icon: 'star', fit: 'contain' },
+  wudu: { icon: 'wudu-drop', pos: '50% 60%' },
+  takbir: { icon: 'mosque', pos: '50% 15%' },
+  qiyam: { icon: 'mosque', fit: 'contain' }
+};
+const STEP_ICON = { wudu: 'wudu-drop', takbir: 'mosque', qiyam: 'mosque', ruku: 'mosque', itidal: 'mosque', sujud: 'mosque', julus: 'mosque', salam: 'star' };
+// Every picture sits in a .k-ph frame: shimmer skeleton behind it while loading, and a tile with the matching icon when it fails
+const frame = (img, ic, cls = '', style = '') => `<span class="k-ph ${cls}" style="${style}">${img}<span class="k-ph-fb" aria-hidden="true">${icon(ic)}</span></span>`;
+// hand-drawn vector pictures (public/kids/real) for steps that have no photo
+const realArt = (name, cls = '') => frame(`<img class="k-art k-fb ${cls}" src="${BASE}kids/real/${esc(name)}.svg" alt="" draggable="false">`, STEP_ICON[name] || 'general', 'k-ph-contain');
+// photographs (public/kids/photo); a missing photo falls back to the vector set, then to the icon tile
+const photoArt = (name, _fb, cls = '') => {
+  const p = PHOTOS[name];
+  if (!p) return realArt(name, cls);
+  const src = `${BASE}kids/photo/${name}.webp`;
+  return frame(`<img class="k-art k-photo ${cls}" src="${src}" alt="" draggable="false" decoding="async" loading="lazy" data-fb="${BASE}kids/real/${name}.svg">`, p.icon, p.fit === 'contain' ? 'k-ph-contain' : '', `--pos:${p.pos || '50% 50%'};--bg:url('${new URL(src, document.baseURI).href}')`);
+};
 const prayerArt = (name, fb, cls = '') => photoArt(name, fb, cls);
-const pill = () => `<span class="k-pill">${emo('2b50')}<b>${N(K.stars)}</b></span>`;
+// CSP forbids inline handlers: delegated capture listeners on the view root.
+// photo -> vector fallback -> icon tile (the frame never collapses and never touches the text next to it)
+const onImgErr = e => {
+  const i = e.target; if (!i || i.tagName !== 'IMG') return;
+  const ph = i.closest('.k-ph');
+  if (i.dataset.fb) { const f = i.dataset.fb; delete i.dataset.fb; i.classList.add('k-fb'); if (ph) ph.classList.add('k-ph-contain'); i.src = f; return; }
+  if (ph) { ph.classList.remove('k-ph-ready'); ph.classList.add('k-ph-fail'); return; }
+  if (i.classList.contains('k-icon') && !i.dataset.gen) { i.dataset.gen = '1'; i.src = `${BASE}kids/icons/general.svg`; return; }
+  i.style.visibility = 'hidden';
+};
+const onImgLoad = e => { const i = e.target; if (i && i.tagName === 'IMG') { const ph = i.closest('.k-ph'); if (ph) { ph.classList.remove('k-ph-fail'); ph.classList.add('k-ph-ready'); } } };
+const pill = () => `<span class="k-pill">${icon('star', 'k-ico-s')}<b>${N(K.stars)}</b></span>`;
 const shuffle = a => { const r = [...a]; for (let i = r.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [r[i], r[j]] = [r[j], r[i]]; } return r; };
 const short = (t, n = 6) => { const w = String(t).split(/\s+/); return w.length > n ? w.slice(0, n).join(' ') + '…' : w.join(' '); };
 const todayKey = () => dateKey();
@@ -102,22 +139,22 @@ const bars = '<span class="k-bars" aria-hidden="true"><i></i><i></i><i></i><i></
 // ---------- home ----------
 function home(el) {
   const tiles = [
-    ['prayer', 'صلاتي', photoArt('prayer-tile', '1f54c'), 'k-t5 k-wide'],
-    ['azkar', 'أذكاري', photoArt('dua-hands', '1f932'), 'k-t1'],
-    ['letters', 'حروفي', photoArt('letters-book', '1f4d6'), 'k-t2'],
-    ['quran', 'سوري القصيرة', photoArt('surahs-mosque', '1f54c'), 'k-t3'],
-    ['quiz', 'لعبة الأسئلة', photoArt('quiz-star', '2b50'), 'k-t4']
+    ['prayer', 'صلاتي', photoArt('prayer-tile'), 'k-t5 k-wide'],
+    ['azkar', 'أذكاري', photoArt('dua-hands'), 'k-t1'],
+    ['letters', 'حروفي', photoArt('letters-book'), 'k-t2'],
+    ['quran', 'سوري القصيرة', photoArt('surahs-mosque'), 'k-t3'],
+    ['quiz', 'لعبة الأسئلة', photoArt('quiz-star'), 'k-t4']
   ];
   el.innerHTML = `<div class="kids">${header('ركن الأطفال', { back: 'more', actions: pill() })}
     <section class="k-hero">
-      <div class="k-mascot">${art('mascot', '1f319', 'k-bounce')}</div>
+      <div class="k-mascot">${art('mascot', 'moon', 'k-bounce')}</div>
       <div class="k-hello"><h2>أهلًا يا بطل!</h2><p>تعلّم، استمع، واجمع النجوم</p></div>
     </section>
     <div class="k-grid">${tiles.map(([r, t, im, c]) => `<button class="k-tile ${c}" data-go="kids/${r}"><span class="k-tile-art">${im}</span><b>${t}</b></button>`).join('')}</div>
     <h3 class="k-h">أوسمتي</h3>
     <div class="k-badges">${BADGES.map(([need, name, em]) => {
     const got = K.badges.includes(need);
-    return `<div class="k-badge ${got ? 'on' : ''}">${emo(em, 'k-emo-lg')}<b>${esc(name)}</b><small>${got ? 'حصلت عليه' : N(need) + ' نجمة'}</small></div>`;
+    return `<div class="k-badge ${got ? 'on' : ''}">${iconTile(em, 'k-ic-md')}<b>${esc(name)}</b><small>${got ? 'حصلت عليه' : N(need) + ' نجمة'}</small></div>`;
   }).join('')}</div></div>`;
 }
 
@@ -127,10 +164,10 @@ function azkarIndex(el) {
     ${[['hisn', 'من حصن المسلم'], ['quran', 'من القرآن الكريم']].map(([kind, label]) => `
     <h3 class="k-h">${label}</h3>
     <div class="k-grid k-grid-sm">${KIDS_AZKAR.map((c, i) => [c, i]).filter(([c]) => (c.kind || 'hisn') === kind).map(([c, i]) => `
-      <button class="k-card" style="--k:${PASTEL[i % PASTEL.length]}" data-go="kids/azkar/${esc(c.id)}">
+      <button class="k-card" data-go="kids/azkar/${esc(c.id)}">
         ${catDone(c) ? `<span class="k-ribbon">✓</span>` : ''}
-        <span class="k-card-art">${emo(c.emoji, 'k-emo-xl')}</span>
-        <b>${esc(c.title)}</b><small>${esc(c.when)}</small></button>`).join('')}</div>`).join('')}
+        ${iconTile(iconFor(c), 'k-ic-card')}
+        <span class="k-card-band"><b>${esc(c.title)}</b><small>${esc(c.when)}</small></span></button>`).join('')}</div>`).join('')}
     <p class="k-credit">${esc(AZKAR_CREDIT)}</p></div>`;
 }
 
@@ -202,7 +239,7 @@ async function azkarDetail(el, ctx, id) {
     const dots = cat.items.map((_, j) => `<i class="${j === i ? 'on' : ''} ${K.done[`az:${cat.id}:${j}:${todayKey()}`] ? 'ok' : ''}"></i>`).join('');
     el.innerHTML = `<div class="kids">${header(cat.title, { back: 'kids/azkar', actions: pill() })}
       <div class="k-dua" style="--k:${PASTEL[KIDS_AZKAR.indexOf(cat) % PASTEL.length]}">
-        <div class="k-dua-top">${emo(cat.emoji, 'k-emo-xl')}<span>${esc(cat.when)}</span></div>
+        <div class="k-dua-top">${iconTile(iconFor(cat), 'k-ic-lg')}<span class="k-dua-when">${esc(cat.when)}</span></div>
         <p class="k-text">${esc(itemText(it))}</p>
         ${itemRef(it) ? `<small class="k-ref">${esc(itemRef(it))}</small>` : ''}
         <div class="k-player">
@@ -210,7 +247,7 @@ async function azkarDetail(el, ctx, id) {
         </div>
         <div id="k-count" class="k-count" aria-live="polite"></div>
         <label class="k-toggle"><input type="checkbox" id="k-loop" ${loops ? 'checked' : ''}><span>كرّرها معي</span></label>
-        <div id="k-done" class="k-done" ${K.done[key()] ? '' : 'hidden'}>${emo('2b50')} أحسنت! أخذت نجمة اليوم</div>
+        <div id="k-done" class="k-done" ${K.done[key()] ? '' : 'hidden'}>${icon('star', 'k-ico-s')} أحسنت! أخذت نجمة اليوم</div>
       </div>
       <div class="k-nav">
         <button class="k-nbtn" id="k-prev" ${i === 0 ? 'disabled' : ''}>السابق</button>
@@ -251,7 +288,7 @@ function letters(el, ctx) {
     sh = sheet(`<div class="k-sheet" style="--k:${PASTEL[i % PASTEL.length]}">
       <div class="k-big">${esc(l.ch)}</div><div class="k-lname">${esc(l.name)}</div>
       <div class="k-forms">${(l.forms || []).map((f, j) => `<div><span>${esc(f)}</span><small>${labels[j] || ''}</small></div>`).join('')}</div>
-      <div class="k-word">${emo(l.emoji, 'k-emo-xl')}<b>${esc(l.word)}</b></div>
+      <div class="k-word"><span class="k-ic k-ic-md k-word-pic">${emo(l.emoji, 'k-emo-xl')}</span><b>${esc(l.word)}</b></div>
       <button class="k-play wide" id="k-lplay"><span class="k-ico">▶</span>${bars}<em>استمع</em></button></div>`, { onClose: () => { ctx.stop(); sh = null; } });
     const b = sh.querySelector('#k-lplay');
     b.onclick = () => playL(l, b);
@@ -325,7 +362,7 @@ async function quranDetail(el, ctx, sid, alive) {
           if (my !== token) return;
           const left = Math.ceil((end - Date.now()) / 1000);
           if (left <= 0) { $turn.hidden = true; next(); return; }
-          $turn.textContent = `دورك الآن 🎤 ${N(left)}`;
+          $turn.textContent = `دورك الآن ${N(left)}`;
           ctx.t(tick, 250);
         };
         tick();
@@ -389,10 +426,10 @@ function prayer(el, ctx) {
     const got = addStars(1, doneKey());
     confetti();
     el.innerHTML = `<div class="kids">${header('صلاتي', { back: 'kids', actions: pill() })}
-      <div class="k-dua center k-pr-end"><div class="k-end-art">${prayerArt('salam', '1f31f', 'k-pr-img')}</div>
-        <h2 class="k-end-t">أحسنت! ${emo('1f31f')}</h2>
+      <div class="k-dua center k-pr-end"><div class="k-end-art">${prayerArt('salam', '', 'k-pr-img')}</div>
+        <h2 class="k-end-t">أحسنت!</h2>
         <p class="k-sub">أنهيت خطوات الصلاة كلها</p>
-        <div class="k-earn">${emo('2b50')} ${got ? '+' + N(1) + ' نجمة' : 'أخذت نجمة اليوم'}</div>
+        <div class="k-earn">${icon('star', 'k-ico-s')} ${got ? '+' + N(1) + ' نجمة' : 'أخذت نجمة اليوم'}</div>
         <button class="btn block mt" id="k-again">ابدأ من جديد</button>
         <button class="btn block mt" data-go="kids/quiz/prayer">العب: رتّب الصلاة</button></div></div>`;
     el.querySelector('#k-again').onclick = () => { i = 0; draw(); };
@@ -424,7 +461,7 @@ function prayer(el, ctx) {
     el.innerHTML = `<div class="kids">${header('صلاتي', { back: 'kids', actions: pill() })}
       <div class="k-pr-stage" id="k-stage">
         <div class="k-pr-badge">الخطوة ${N(i + 1)} من ${N(n)}</div>
-        <div class="k-pr-art">${prayerArt(st.img, '1f54c', 'k-pr-img')}</div>
+        <div class="k-pr-art">${prayerArt(st.img, '', 'k-pr-img')}</div>
       </div>
       <h2 class="k-pr-title">${esc(st.title)}</h2>
       <p class="k-pr-desc">${esc(st.desc)}</p>
@@ -467,7 +504,7 @@ function prayerQuiz(el, ctx) {
     el.innerHTML = `<div class="kids">${header('رتّب الصلاة', { back: 'kids/quiz', actions: pill() })}
       <div class="k-q-prog">${order.map((_, j) => `<i data-p="${j}"></i>`).join('')}</div>
       <p class="k-sub">اضغط الصور بترتيب الصلاة، من الأولى إلى الأخيرة</p>
-      <div class="k-pr-quiz">${opts.map((p, j) => `<button class="k-pq" data-p="${p}" style="--k:${PASTEL[j]}"><span class="k-pq-n"></span>${prayerArt(p, '1f54c')}<small>${LBL[p]}</small></button>`).join('')}</div></div>`;
+      <div class="k-pr-quiz">${opts.map((p, j) => `<button class="k-pq" data-p="${p}" style="--k:${PASTEL[j]}">${prayerArt(p)}<span class="k-pq-foot"><span class="k-pq-n"></span><small>${LBL[p]}</small></span></button>`).join('')}</div></div>`;
     el.querySelectorAll('.k-pq').forEach(b => { b.onclick = () => pick1(b); });
   }
   function pick1(b) {
@@ -484,10 +521,10 @@ function prayerQuiz(el, ctx) {
     confetti();
     ctx.t(() => {
       el.innerHTML = `<div class="kids">${header('النتيجة', { back: 'kids/quiz', actions: pill() })}
-        <div class="k-dua center"><div class="k-end-art">${emo('1f3c6', 'k-emo-xxl k-bounce')}</div>
-          <h2 class="k-end-t">أحسنت! ${emo('1f31f')}</h2>
+        <div class="k-dua center"><div class="k-end-art">${iconTile('star', 'k-ic-xl k-bounce')}</div>
+          <h2 class="k-end-t">أحسنت!</h2>
           <p class="k-sub">رتّبت الصلاة صح</p>
-          <div class="k-earn">${emo('2b50')} ${got ? '+' + N(2) + ' نجمة' : 'أخذت نجومك اليوم'}</div>
+          <div class="k-earn">${icon('star', 'k-ico-s')} ${got ? '+' + N(2) + ' نجمة' : 'أخذت نجومك اليوم'}</div>
           <button class="btn block mt" id="k-again">العب مرة أخرى</button></div></div>`;
       el.querySelector('#k-again').onclick = build;
     }, 900);
@@ -499,9 +536,9 @@ function prayerQuiz(el, ctx) {
 function quizMenu(el) {
   el.innerHTML = `<div class="kids">${header('لعبة الأسئلة', { back: 'kids', actions: pill() })}
     <div class="k-grid">
-      <button class="k-tile k-t1" data-go="kids/quiz/dua"><span class="k-tile-art">${emo('1f932', 'k-emo-xl')}</span><b>ماذا نقول عند…؟</b></button>
-      <button class="k-tile k-t3" data-go="kids/quiz/prayer"><span class="k-tile-art">${prayerArt('sujud', '1f54c')}</span><b>رتّب الصلاة</b></button>
-      <button class="k-tile k-t2" data-go="kids/quiz/letters"><span class="k-tile-art">${emo('1f4d6', 'k-emo-xl')}</span><b>اسمع واختر الحرف</b></button>
+      <button class="k-tile k-t1" data-go="kids/quiz/dua"><span class="k-tile-art">${photoArt('dua-hands')}</span><b>ماذا نقول عند…؟</b></button>
+      <button class="k-tile k-t3" data-go="kids/quiz/prayer"><span class="k-tile-art">${prayerArt('takbir')}</span><b>رتّب الصلاة</b></button>
+      <button class="k-tile k-t2" data-go="kids/quiz/letters"><span class="k-tile-art">${photoArt('letters-book')}</span><b>اسمع واختر الحرف</b></button>
     </div></div>`;
 }
 
@@ -544,7 +581,7 @@ function quiz(el, ctx, kind) {
       ctx.t(() => speak(q.l, b), 250);
     } else {
       el.innerHTML = `<div class="kids">${head}
-        <div class="k-dua" style="--k:${PASTEL[qi % PASTEL.length]}"><div class="k-dua-top col">${emo(q.c.emoji, 'k-emo-xxl')}<span>${esc(q.c.when)}</span></div><div class="k-q-say">ماذا نقول؟</div></div>
+        <div class="k-dua" style="--k:${PASTEL[qi % PASTEL.length]}"><div class="k-dua-top col">${iconTile(iconFor(q.c), 'k-ic-xl')}<span>${esc(q.c.when)}</span></div><div class="k-q-say">ماذا نقول؟</div></div>
         <div class="k-ans">${q.opts.map((o, j) => `<button class="k-a txt" data-j="${j}"><span>${esc(short(o.items[0].text))}</span></button>`).join('')}</div></div>`;
     }
     el.querySelectorAll('.k-a').forEach(b => { b.onclick = () => answer(b); });
@@ -564,10 +601,10 @@ function quiz(el, ctx, kind) {
     }
     if (score === ROUNDS) confetti();
     el.innerHTML = `<div class="kids">${header('النتيجة', { back: 'kids/quiz', actions: pill() })}
-      <div class="k-dua center"><div class="k-end-art">${emo(score === ROUNDS ? '1f3c6' : '1f31f', 'k-emo-xxl k-bounce')}</div>
+      <div class="k-dua center"><div class="k-end-art">${iconTile(score === ROUNDS ? 'star' : 'lantern', 'k-ic-xl k-bounce')}</div>
         <h2 class="k-end-t">${score === ROUNDS ? 'ممتاز يا بطل!' : score >= 3 ? 'أحسنت!' : 'حاول مرة أخرى'}</h2>
         <p class="k-sub">أجبت ${N(score)} من ${N(ROUNDS)} بشكل صحيح</p>
-        <div class="k-earn">${emo('2b50')} +${N(earn)} نجمة</div>
+        <div class="k-earn">${icon('star', 'k-ico-s')} +${N(earn)} نجمة</div>
         <button class="btn block mt" id="k-again">العب مرة أخرى</button></div></div>`;
     el.querySelector('#k-again').onclick = () => { build(); question(); };
   }
@@ -583,6 +620,7 @@ export default {
     const isAlive = () => alive && location.hash === h;
     let extra = null;
     el.addEventListener('error', onImgErr, true);
+    el.addEventListener('load', onImgLoad, true);
     const onAdhan = e => { if (e.detail && e.detail.on) ctx.stop(); };
     window.addEventListener('noor:adhan', onAdhan);
     const { sub, arg } = subRoute();
@@ -592,6 +630,6 @@ export default {
     else if (sub === 'prayer') prayer(el, ctx);
     else if (sub === 'quiz') { if (arg === 'prayer') prayerQuiz(el, ctx); else if (arg === 'dua' || arg === 'letters') quiz(el, ctx, arg); else quizMenu(el); }
     else home(el);
-    return () => { alive = false; el.removeEventListener('error', onImgErr, true); window.removeEventListener('noor:adhan', onAdhan); if (typeof extra === 'function') extra(); ctx.destroy(); };
+    return () => { alive = false; el.removeEventListener('error', onImgErr, true); el.removeEventListener('load', onImgLoad, true); window.removeEventListener('noor:adhan', onAdhan); if (typeof extra === 'function') extra(); ctx.destroy(); };
   }
 };

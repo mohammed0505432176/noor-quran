@@ -47,10 +47,6 @@
 }
 @keyframes rc-busy { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
-/* font size control in the session header */
-.rc-fsbtn { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; line-height: 1; }
-.rc-fsbtn small { font-family: var(--font-ui); font-size: .75em; margin-inline-start: 1px; }
-#rc-fsp { font-size: 1.3rem; }
 
 @media (prefers-reduced-motion: reduce) {
   .rc-page .word.w-ok, .rc-page .word.w-bad, .rc-page .word.w-cur::before, .rc-page.rc-busy .word.w-cur::after { animation: none; }
@@ -58,44 +54,15 @@
 
 /* ---- session layout: controls docked at the bottom, always reachable ---- */
 .rc-sub { text-align: center; margin: -4px 0 8px; }
-.rc-spacer { height: 190px; }
-.rc-dock {
-  position: fixed; left: 10px; right: 10px; bottom: calc(var(--tabbar-h) + var(--safe-b) + 8px); z-index: 440;
-  max-width: 660px; margin: 0 auto; padding: 8px 12px 10px; border-radius: 22px;
-  background: var(--card-2); -webkit-backdrop-filter: blur(22px); backdrop-filter: blur(22px);
-  box-shadow: inset 0 0 0 1px var(--line), var(--shadow);
-}
-.rc-dock-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
-.rc-dock-top .score { font-size: 1.45rem; text-shadow: none; }
-.rc-dock .rc-prog { height: 4px; margin: 4px 0 8px; }
-/* mic status line: icon + text for every state (colour only reinforces) */
-.rc-mstate { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: .85rem; }
-.rc-ms-main { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: color-mix(in srgb, var(--ms, var(--muted)) 14%, transparent); color: var(--ms, var(--muted)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ms, var(--muted)) 40%, transparent); }
-.rc-ms-main .ic { flex: none; }
-.rc-ms-ready { --ms: var(--muted); }
-.rc-ms-listening { --ms: var(--ok); }
-.rc-ms-processing { --ms: var(--gold); }
-.rc-ms-paused { --ms: var(--gold); }
-.rc-ms-permission, .rc-ms-offline { --ms: var(--bad); }
-.rc-ms-detail { flex: 1 1 100%; color: var(--muted); font-size: .8rem; line-height: 1.5; max-height: 6.2em; overflow: auto; }
-.rc-ms-allow { padding: 2px 14px; min-height: 30px; }
-.rc-mstate-free { position: relative; z-index: 2; padding: 2px 14px 0; }
 .rc-hintnote { margin: 0 0 6px; padding: 5px 10px; border-radius: 10px; background: color-mix(in srgb, var(--gold) 14%, transparent); color: var(--ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 40%, transparent); line-height: 1.5; text-align: center; }
 .rc-hintnote[hidden] { display: none; }
-.rd-bottom .rc-hintnote { pointer-events: none; margin-inline: 12px; }
 .rc-report .rc-stats { margin-top: 8px; }
 .rc-mrow.rc-flash { animation: rc-flash 2.2s ease-out; }
 @keyframes rc-flash { 0%, 60% { box-shadow: 0 0 0 3px var(--gold); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .rc-mrow.rc-flash { animation: none; box-shadow: 0 0 0 3px var(--gold); } }
-.rc-dock-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; }
-.rc-dock-row > :first-child { justify-self: start; }
-.rc-dock-row > :last-child { justify-self: end; }
-.rc-mic { --lvl: 0; width: 66px; height: 66px; }
-.rc-mic svg { width: 30px; height: 30px; }
 /* live voice level: the ring grows with your voice */
 .rc-mic.live { box-shadow: 0 0 0 calc(var(--lvl) * 14px) color-mix(in srgb, var(--bad) 28%, transparent), 0 8px 22px rgba(0, 0, 0, .25); transition: box-shadow .09s linear; }
 .rc-okbtn { min-width: 120px; }
-@media (max-width: 360px) { .rc-dock-row .btn.sm { padding-inline: 10px; font-size: .85rem; } }
 
 /* words missed in earlier sessions: faint gold dots under them while reciting */
 .rc-page .word.w-weak.w-pend:not(.w-first) { text-decoration-color: color-mix(in srgb, var(--gold) 60%, transparent); text-decoration-style: dashed; }
@@ -180,38 +147,18 @@
 .rc-fpage .word.f-bad { color: var(--bad); cursor: pointer; }
 .rc-fpage .rc-aend.f-pend { opacity: .25; }
 
-/* sard: the light warning pill, fades out on its own */
-.rc-warn {
-  position: absolute; z-index: 5; transform: translate(-50%, -115%); padding: 3px 12px; border-radius: 999px; pointer-events: none;
-  font-family: var(--font-ui); font-size: .85rem; font-weight: 700; color: var(--bad); white-space: nowrap;
-  background: color-mix(in srgb, var(--bad) 14%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 40%, transparent), var(--shadow);
-  animation: rc-warn 1.5s ease-out both;
-}
-.rc-warn.top { left: 50%; top: 8px; transform: translate(-50%, 0); }
-@keyframes rc-warn { 0% { opacity: 0; } 12% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
 .rc-fsum .rc-stats { margin-top: 8px; }
-@media (prefers-reduced-motion: reduce) { .rc-fwait-ic, .rc-warn { animation: none; } .rc-fpage .mq-w { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .rc-fwait-ic { animation: none; } .rc-fpage .mq-w { transition: none; } }
 .rc-ftools { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin: -2px 0 8px; }
 .rc-txtseg { width: auto; }
 .rc-txtseg button { min-width: 72px; min-height: 36px; }
-.rc-fwrap ~ .rc-dock .rc-mic { width: 80px; height: 80px; min-width: 76px; min-height: 76px; border-radius: 50%; background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: var(--on-gold); box-shadow: 0 0 0 1px var(--line), 0 0 26px var(--gold-glow), 0 8px 22px rgba(0, 0, 0, .25); }
-.rc-fwrap ~ .rc-dock .rc-mic svg { width: 34px; height: 34px; }
-.rc-fwrap ~ .rc-dock .rc-mic.live { background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: var(--on-gold); box-shadow: 0 0 0 calc(var(--lvl) * 14px) color-mix(in srgb, var(--gold) 30%, transparent), 0 0 26px var(--gold-glow), 0 8px 22px rgba(0, 0, 0, .25); }
-.rc-fwrap ~ .rc-dock .rc-mic.live::before, .rc-fwrap ~ .rc-dock .rc-mic.live::after { border-color: var(--gold); animation: ring-pulse 1.8s ease-out infinite; }
-.rc-fwrap ~ .rc-dock .rc-mic.live::after { animation-delay: .9s; }
 /* free-mode polish: centred wrapping chips, gold pill warning, no horizontal overflow at 360px */
 .rc-ftools { max-width: 100%; box-sizing: border-box; text-align: center; }
 .rc-ftools > * { flex: 0 1 auto; max-width: 100%; min-height: 36px; }
 .rc-fhead, .rc-fwrap, .rc-fwait, .rc-fsum { max-width: 100%; min-width: 0; box-sizing: border-box; }
 .rc-fpage { overflow-wrap: anywhere; }
-.rc-warn {
-  max-width: calc(100% - 24px); white-space: normal; text-align: center; line-height: 1.4;
-  color: var(--on-gold); background: var(--gold); box-shadow: var(--shadow-1);
-  transition: opacity var(--dur-2) var(--ease);
-}
 @media (prefers-reduced-motion: reduce) {
-  .rc-fwrap ~ .rc-dock .rc-mic.live::before, .rc-fwrap ~ .rc-dock .rc-mic.live::after { animation: none; opacity: .5; }
-}
+  }
 
 /* ===== trustworthy marks, peeking, controls (T-REC) ===== */
 :root { --rc-amber: #d9930d; --rc-blue: #3b8ee8; }
@@ -244,16 +191,6 @@
 .rc-opt small { color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .rc-opt input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--gold); flex: none; }
 
-/* «pause until I fix it»: the correct word, big, above the dock */
-.rc-fix {
-  position: fixed; left: 12px; right: 12px; bottom: calc(var(--tabbar-h) + var(--safe-b) + 150px); z-index: 450;
-  max-width: 480px; margin: 0 auto; padding: 12px 16px; border-radius: 20px; text-align: center;
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  background: var(--card-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 45%, transparent), var(--shadow);
-  -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
-}
-.rc-fix small { color: var(--muted); }
-.rc-fix b { font-size: 2.4rem; line-height: 1.7; color: var(--ink); }
 
 /* free mode: glyphs shown by «تلميح» */
 .rc-fpage .mq-w.f-pk, .rc-fpage .word.f-pk { color: var(--ink); opacity: 1; background: none; border-radius: 6px; outline: 2px solid color-mix(in srgb, var(--rc-blue) 80%, transparent); outline-offset: 1px; }
@@ -263,10 +200,6 @@
 .rd.rc-rd { --rd-top-h: calc(66px + 38px + var(--safe-t)); }
 .rc-rd .rc-fwrap { max-width: 720px; margin: 0 auto; }
 .rc-rd .rc-fpage { overflow-wrap: normal; }
-.rc-strip { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 2px 14px; }
-.rc-strip .rc-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-.rc-endbtn { flex: 0 0 auto; height: 30px; padding: 0 14px; border-radius: 999px; font-family: var(--font-ui); font-size: .82rem; font-weight: 700; color: var(--on-gold); background: var(--gold); }
-.rc-endbtn:active { transform: scale(.95); }
 .rc-rd .rd-sw { pointer-events: none; }
 
 /* hidden mode: recited words print in ink over the rule lines; medallions stay visible */
@@ -287,15 +220,10 @@
 .rd-fab.live { box-shadow: 0 0 0 calc(var(--lvl, 0) * 14px) rgba(34, 181, 115, .3), 0 8px 22px rgba(20, 137, 90, .5), inset 0 1px 0 rgba(255, 255, 255, .35); }
 .rd-fab.live::before { animation: ring-pulse 1.8s ease-out infinite; }
 .rd-fab.live::after { animation: ring-pulse 1.8s ease-out .9s infinite; }
-body.rd-mode .rc-fix { bottom: calc(var(--safe-b) + 170px); z-index: 740; }
 @media (prefers-reduced-motion: reduce) { .rd-fab.live::before, .rd-fab.live::after { animation: none; opacity: .5; } }
 .rc-rd .rc-fwrap.shown .rc-fpage .mq-w.f-pend { opacity: 1; }
 
 /* page turn controls and the relocation hint (free recitation toolbar) */
-.rc-relock { width: auto; min-width: 74px; height: auto; padding: 6px 8px; flex-direction: column; gap: 2px; }
-.rc-relock span { font-size: 11px; line-height: 1.2; max-width: 84px; text-align: center; }
-.rc-relock.rc-attn { box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 60%, transparent); }
-.rc-auto { font-size: 12px; white-space: nowrap; }
 
 /* ===== T-A: hint menu, position marker, error stop, legend ===== */
 .rc-hint-list { display: grid; gap: 8px; }
@@ -307,15 +235,12 @@ body.rd-mode .rc-fix { bottom: calc(var(--safe-b) + 170px); z-index: 740; }
 .sheet .rc-hintnote { margin-top: 10px; }
 
 /* the stop-at-error card: two actions */
-.rc-fix-row { display: flex; gap: 10px; justify-content: center; margin-top: 4px; }
-.rc-fix { z-index: 760; }
 
 /* «إظهار كل النص» in the fixed range: text appears with colour/opacity only, no line moves */
 .rc-page.rc-showall .word.w-pend { color: var(--ink); opacity: .5; text-decoration: none; }
 
 /* legend: symbols say the same as the colours */
 .rc-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; justify-content: center; margin: 0 0 6px; color: var(--muted); line-height: 1.5; }
-.rd-bottom .rc-legend { margin-inline: 12px; pointer-events: none; font-size: .72rem; }
 .rc-legend .lg-ok { color: var(--ink); }
 .rc-legend .lg-bad { color: var(--bad); text-decoration: underline wavy; text-underline-offset: 3px; }
 .rc-legend .lg-uns { color: var(--rc-amber); text-decoration: underline dotted; text-underline-offset: 3px; }
@@ -336,3 +261,149 @@ body.rd-mode .rc-fix { bottom: calc(var(--safe-b) + 170px); z-index: 740; }
 /* position marker, unsure: the whole ayah in a dashed frame while the place is being located */
 .rc-page .word.w-ayah, .rc-fpage .mq-w.f-ayah, .rc-fpage .word.f-ayah { outline: 1.5px dashed color-mix(in srgb, var(--gold) 80%, transparent); outline-offset: 1px; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) { .rc-fpage .f-cur::after { animation: none; } }
+
+
+/* =====================================================================================================================
+   Recitation screens (fixed range + free): the bar is declutterred. From the page downwards:
+     message strip (hints, errors, helper text; reserved height, never over the verses)
+     recording row (red dot + «جارٍ التسجيل» + timer, pause, stop; stays when the tools are hidden)
+     tools (the mic first; then hint, errors, page navigation)
+   Everything else lives in the gear sheet. Targets are >= 44px; labels are short and never shrink.
+   ===================================================================================================================== */
+.rc-root, .rc-rd { --rc-msg-h: 3.1rem; }
+.rc-msg {
+  position: relative; box-sizing: border-box; flex: 1 0 100%; width: 100%; height: var(--rc-msg-h); display: flex; align-items: center; gap: 8px;
+  padding: 3px 12px; border-radius: 14px; overflow: hidden; pointer-events: auto;
+  font-family: var(--font-ui); font-size: .8rem; line-height: 1.45; color: var(--muted);
+  background: color-mix(in srgb, var(--card-2) 75%, transparent); box-shadow: inset 0 0 0 1px var(--line);
+}
+.rc-msg > .rc-status, .rc-msg > .rc-hintnote, .rc-msg > .rc-msg-detail { flex: 1 1 auto; min-width: 0; max-height: 100%; margin: 0; padding: 0; overflow-y: auto; text-align: start; }
+.rc-msg > .rc-hintnote { background: none; box-shadow: none; border-radius: 0; color: var(--ink); }
+.rc-msg > .rc-msg-detail { color: var(--ink); }
+.rc-msg.has-note > .rc-status, .rc-msg.has-detail > .rc-status { display: none; }
+.rc-msg.has-detail > .rc-hintnote { display: none; }
+.rc-msg.has-detail { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--bad) 55%, transparent); }
+.rc-msg.warn { color: var(--ink); background: color-mix(in srgb, var(--gold) 22%, var(--card-2)); box-shadow: inset 0 0 0 1.5px var(--gold); }
+.rc-msg.warn > .rc-status { font-weight: 700; }
+.rc-msg-act { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; border-radius: 999px; font: 700 .78rem var(--font-ui); white-space: nowrap; color: var(--on-gold); background: var(--gold); }
+.rc-msg-act[hidden] { display: none; }
+
+/* recording row */
+.rc-live { --ms: var(--muted); box-sizing: border-box; flex: 1 0 100%; width: 100%; min-height: 44px; display: flex; align-items: center; gap: 8px; pointer-events: auto; }
+.rc-live[data-state="listening"] { --ms: var(--bad); }
+.rc-live[data-state="processing"], .rc-live[data-state="paused"] { --ms: var(--gold); }
+.rc-live[data-state="permission"], .rc-live[data-state="offline"] { --ms: var(--bad); }
+.rc-lv-main {
+  flex: 1 1 auto; min-width: max-content; height: 44px; box-sizing: border-box; display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; border-radius: 999px;
+  font-family: var(--font-ui); font-size: .86rem; white-space: nowrap; overflow: hidden; color: var(--ink);
+  background: color-mix(in srgb, var(--ms) 12%, var(--card-2)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ms) 50%, transparent);
+}
+.rc-lv-main .ic { flex: none; color: var(--ms); }
+.rc-lv-main b { flex: none; }
+.rc-lv-time { margin-inline-start: auto; flex: none; font-variant-numeric: tabular-nums; font-weight: 700; }
+.rc-dot { flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--bad); animation: rc-rec 1.2s ease-in-out infinite; }
+@keyframes rc-rec { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bad) 55%, transparent); } 50% { box-shadow: 0 0 0 6px transparent; } }
+.rc-lv-btn { flex: 0 0 auto; min-width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border-radius: 999px; font: 700 .85rem var(--font-ui); white-space: nowrap; color: var(--gold-2); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line); }
+.rc-lv-btn:active { transform: scale(.95); }
+.rc-lv-btn:disabled { opacity: .5; }
+.rc-lv-allow { color: var(--on-gold); background: var(--gold); box-shadow: none; }
+.rc-lv-end { color: #fff; background: var(--bad); box-shadow: none; }
+.rc-live[data-state="hide"] .rc-lv-score { gap: 6px; }
+.rc-lv-score .score { font-size: 1.1rem; text-shadow: none; }
+.rc-dock-row.two { grid-template-columns: 1fr 1fr; }
+.rc-dock-row.two > :last-child { justify-self: end; }
+
+/* tool buttons: icon over a short label */
+.rc-tl {
+  position: relative; flex: 0 0 56px; width: 56px; min-height: 52px; box-sizing: border-box; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px 2px;
+  border-radius: 16px; font: 700 .7rem/1.2 var(--font-ui); white-space: nowrap; color: var(--gold-2); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-1);
+}
+.rc-tl:active { transform: scale(.95); }
+.rc-tl svg { flex: none; }
+.rc-tl .rd-badge { position: absolute; top: 2px; inset-inline-end: 2px; min-width: 18px; height: 18px; font-size: .66rem; }
+.rc-flip { display: inline-flex; transform: scaleX(-1); }
+.rc-rd:not(.rd-hidden) #pkMenu { opacity: .55; }
+
+/* ---- free recitation (.rc-rd): the bar holds only what is needed ---- */
+.rc-rd .rc-bottom { padding: 10px 12px calc(var(--safe-b) + 8px); background: var(--bg); box-shadow: 0 -1px 0 var(--hairline); pointer-events: auto; gap: 0; }
+.rc-rd .rc-bottom-in { box-sizing: border-box; width: 100%; max-width: 720px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rc-rd .rc-tools { flex: 1 0 100%; display: flex; align-items: center; justify-content: space-between; gap: 4px; pointer-events: auto; }
+.rc-rd .rc-tools .rd-fab { position: relative; inset: auto; z-index: auto; flex: 0 0 60px; width: 60px; height: 60px; min-width: 60px; margin: 0; }
+.rc-rd .rc-strip { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 2px 14px; }
+.rc-autochip {
+  min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; border-radius: 999px; font: 600 .8rem var(--font-ui); white-space: nowrap;
+  color: var(--muted); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line);
+}
+.rc-autochip b { font-weight: 800; }
+.rc-autochip.on { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ok); }
+.rc-autochip.on svg { color: var(--ok); }
+.rc-autochip:not(.on) svg { color: var(--bad); }
+.rc-rd .rc-fcount { color: var(--gold-2); }
+/* the page never goes under the bar: the stage reserves the bar's real height (measured by JS into --rd-bot-h) */
+.rc-rd .rd-stage { padding-bottom: calc(var(--rd-bot-h) + 12px); }
+
+/* ---- fixed range: the dock ---- */
+.rc-spacer { height: var(--rc-dock-h, 200px); }
+.rc-dock {
+  position: fixed; left: 8px; right: 8px; bottom: calc(var(--tabbar-h) + var(--safe-b) + 6px); z-index: 440; box-sizing: border-box;
+  max-width: 680px; margin: 0 auto; padding: 8px 10px 10px; border-radius: 22px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  background: var(--card-2); -webkit-backdrop-filter: blur(22px); backdrop-filter: blur(22px); box-shadow: inset 0 0 0 1px var(--line), var(--shadow);
+}
+.rc-dock .rc-prog { flex: 1 0 100%; height: 4px; margin: 0; }
+.rc-dock-row { flex: 1 0 100%; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; }
+.rc-dock-row > :first-child { justify-self: start; }
+.rc-dock-row > :last-child { justify-self: end; }
+.rc-dock .rc-tl { flex: none; }
+.rc-mic { --lvl: 0; width: 64px; height: 64px; }
+.rc-mic svg { width: 30px; height: 30px; }
+.rc-sbox { display: flex; flex-direction: column; align-items: center; min-width: 56px; line-height: 1.2; }
+.rc-sbox .score { font-size: 1.3rem; text-shadow: none; }
+.rc-sbox small { font-size: .72rem; color: var(--muted); white-space: nowrap; }
+
+/* the «correct word» card: inside the bar's own space (it replaces the message + recording rows), never over the verses */
+.rc-fix {
+  position: absolute; inset: 0; z-index: 5; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 12px; padding: 8px 12px;
+  border-radius: inherit; text-align: center; background: var(--card-2); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--bad) 55%, transparent);
+}
+.rc-rd .rc-fix { background: var(--bg); border-radius: 0; }
+.rc-fix-w { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.rc-fix small { color: var(--muted); font-size: .75rem; }
+.rc-fix b { font-size: 1.9rem; line-height: 1.55; color: var(--ink); max-width: 100%; overflow-wrap: anywhere; }
+.rc-fix-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.rc-fix-row .btn { min-height: 44px; }
+
+/* gear sheet rows */
+.rc-fsrow { flex-direction: row !important; align-items: center; gap: 12px !important; }
+.rc-fsb { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+.rc-fsv { min-width: 2.2em; text-align: center; font-variant-numeric: tabular-nums; }
+.rc-ctlsheet .rc-legend { justify-content: flex-start; margin: 4px 0; font-size: .85rem; }
+.rc-ctlsheet { max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain; }
+
+/* ---- tap-to-hide tools (class set by core/chrome-toggle.js on the recite root). Space stays reserved: the page never moves. ---- */
+.rc-rd .rd-top, .rc-rd .rc-strip, .rc-root .page-head, .rc-root .rc-sub { transition: opacity .18s ease; }
+.rc-rd.chrome-off .rd-top, .rc-rd.chrome-off .rc-strip, .rc-root.chrome-off .page-head, .rc-root.chrome-off .rc-sub { opacity: 0; visibility: hidden; pointer-events: none; }
+.rc-rd.chrome-off .rc-tools, .rc-root.chrome-off .rc-dock-row, .rc-root.chrome-off .rc-prog { display: none; }
+/* the reader's own `.rd.chrome-off` rules (reader.css) would slide the whole bottom bar away: here the message + recording rows stay */
+.rc-rd.chrome-off .rd-bottom.rc-bottom { transform: none; opacity: 1; visibility: visible; pointer-events: auto; transition: none; }
+/* before the session starts there is no recording to show: hidden with the rest, the space stays */
+.rc-rd.chrome-off:not(.rc-active) .rc-live, .rc-rd.chrome-off:not(.rc-active) .rc-msg { visibility: hidden; }
+
+/* ---- landscape / short screens: the strips share rows, the page scrolls under a slim bar ---- */
+@media (orientation: landscape) and (max-height: 520px) {
+  .rc-root, .rc-rd { --rc-msg-h: 3.4rem; }
+  .rc-rd .rc-bottom-in, .rc-dock { flex-wrap: nowrap; }
+  .rc-msg { flex: 1 1 0; width: auto; min-width: 96px; order: 3; }
+  .rc-live { flex: 0 0 auto; width: auto; order: 2; }
+  .rc-rd .rc-tools { flex: 0 0 auto; width: auto; gap: 6px; order: 1; }
+  .rc-rd .rc-tools .rc-tl { flex-basis: 52px; width: 52px; }
+  .rc-rd .rc-tools .rd-fab { flex-basis: 56px; width: 56px; height: 56px; min-width: 56px; }
+  .rc-dock { max-width: 860px; }
+  .rc-dock .rc-prog { display: none; }
+  .rc-dock-row { flex: 0 0 auto; width: auto; grid-template-columns: auto auto auto; gap: 12px; order: 1; }
+  .rc-rd .mq-line { height: calc(var(--mq-fs) * 1.95); }
+  .rc-fix b { font-size: 1.5rem; line-height: 1.4; }
+  .rc-fix small { display: none; }
+  .rc-fix { flex-wrap: nowrap; }
+}
+@media (min-width: 420px) { .rc-rd .rc-tools { justify-content: center; gap: 10px; } }
+@media (prefers-reduced-motion: reduce) { .rc-dot { animation: none; } .rc-rd .rd-top, .rc-rd .rc-strip, .rc-root .page-head { transition: none; } }
