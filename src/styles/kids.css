@@ -227,6 +227,9 @@
 .k-ph > img.k-pr-img { animation: k-pr-in .55s cubic-bezier(.2, 1.2, .4, 1) both; }
 .k-ph-contain > img { object-fit: contain; object-position: 50% 50%; }
 .k-ph-contain[style*='--bg']::before { content: ''; position: absolute; inset: -14%; background: var(--bg) center / cover; filter: blur(16px) saturate(1.1); opacity: .95; }
+/* illustrated prayer steps: whole picture (contain) on a background that continues the picture (cream wall, teal floor at 80%) */
+.k-ph-step.k-ph-ready, .k-ph-step.k-ph-fail { background: linear-gradient(180deg, #fff7e5 0%, #fff4d6 74.6%, #e7cd98 75%, #e7cd98 79.8%, #2a8f7d 80%, #17635a 100%); }
+.k-ph-step > img { object-fit: contain; object-position: 50% 50%; }
 .k-ph-fb { position: absolute; inset: 0; display: none; place-items: center; background: radial-gradient(circle at 50% 38%, #fff4d6, #d7eee8); }
 .k-ph-fb .k-icon { width: 52%; max-width: 120px; height: auto; aspect-ratio: 1; }
 .k-ph-fail { animation: none; }
