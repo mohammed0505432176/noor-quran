@@ -26,3 +26,28 @@ test('earlyDelayMs aims at the early-advance point', () => {
   assert.equal(Math.round(earlyDelayMs(10, 2, 2, 0.08)), 3920);
   assert.equal(earlyDelayMs(10, 9.99, 1, 0.08), 0);
 });
+
+import { normRepeat, setRepeat, getRepeat, currentRange, RATES, REPEATS, setRate, getRate, RECITERS } from '../src/core/audio.js';
+test('repeat counts are limited to the offered choices', () => {
+  assert.deepEqual(REPEATS, [1, 3, 5, 10]);
+  assert.equal(normRepeat(5), 5);
+  assert.equal(normRepeat(7), 1);
+  assert.equal(normRepeat('abc'), 1);
+});
+test('setRepeat keeps preferences without a running queue', () => {
+  setRepeat({ repeatEach: 3, loopRange: true });
+  assert.deepEqual(getRepeat(), { repeatEach: 3, loopRange: true });
+  setRepeat({ repeatEach: 99 });
+  assert.equal(getRepeat().repeatEach, 1);
+  setRepeat({ loopRange: false });
+  assert.equal(currentRange(), null);
+});
+test('speeds offered are all accepted and others are clamped', () => {
+  for (const r of RATES) assert.equal(setRate(r), r);
+  assert.equal(setRate(3), 1.5);
+  assert.equal(setRate(0.1), 0.75);
+  setRate(1); assert.equal(getRate(), 1);
+});
+test('Husary stays in the reciter list', () => {
+  assert.ok(RECITERS.some(r => r.id === 'Husary_128kbps'));
+});

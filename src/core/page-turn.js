@@ -28,3 +28,70 @@ export function pageAction({ shown, target, ended = false, manual = false, auto 
   if (target < shown) return 'turn';                // the reciter is on an earlier page: follow it back
   return ended ? 'turn' : 'wait';                    // the next page: only once the shown page is done
 }
+
+// ---- pure decisions of the recitation screen (views/recite.js): hints, position marker, error mode, position guard ----
+
+/** Minimum gap between two automatic page turns (ms): repeated recogniser results never turn the page twice. */
+export const TURN_GAP_MS = 1500;
+export const turnCooldownOk = (now, lastTurnAt = 0, gap = TURN_GAP_MS) => !lastTurnAt || now - lastTurnAt >= gap;
+
+/**
+ * Which words does a hint reveal? Only inside the chosen range / locked surah, only words not yet recited.
+ *  isPending(i): is unit i still unread (and a real word, not an ayah mark)? groups: [{ start, end, s?, a }] (end exclusive).
+ *  kind 'word' -> the next pending word; 'ayah' -> every pending word of the ayah the next pending word belongs to.
+ *  lock: surah number the session is bound to (free mode), null for none. Returns { indices, group } (indices may be []).
+ */
+export function planHint({ isPending, groups = [], kind = 'word', lock = null, from = 0 } = {}) {
+  const inLock = g => lock == null || g.s == null || g.s === lock;
+  for (const g of groups) {
+    if (!inLock(g)) continue;
+    for (let i = Math.max(g.start, from); i < g.end; i++) {
+      if (!isPending(i)) continue;
+      if (kind === 'word') return { indices: [i], group: g };
+      const out = [];
+      for (let k = g.start; k < g.end; k++) if (isPending(k)) out.push(k);
+      return { indices: out, group: g };
+    }
+  }
+  return { indices: [], group: null };
+}
+
+/**
+ * Where to put the position marker. A confident place marks the next word; an unsure one (the last judged word is only
+ * «unsure», or there is no next word in the ayah yet) marks the whole ayah and says the place is being located.
+ *  lastState: verdict of the last judged word ('ok'|'unsure'|'wrong'|null); ayahRange: { start, end } of its ayah.
+ * Returns { level: 'word'|'ayah'|'none', index, range, locating }.
+ */
+export function markerPlan({ curI = -1, lastState = null, ayahRange = null, enabled = true } = {}) {
+  if (!enabled) return { level: 'none', index: -1, range: null, locating: false };
+  if (lastState === 'unsure' && ayahRange) return { level: 'ayah', index: -1, range: ayahRange, locating: true };
+  if (curI >= 0) return { level: 'word', index: curI, range: null, locating: false };
+  if (ayahRange) return { level: 'ayah', index: -1, range: ayahRange, locating: true };
+  return { level: 'none', index: -1, range: null, locating: false };
+}
+
+/**
+ * What an error does under the chosen behaviour. Only a CONFIRMED error may stop the session; unclear recognition
+ * (amber / «possible» doubts) is never allowed to block, it is shown softly and counted as unsure.
+ *  mode: 'stop' | 'continue'; certainty: 'confirmed' | 'unclear'.
+ */
+export function errorAction({ mode = 'continue', certainty = 'unclear' } = {}) {
+  if (certainty !== 'confirmed') return { stop: false, record: false, note: true };
+  return { stop: mode === 'stop', record: true, note: false };
+}
+/** An engine issue kind is a confirmed error only when it is a plain verdict-level miss, never a «possible»/«unclear» doubt. */
+export const issueCertainty = issueKind => (/^(possible_|unclear_)/.test(String(issueKind || '')) ? 'unclear' : 'confirmed');
+export const normErrorMode = v => (v === 'stop' ? 'stop' : 'continue');
+
+/**
+ * Does a reported position belong to this session? The session never jumps to another surah because an ayah there sounds
+ * similar: only the natural continuation (first ayah of the next surah after the last ayah of the current one) or an
+ * explicit re-lock may change surah. A fixed range (lockRange) never leaves its range.
+ */
+export function acceptPosition({ cur = null, next, relock = false, lastAyahOf = () => 0, lockRange = null } = {}) {
+  if (!next || !(next.s >= 1) || !(next.a >= 1)) return false;
+  if (lockRange) return next.s === lockRange.s && next.a >= lockRange.from && next.a <= lockRange.to;
+  if (!cur || relock) return true;
+  if (next.s === cur.s) return true;
+  return next.s === cur.s + 1 && next.a <= 2 && cur.a >= lastAyahOf(cur.s);
+}

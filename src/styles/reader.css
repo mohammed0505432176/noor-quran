@@ -14,7 +14,7 @@
 body.rd-mode .tabbar { display: none; }
 body.rd-mode #app { max-width: none; padding: 0; }
 
-.rd { --rd-top-h: calc(66px + var(--safe-t)); --rd-bot-h: calc(84px + var(--safe-b)); position: relative; min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; }
+.rd { --rd-top-h: calc(66px + var(--safe-t)); --rd-base-h: calc(84px + var(--safe-b)); --rd-pl-h: 0px; --rd-bot-h: calc(var(--rd-base-h) + var(--rd-pl-h)); position: relative; min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; }
 .rd-ink-bright { --rd-ink: #fff; }
 .rd-ink-warm { --rd-ink: #f0dba0; }
 @media (prefers-color-scheme: light) {
@@ -126,7 +126,13 @@ body.rd-mode #app { max-width: none; padding: 0; }
 @media (hover: hover) and (pointer: fine) and (min-width: 700px) { .rd-edge { display: inline-flex; } }
 
 /* player bar sits above the reader's bottom bar */
-.rd .rd-player { bottom: calc(var(--rd-bot-h) + 6px); z-index: 140; }
+/* while the mini player shows, the page area reserves its height (portrait: the page shrinks to fit; landscape: it scrolls, the stage gets bottom padding) */
+.rd .rd-player { bottom: calc(var(--rd-base-h) + 6px); z-index: 140; }
+.rd.rd-pl { --rd-pl-h: 80px; }
+@media (orientation: landscape) {
+  .rd.rd-pl { --rd-bot-h: var(--rd-base-h); }
+  .rd.rd-pl .rd-stage { padding-bottom: calc(var(--rd-base-h) + 10px + var(--rd-pl-h) + 8px); }
+}
 
 /* ---- list sheets ---- */
 .rd-sheet .sheet { padding-inline: 16px; }
@@ -193,7 +199,7 @@ body.rd-mode #app { max-width: none; padding: 0; }
 }
 
 /* hidden mode: taller bottom bar (peek row) */
-.rd.rd-hidden { --rd-bot-h: calc(132px + var(--safe-b)); }
+.rd.rd-hidden { --rd-base-h: calc(132px + var(--safe-b)); }
 /* ayah sheet preview stays veiled in hidden mode until tapped */
 .rd-prev.rd-prev-hid { filter: blur(9px); cursor: pointer; -webkit-user-select: none; user-select: none; }
 .rd-prev-hint { margin: -6px 0 10px; }

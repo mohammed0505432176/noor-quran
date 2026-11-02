@@ -13,6 +13,7 @@ const DEFAULTS = () => ({
     goal: 10,                    // ayahs per day
     reciter: 'Alafasy_128kbps',  // everyayah.com folder id
     fontSize: 30,                // mushaf font size px
+    recite: { marker: true, onError: 'continue' }, // recitation: position marker on/off; 'stop' (stop at an error) | 'continue' (go on and record it)
     theme: 'dark',               // 'auto' | 'dark' | 'light' | 'paper' | 'oled'
     ai: { provider: 'auto', chosen: false, baseUrl: '', apiKey: '', model: '' }, // 'auto' (family backend) | 'free' | 'custom' (OpenAI-compatible, e.g. OmniRoute)
     prayer: { method: 'UmmAlQura', madhab: 'shafi', notify: true, adhan: 'full', adhanOn: { fajr: true, dhuhr: true, asr: true, maghrib: true, isha: true }, preOn: false, preAlert: 10, lat: null, lng: null, city: '' }
@@ -417,6 +418,8 @@ export function importData(json) {
       for (const k of ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha']) om[k] = src[k] !== false;
       pr.adhanOn = om;
     }
+    if (d.settings.recite && typeof d.settings.recite === 'object') d.settings.recite = { marker: d.settings.recite.marker !== false, onError: d.settings.recite.onError === 'stop' ? 'stop' : 'continue' };
+    else delete d.settings.recite;
     d.settings.theme = ['auto', 'dark', 'light', 'paper', 'oled'].includes(d.settings.theme) ? d.settings.theme : 'dark';
     if (!(typeof d.settings.reciter === 'string' && /^[\w.-]{1,60}$/.test(d.settings.reciter))) delete d.settings.reciter;
   }

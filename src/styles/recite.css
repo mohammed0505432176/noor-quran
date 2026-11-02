@@ -296,3 +296,43 @@ body.rd-mode .rc-fix { bottom: calc(var(--safe-b) + 170px); z-index: 740; }
 .rc-relock span { font-size: 11px; line-height: 1.2; max-width: 84px; text-align: center; }
 .rc-relock.rc-attn { box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 60%, transparent); }
 .rc-auto { font-size: 12px; white-space: nowrap; }
+
+/* ===== T-A: hint menu, position marker, error stop, legend ===== */
+.rc-hint-list { display: grid; gap: 8px; }
+.rc-hint-act { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: start; width: 100%; min-height: 52px; padding: 10px 14px; border-radius: 14px; background: var(--card-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); font: inherit; cursor: pointer; }
+.rc-hint-act b { font-size: 1rem; }
+.rc-hint-act small { color: var(--muted); font-size: .8rem; }
+.rc-hint-act:disabled { opacity: .45; cursor: default; }
+.rc-hint-act:not(:disabled):active { box-shadow: inset 0 0 0 2px var(--gold); }
+.sheet .rc-hintnote { margin-top: 10px; }
+
+/* the stop-at-error card: two actions */
+.rc-fix-row { display: flex; gap: 10px; justify-content: center; margin-top: 4px; }
+.rc-fix { z-index: 760; }
+
+/* «إظهار كل النص» in the fixed range: text appears with colour/opacity only, no line moves */
+.rc-page.rc-showall .word.w-pend { color: var(--ink); opacity: .5; text-decoration: none; }
+
+/* legend: symbols say the same as the colours */
+.rc-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; justify-content: center; margin: 0 0 6px; color: var(--muted); line-height: 1.5; }
+.rd-bottom .rc-legend { margin-inline: 12px; pointer-events: none; font-size: .72rem; }
+.rc-legend .lg-ok { color: var(--ink); }
+.rc-legend .lg-bad { color: var(--bad); text-decoration: underline wavy; text-underline-offset: 3px; }
+.rc-legend .lg-uns { color: var(--rc-amber); text-decoration: underline dotted; text-underline-offset: 3px; }
+.rc-legend .lg-pk { color: var(--rc-blue); }
+.rc-legend .lg-cur { color: var(--gold-2); }
+
+/* errors: a wavy line (not colour only); doubts: dotted amber */
+.rc-page .word.w-bad { text-decoration: underline wavy; text-decoration-color: var(--bad); text-decoration-thickness: 1.5px; }
+.rc-page .word.w-uns { text-decoration: underline dotted; text-decoration-color: var(--rc-amber); text-decoration-thickness: 2px; text-underline-offset: .42em; }
+.rc-fpage .mq-w.f-bad, .rc-fpage .word.f-bad { text-decoration: underline wavy var(--bad); text-decoration-thickness: 1.5px; text-underline-offset: .3em; }
+.rc-fpage .mq-w.f-uns, .rc-fpage .word.f-uns { text-decoration: underline dotted var(--rc-amber); text-decoration-thickness: 2px; text-underline-offset: .3em; }
+
+/* position marker, certain: thick underline + a small triangle above the word (shape, not colour only) */
+.rc-fpage .mq-w.f-cur, .rc-fpage .word.f-cur { position: relative; box-shadow: inset 0 -3px 0 var(--gold); }
+.rc-fpage .mq-w.f-cur::after, .rc-fpage .word.f-cur::after { content: '▾'; position: absolute; top: -.35em; inset-inline: 0; margin-inline: auto; width: 1em; text-align: center; font-family: var(--font-ui); font-size: .55em; line-height: 1; color: var(--gold); pointer-events: none; }
+.rc-fpage .mq-end.f-cur::after { content: none; }
+.rc-page .word.w-cur { box-shadow: inset 0 -3px 0 var(--gold); }
+/* position marker, unsure: the whole ayah in a dashed frame while the place is being located */
+.rc-page .word.w-ayah, .rc-fpage .mq-w.f-ayah, .rc-fpage .word.f-ayah { outline: 1.5px dashed color-mix(in srgb, var(--gold) 80%, transparent); outline-offset: 1px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { .rc-fpage .f-cur::after { animation: none; } }
