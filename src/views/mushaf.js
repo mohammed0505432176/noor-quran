@@ -14,7 +14,7 @@ import { sharedMask } from '../core/similar-words.js';
 
 const BASMALA = 'بِسۡمِ ٱللَّهِ ٱلرَّحۡمَٰنِ ٱلرَّحِيمِ';
 const ORD = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع', 'العاشر', 'الحادي عشر', 'الثاني عشر', 'الثالث عشر', 'الرابع عشر', 'الخامس عشر', 'السادس عشر', 'السابع عشر', 'الثامن عشر', 'التاسع عشر', 'العشرون', 'الحادي والعشرون', 'الثاني والعشرون', 'الثالث والعشرون', 'الرابع والعشرون', 'الخامس والعشرون', 'السادس والعشرون', 'السابع والعشرون', 'الثامن والعشرون', 'التاسع والعشرون', 'الثلاثون'];
-const RATES = [0.75, 1, 1.25, 1.5];
+const RATES = audio.RATES;
 const reduced = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const TJ_KEY = 'noor.tajweed';
 const MD_KEY = 'noor.madani';
@@ -384,7 +384,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     sh.addEventListener('click', ev => {
       const b = ev.target.closest('[data-act]'); if (!b) return;
       sh.close();
-      if (b.dataset.act === 'play') { manualNav = false; audio.playRange(s, a, a); }
+      if (b.dataset.act === 'play') { manualNav = false; audio.playRange(s, a, a, playOpts()); }
     });
   };
   // ---- repeated-phrase highlight (data: findSimilar only; Madani word view; off by default)
@@ -507,44 +507,56 @@ let manualNav = false;             // the reader turned the pages by hand since 
   const goPrev = () => { manualNav = true; const lo = shown[0]; if (lo > 1) show(lo - 1, 'prev'); };
 
   // ---- audio ui
-  const rateIdx = () => Math.max(0, RATES.indexOf(audio.getRate()));
+  let plOpen = false;               // expanded player sheet (reciter, speed, repeat); the mini bar is always compact
+  const setBarShown = on => { bar.classList.toggle('show', on); root.classList.toggle('rd-pl', on); if (!on) plOpen = false; };
+  const playOpts = () => audio.getRepeat();
   const drawBar = () => {
-    const c = audio.current();
-    bar.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center;gap:8px">` +
-      `<div><div class="small muted">${esc(audio.reciterName())}</div><b>الآية ${N(c ? c.a : 0)}</b></div>` +
-      `<div class="row" style="gap:6px;align-items:center">` +
-      `<button class="icon-btn" data-pl="prev" aria-label="الآية السابقة">${icon('back')}</button>` +
-      `<button class="icon-btn" data-pl="toggle" aria-label="إيقاف مؤقت">${icon(audio.isPlaying() ? 'pause' : 'play')}</button>` +
-      `<button class="icon-btn" data-pl="next" aria-label="الآية التالية" style="transform:scaleX(-1)">${icon('back')}</button>` +
-      `<button class="icon-btn" data-pl="stop" aria-label="إيقاف">${icon('stop')}</button>` +
-      `<select class="select" data-pl-rec aria-label="القارئ" style="max-width:150px;font-size:.8rem;padding:4px 6px">${audio.RECITERS.map(r => `<option value="${esc(r.id)}"${r.id === audio.reciterId() ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select>` +
-      `<button class="chip" data-pl="rate">${N(audio.getRate())}×</button></div></div>`;
+    const c = audio.current(), rp = audio.getRepeat(), rt = audio.getRate(), pl = audio.isPlaying();
+    const where = c ? `${surahName(c.s)} · الآية ${N(c.a)}` : 'الآية';
+    const rb = (k, label, ico, extra = '') => `<button class="pl-btn" data-pl="${k}" aria-label="${label}" title="${label}"${extra}>${icon(ico, 22)}</button>`;
+    const chips = (list, cur2, key, fmt) => list.map(v => `<button class="pl-chip${v === cur2 ? ' on' : ''}" data-pl="${key}" data-v="${v}" aria-pressed="${v === cur2}">${fmt(v)}</button>`).join('');
+    bar.innerHTML =
+      (plOpen ? `<div class="pl-panel" role="group" aria-label="خيارات التشغيل">` +
+        `<label class="pl-row"><span>القارئ</span><select class="select" data-pl-rec aria-label="القارئ">${audio.RECITERS.map(r => `<option value="${esc(r.id)}"${r.id === audio.reciterId() ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>` +
+        `<div class="pl-row"><span>السرعة الحالية: <b>${N(rt)}×</b></span><div class="pl-chips">${chips(RATES, rt, 'rate', v => N(v) + '×')}</div></div>` +
+        `<div class="pl-row"><span>تكرار كل آية: <b>${N(rp.repeatEach)}</b></span><div class="pl-chips">${chips(audio.REPEATS, rp.repeatEach, 'rep', v => N(v))}</div></div>` +
+        `<div class="pl-row"><button class="pl-chip pl-wide${rp.loopRange ? ' on' : ''}" data-pl="loop" aria-pressed="${rp.loopRange}">${icon('repeat', 18)} تكرار المقطع كاملًا</button>` +
+        `<button class="pl-chip pl-wide" data-pl="replay">إعادة الآية الحالية</button></div></div>` : '') +
+      `<div class="pl-mini">` +
+        `<button class="pl-info" data-pl="more" aria-expanded="${plOpen}" aria-label="خيارات التشغيل" title="خيارات التشغيل"><span class="pl-rec">${esc(audio.reciterName())}</span><b class="pl-where">${esc(where)}</b>` +
+        `<span class="pl-state">${pl ? 'يُشغَّل' : 'متوقف مؤقتًا'} · ${N(rt)}×${rp.repeatEach > 1 ? ' · ×' + N(rp.repeatEach) : ''}${rp.loopRange ? ' · تكرار المقطع' : ''}</span></button>` +
+        rb('prev', 'الآية السابقة', 'back') +
+        rb('toggle', pl ? 'إيقاف مؤقت' : 'تشغيل', pl ? 'pause' : 'play') +
+        rb('next', 'الآية التالية', 'back', ' style="transform:scaleX(-1)"') +
+        rb('stop', 'إيقاف', 'stop') +
+        `<button class="pl-btn${rp.loopRange ? ' on' : ''}" data-pl="loop" aria-label="تكرار المقطع" title="تكرار المقطع" aria-pressed="${rp.loopRange}">${icon('repeat', 22)}</button>` +
+      `</div>`;
     const recSel = bar.querySelector('[data-pl-rec]');
     if (recSel) recSel.onchange = e => {
       store.updateSettings({ reciter: e.target.value });
-      const c = audio.current();
-      if (c) audio.playAyah(c.s, c.a);       // the ayah on hand is heard with the new reciter
+      const c2 = audio.current(), rg = audio.currentRange();
+      if (c2) audio.playRange(c2.s, c2.a, rg ? rg.to : c2.a, playOpts());       // the ayah on hand is heard with the new reciter
     };
   };
   const unsub = audio.onAudio(ev => {
     if (dead) return;
     if (ev.type === 'play' || ev.type === 'ayah') stopWord();
     if (ev.type === 'error') {
-      bar.classList.remove('show'); mark(null); setPlayIcon();
+      setBarShown(false); mark(null); setPlayIcon();
       toast('تعذّر تشغيل الصوت، تأكد من الإنترنت');
       return;
     }
     if (ev.type === 'stop') {
       const was = userStopped; userStopped = false;
-      bar.classList.remove('show'); mark(null); setPlayIcon();
+      setBarShown(false); mark(null); setPlayIcon();
       const s = ev.s;
       if (!was && s >= 1 && s < SURAH_COUNT && ev.a === ayahCount(s)) {
         const np = pageOf(s + 1, 1);
-        if (np >= shown[0] && np <= shown[shown.length - 1] + 1) audio.playRange(s + 1, 1, ayahCount(s + 1));
+        if (np >= shown[0] && np <= shown[shown.length - 1] + 1) audio.playRange(s + 1, 1, ayahCount(s + 1), playOpts());
       }
       return;
     }
-    bar.classList.add('show');
+    setBarShown(true);
     if (ev.type === 'ayah' && ev.s >= 1) {
       // the audible ayah must be on screen: follow it to its page (also after a surah ended and nothing was marked),
       // unless the reader turned the pages by hand during this playback
@@ -560,7 +572,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     if (audio.current()) { audio.isPlaying() ? audio.pause() : audio.resume(); return; }
     const st = sel && onShown(sel.s, sel.a) ? sel : pageFirst(shown[0]);
     manualNav = false;
-    audio.playRange(st.s, st.a, ayahCount(st.s));
+    audio.playRange(st.s, st.a, ayahCount(st.s), playOpts());
   };
 
   // ---- top bar + hidden mode
@@ -759,9 +771,9 @@ let manualNav = false;             // the reader turned the pages by hand since 
     try {
       if (audio.current()) { userStopped = true; audio.stop(); }
       const au = wAudio = new Audio(wordAudioUrl(s, a, w));
-      au.onerror = () => { if (wAudio === au) { wAudio = null; if (!dead) audio.playRange(s, a, a); } };
-      const pr = au.play(); if (pr && pr.catch) pr.catch(() => { if (wAudio === au && !dead) { wAudio = null; audio.playRange(s, a, a); } });
-    } catch (e) { audio.playRange(s, a, a); }
+      au.onerror = () => { if (wAudio === au) { wAudio = null; if (!dead) { toast('تعذّر تشغيل صوت الكلمة، يُشغَّل صوت الآية'); audio.playRange(s, a, a); } } };
+      const pr = au.play(); if (pr && pr.catch) pr.catch(() => { if (wAudio === au && !dead) { wAudio = null; toast('تعذّر تشغيل صوت الكلمة، يُشغَّل صوت الآية'); audio.playRange(s, a, a); } });
+    } catch (e) { toast('تعذّر تشغيل صوت الكلمة، يُشغَّل صوت الآية'); audio.playRange(s, a, a); }
   };
   const jumpTo = (s, a) => {
     const p = pageOf(s, a);
@@ -838,7 +850,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
       const act = b.dataset.act;
       if (act === 'close' || act === 'recite' || act === 'ai') { sh.close(); return; }
       if (act === 'unveil') { const pv = b.classList.contains('rd-prev') ? b : $('.rd-prev', sh); if (pv) pv.classList.remove('rd-prev-hid'); const h = $('.rd-prev-hint', sh); if (h) h.remove(); return; }
-      if (act === 'play') { sh.close(); stopWord(); manualNav = false; audio.playRange(s, a, ayahCount(s)); return; }
+      if (act === 'play') { sh.close(); stopWord(); manualNav = false; audio.playRange(s, a, ayahCount(s), playOpts()); return; }
       if (act === 'read') {
         const r = markRead(s, a);
         addCls(s, a, 'read');
@@ -920,7 +932,11 @@ let manualNav = false;             // the reader turned the pages by hand since 
       else if (k === 'prev') audio.prev();
       else if (k === 'next') audio.next();
       else if (k === 'stop') { userStopped = true; audio.stop(); }
-      else if (k === 'rate') { audio.setRate(RATES[(rateIdx() + 1) % RATES.length]); drawBar(); }
+      else if (k === 'rate') { audio.setRate(pl.dataset.v); drawBar(); }
+      else if (k === 'rep') { audio.setRepeat({ repeatEach: pl.dataset.v }); drawBar(); }
+      else if (k === 'loop') { const on = !audio.getRepeat().loopRange; audio.setRepeat({ loopRange: on }); toast(on ? 'تكرار المقطع: مفعّل' : 'تكرار المقطع: متوقف'); drawBar(); }
+      else if (k === 'replay') audio.replay();
+      else if (k === 'more') { plOpen = !plOpen; drawBar(); }
       return;
     }
     if (e.target.closest('#rdDim')) { setDial(false); return; }

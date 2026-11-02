@@ -222,3 +222,27 @@ export function setRate(r) {
   return rate;
 }
 export const getRate = () => rate;
+export const RATES = [0.75, 1, 1.25, 1.5];      // the only speeds offered (the audio element handles 0.75-1.5 with pitch kept)
+export const REPEATS = [1, 3, 5, 10];
+
+/** Clamp a repeat count to one of REPEATS (pure). */
+export function normRepeat(n) {
+  n = Number(n) | 0;
+  return REPEATS.includes(n) ? n : 1;
+}
+// Listening preferences (repeat count per ayah + loop the range); applied live and to the next playRange.
+let pref = { repeatEach: 1, loopRange: false };
+export const getRepeat = () => ({ ...pref });
+export function setRepeat({ repeatEach, loopRange } = {}) {
+  if (repeatEach !== undefined) pref.repeatEach = normRepeat(repeatEach);
+  if (loopRange !== undefined) pref.loopRange = !!loopRange;
+  if (q) { q.repeatEach = pref.repeatEach; q.loopRange = pref.loopRange; preloadNext(); }
+  return getRepeat();
+}
+/** The range being played ({s, from, to}) or null. */
+export const currentRange = () => (q ? { s: q.s, from: q.from, to: q.to } : null);
+/** Play the current ayah again from the start (keeps the range). */
+export function replay() {
+  if (!q || !cur) return;
+  rep = 0; load(cur.a);
+}
