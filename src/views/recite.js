@@ -17,6 +17,7 @@ import * as madani from '../core/madani.js';
 import { renderPageLines, pageGlyphs, fitLines, BASMALA } from '../core/madani-render.js';
 import { pageOf, pageContent, side, juzOfPage, pageFirst, quarterOf, PAGE_COUNT } from '../core/pages.js';
 import { scoreSession } from '../core/recite-score.js';
+import { bindChromeToggle } from '../core/chrome-toggle.js';
 import { pageEndReached, pageAction, planHint, markerPlan, errorAction, issueCertainty, normErrorMode, acceptPosition, turnCooldownOk } from '../core/page-turn.js';
 import '../styles/reader.css';
 import '../styles/recite.css';
@@ -96,42 +97,91 @@ const XP = {
   hourglass: '<path d="M6 3h12M6 21h12M7 3c0 5 5 6 5 9s-5 4-5 9M17 3c0 5-5 6-5 9s5 4 5 9"/>'
 };
 
-// ---- persistent mic status line: icon + text for every state (never colour only) ----
+// ---- live recording row: a persistent indicator (red dot + «جارٍ التسجيل» + timer), the mic state and the stop / pause
+//      buttons. Icon + text for every state (never colour only). It stays visible when the other tools are hidden. ----
 let micPerm = 'unknown';          // last known microphone permission: 'granted' | 'denied' | 'prompt' | 'unknown'
-/** host: the element to fill; get(): the current inputs of micState() (core/speech.js). Returns { update }. */
-function mountMicState(host, get) {
+/**
+ * host: the row to fill; get(): the inputs of micState() (core/speech.js); started(): has the session begun (pause / end make sense).
+ * msg: the message strip (its detail slot shows the long explanation of a mic problem, in the reserved space).
+ * onPause / onEnd: the buttons. Returns { update }. The timer counts the time spent listening, whatever the engine.
+ */
+function mountLive(host, { get, started = () => true, onPause, onEnd, msg = null, voice = true, prefix = '' } = {}) {
   if (!host) return { update() {} };
+  let acc = 0, last = Date.now();
+  const clk = () => clock(acc);
+  const detailEl = msg && msg.querySelector('.rc-msg-detail');
   const draw = () => {
-    if (!host.isConnected) return;
-    const st = micState(get());
-    host.className = host.className.replace(/\brc-ms-\w+/g, '').trim() + ' rc-ms-' + st.key;
-    host.innerHTML = `<span class="rc-ms-main">${ic(st.icon, 16)}<b>${st.label}</b></span>`
-      + (st.detail ? `<span class="rc-ms-detail">${esc(st.detail)}</span>` : '')
-      + (st.allow ? '<button class="btn sm rc-ms-allow" type="button" data-ms="allow">السماح</button>' : '');
+    if (!host.isConnected || (!voice && host.firstChild)) return;   // hide mode: nothing changes (the score pill is updated in place)
+    const inp = get(), st = micState(inp);
+    const act = started();
+    const rec = voice && st.key === 'listening';
+    const timed = voice && act && (rec || st.key === 'paused' || st.key === 'processing');
+    host.dataset.state = voice ? st.key : 'hide';
+    host.classList.toggle('is-rec', rec);
+    const lead = rec ? '<i class="rc-dot" aria-hidden="true"></i>' : ic(st.icon, 18);
+    const pauseOk = voice && act && (rec || st.key === 'paused');
+    host.innerHTML = (voice ? `<span class="rc-lv-main">${lead}<b>${rec ? 'جارٍ التسجيل' : st.key === 'permission' ? 'إذن المايك مطلوب' : st.label}</b>${timed ? `<time class="rc-lv-time">${clk()}</time>` : ''}</span>` : prefix)
+      + (voice && st.allow ? '<button class="rc-lv-btn rc-lv-allow" type="button" data-lv="allow">السماح</button>' : '')
+      + (pauseOk ? `<button class="rc-lv-btn" type="button" data-lv="pause" aria-label="${rec ? 'إيقاف مؤقت' : 'متابعة التسجيل'}" title="${rec ? 'إيقاف مؤقت' : 'متابعة'}">${icon(rec ? 'pause' : 'play', 20)}</button>` : '')
+      + (voice && (st.key === 'permission' || st.key === 'offline') && !act ? '' : `<button class="rc-lv-btn rc-lv-end" type="button" data-lv="end" aria-label="إنهاء الجلسة وعرض النتيجة">${icon('stop', 16)}<span>إنهاء</span></button>`);
+    if (msg) {
+      const has = voice && !!st.detail;
+      msg.classList.toggle('has-detail', has);
+      if (detailEl) { detailEl.textContent = has ? st.detail : ''; detailEl.hidden = !has; }
+    }
   };
   host.onclick = async e => {
-    if (!e.target.closest('[data-ms="allow"]')) return;
-    const b = e.target.closest('button'); if (b) b.disabled = true;
-    micPerm = await requestMicAccess();
-    toast(micPerm === 'granted' ? 'تم السماح بالميكروفون' : 'ما زال الميكروفون محظوراً — فعّله من إعدادات التطبيق أو المتصفح');
-    draw();
+    const b = e.target.closest('[data-lv]'); if (!b) return;
+    const k = b.dataset.lv;
+    if (k === 'allow') {
+      b.disabled = true;
+      micPerm = await requestMicAccess();
+      if (msg) { const s = msg.querySelector('.rc-status'); if (s) s.textContent = micPerm === 'granted' ? 'تم السماح بالميكروفون' : 'ما زال الميكروفون محظوراً — فعّله من إعدادات التطبيق أو المتصفح'; }
+      draw();
+    } else if (k === 'pause') { if (onPause) onPause(); } else if (k === 'end') { if (onEnd) onEnd(); }
   };
-  const onNet = () => { if (!host.isConnected) { window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet); return; } draw(); };
+  const tick = setInterval(() => {
+    if (!host.isConnected) { clearInterval(tick); window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet); return; }
+    const now = Date.now(), dt = (now - last) / 1000; last = now;
+    if (voice && get().listening) { acc += Math.min(dt, 1.5); const t = host.querySelector('.rc-lv-time'); if (t) t.textContent = clk(); }
+  }, 500);
+  const onNet = () => draw();
   window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
-  micPermission().then(p => { if (p === 'denied') micPerm = 'denied'; draw(); }).catch(() => {});
+  if (voice) micPermission().then(p => { if (p === 'denied') micPerm = 'denied'; draw(); }).catch(() => {});
   host.setAttribute('role', 'status'); host.setAttribute('aria-live', 'polite');
   draw();
   return { update: draw };
 }
 const HINT_NOTE = 'سُجّل هذا كتلميح في ملخص الجلسة — كشف الكلمة أو الآية يُحتسب تلميحاً ولا يُعدّ قراءة منك';
-/** The first hint of a session: a short note next to the hint buttons (once per session). */
+const HINT_NOTE_SHORT = 'سُجّل كتلميح — لا يُعدّ قراءة منك';
+/** The first hint of a session: a short note in the message strip above the bar (reserved space; never over the verses). */
 function showHintNote(host) {
   if (!host) return;
-  host.textContent = HINT_NOTE; host.hidden = false;
-  clearTimeout(host._t); host._t = setTimeout(() => { host.hidden = true; }, 9000);
+  host.textContent = HINT_NOTE_SHORT; host.hidden = false;
+  const m = host.closest('.rc-msg'); if (m) m.classList.add('has-note');
+  clearTimeout(host._t); host._t = setTimeout(() => { host.hidden = true; if (m) m.classList.remove('has-note'); }, 7000);
 }
+/** The message sink of the running session (its status line in the strip above the bar); helper messages go here, not into floating toasts. */
+let msgSink = null;
+const tell = (t) => { if (msgSink) msgSink(t); else toast(t); };
 
 const ic = (n, size = 22) => XP[n] ? `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${XP[n]}</svg>` : icon(n, size);
+// taps that never hide / show the tools: buttons, bars, sheets, ayahs and words
+const RC_IGNORE = 'button,a,input,select,textarea,label,summary,[role="menu"],[role="dialog"],.sheet,.page-head,.rd-top,.rc-strip,.rc-dock,.rc-bottom,.rc-fix,.ayah,.word,.mq-w,.rc-aend,[data-s],[data-go],[data-act]';
+/** Reserves the real height of the bottom bar: root gets `prop` (and --rd-bot-h) = the bar's height, so the stage's padding / the
+ *  spacer always equal it and the last line never sits under it. Not updated while the tools are hidden (the page must not move). */
+function reserveBar(root, bar, prop) {
+  if (!root || !bar) return null;
+  const apply = () => {
+    if (!bar.isConnected || root.classList.contains('chrome-off') || bar.classList.contains('fixing')) return;
+    const h = Math.ceil(bar.getBoundingClientRect().height);
+    if (h > 0) { root.style.setProperty(prop, h + 'px'); if (prop === '--rd-bot-h') root.style.setProperty('--rc-bot', h + 'px'); }
+  };
+  apply();
+  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(apply); ro.observe(bar); return ro; }
+  window.addEventListener('resize', apply);
+  return null;
+}
 const hizbNo = p => { const f = pageFirst(p); return Math.ceil(quarterOf(f.s, f.a) / 4); };
 const pageNames = p => [...new Set(pageContent(p).map(g => g.s))].map(surahName).join(' · ');
 
@@ -234,13 +284,18 @@ export default {
     let fixEl = null;            // «stop at an error» overlay
     let markerRefresh = null;    // the running session's repaint of the position marker (the setting can change live)
     let hintSheetEl = null;
+    let chromeCtl = null, barRO = null;   // tap-to-hide tools (core/chrome-toggle.js) and the observer that reserves the bar's height
+    let sessCtl = null;          // what the gear sheet offers for the running session: { fs, auto, relock, eye, legend, how }
     /** A correction-rule kind that counts as a mistake (vowel slips only with the strict setting; repetition never). */
     const hardKind = k => k !== 'repeat' && (k !== 'vowel' || opts.strict === 'high');
     let lastFree = 'free';       // kind of the last free session ('free' | 'sard'), for «إعادة»
     const cleanup = () => {
       alive = false; gen++; setupTok++;
       document.body.classList.remove('rd-mode');
-      stopClip(); hideFix(); markerRefresh = null;
+      stopClip(); hideFix(); markerRefresh = null; msgSink = null;
+      if (chromeCtl) { try { chromeCtl.unbind(); } catch (e) {} chromeCtl = null; }
+      if (barRO) { try { barRO.disconnect(); } catch (e) {} barRO = null; }
+      sessCtl = null;
       if (hintSheetEl) { try { hintSheetEl.close(); } catch (e) {} hintSheetEl = null; }
       if (ctlSheet) { try { ctlSheet.close(); } catch (e) {} ctlSheet = null; }
       if (mSheet) { try { mSheet.close(); } catch (e) {} mSheet = null; }
@@ -340,17 +395,20 @@ export default {
         close() { if (ctx) { try { ctx.close(); } catch (e) {} ctx = null; } }
       };
     }
-    function hideFix() { if (fixEl) { try { fixEl.remove(); } catch (e) {} fixEl = null; } }
+    function hideFix() { if (fixEl) { const h = fixEl.parentElement; try { fixEl.remove(); } catch (e) {} if (h) h.classList.remove('fixing'); fixEl = null; } }
     /** «توقف حتى أصحّح»: the correct word, big, until the user continues. */
-    function showFixWord(text, { onContinue, onFix } = {}) {
+    function showFixWord(text, { onContinue, onFix, onEnd } = {}) {
       hideFix();
       if (!text) return;
       const d = document.createElement('div');
       d.className = 'rc-fix'; d.setAttribute('role', 'alert');
-      d.innerHTML = `<small>توقفنا عند خطأ — الصواب</small><b class="quran">${esc(text)}</b><div class="rc-fix-row"><button class="btn ghost sm" type="button" data-fix>${icon('play', 16)} تصحيح</button><button class="btn sm" type="button" data-go-on>متابعة</button></div>`;
+      d.innerHTML = `<div class="rc-fix-w"><small>توقفنا عند خطأ — الصواب</small><b class="quran">${esc(text)}</b></div><div class="rc-fix-row"><button class="btn ghost sm" type="button" data-fix>${icon('play', 16)} تصحيح</button><button class="btn sm" type="button" data-go-on>متابعة</button>${onEnd ? '<button class="btn ghost sm" type="button" data-end>إنهاء</button>' : ''}</div>`;
       d.querySelector('[data-go-on]').onclick = () => { hideFix(); if (onContinue) onContinue(); };
       d.querySelector('[data-fix]').onclick = () => { if (onFix) onFix(); };
-      el.appendChild(d);
+      const eb = d.querySelector('[data-end]'); if (eb) eb.onclick = () => { hideFix(); onEnd(); };
+      // inside the bar's own space (it replaces the message + recording rows): never over the verses
+      const host = el.querySelector('.rc-dock, .rc-bottom') || el;
+      host.appendChild(d); host.classList.add('fixing');
       fixEl = d;
     }
     /** The hint menu (both modes): four clear actions. api: { rangeNote, shown(), word(), ayah(), showAll(), hideAgain() }. */
@@ -375,7 +433,12 @@ export default {
     function openControls() {
       if (ctlSheet) { try { ctlSheet.close(); } catch (e) {} }
       const row = (k, label, hint) => `<label class="rc-opt"><span><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</span><input type="checkbox" data-o="${k}"${opts[k] ? ' checked' : ''}></label>`;
+      const c = sessCtl || {};
       const sh = sheet(`<h3 class="mb">إعدادات التسميع</h3>
+        ${c.fs ? `<div class="rc-opt"><span><b>حجم الخط</b></span><span class="rc-fsrow"><button class="btn ghost sm rc-fsb" type="button" data-fs="-1" aria-label="تصغير الخط">${icon('minus', 18)}</button><b id="rc-fsv" class="rc-fsv">${N(c.fs.get())}</b><button class="btn ghost sm rc-fsb" type="button" data-fs="1" aria-label="تكبير الخط">${icon('plus', 18)}</button></span></div>` : ''}
+        ${c.auto ? `<label class="rc-opt"><span><b>الانتقال التلقائي بين الصفحات</b><small id="rc-autonote"></small></span><input type="checkbox" id="rc-autoopt"></label>` : ''}
+        ${c.eye ? `<label class="rc-opt"><span><b>إخفاء الآيات</b><small>تظهر الكلمة في مكانها عند قراءتها صحيحة</small></span><input type="checkbox" id="rc-eyeopt"></label>` : ''}
+        ${c.relock ? `<div class="rc-opt"><span><b>إعادة تحديد الموضع</b><small>إن بدأت القراءة من موضع آخر في القرآن فاضغط ليبحث التطبيق عن موضعك من جديد</small></span><button class="btn ghost sm" type="button" id="rc-relockopt">تحديد</button></div>` : ''}
         ${row('sound', 'صوت التنبيه عند الخطأ')}
         ${row('vibrate', 'اهتزاز')}
         <div class="rc-opt col"><span><b>سلوك الخطأ</b></span>${errModeHtml(reciteCfg().onError)}</div>
@@ -383,8 +446,18 @@ export default {
         <div class="rc-opt col"><span><b>صرامة التشكيل</b></span>
           <div class="seg" role="group" aria-label="صرامة التشكيل">${STRICT.map(k => `<button type="button" data-strict="${k}" class="${opts.strict === k ? 'active' : ''}" aria-pressed="${opts.strict === k}">${STRICT_AR[k]}</button>`).join('')}</div>
           <small class="muted" id="rc-strictnote">${STRICT_NOTE[opts.strict]}</small></div>
+        <div class="rc-opt col"><span><b>دليل الألوان والرموز</b></span><div class="rc-legend small" aria-label="دليل الألوان والرموز">${LEGEND_HTML}</div>${c.how ? `<small class="muted">${c.how}</small>` : ''}</div>
         <button class="btn block mt" type="button" data-x>تم</button>`, { onClose: () => { if (ctlSheet === sh) ctlSheet = null; } });
       ctlSheet = sh;
+      sh.classList.add('rc-ctlsheet');
+      if (c.fs) sh.querySelectorAll('[data-fs]').forEach(b => { b.onclick = () => { c.fs.set(c.fs.get() + 2 * (+b.dataset.fs)); const v = sh.querySelector('#rc-fsv'); if (v) v.textContent = N(c.fs.get()); }; });
+      if (c.auto) {
+        const ai = sh.querySelector('#rc-autoopt'), nt = sh.querySelector('#rc-autonote');
+        const sync = () => { ai.checked = c.auto.get(); nt.textContent = (c.auto.get() ? 'مفعّل — ' : 'متوقف — ') + 'تنتقل الصفحة فقط عند الوصول إلى آخر كلمة فيها، وليس وأنت في منتصف السطر'; };
+        sync(); ai.onchange = () => { c.auto.set(ai.checked); sync(); };
+      }
+      if (c.eye) { const ei = sh.querySelector('#rc-eyeopt'); ei.checked = c.eye.get(); ei.onchange = () => { c.eye.set(ei.checked); ei.checked = c.eye.get(); }; }
+      if (c.relock) { const rb = sh.querySelector('#rc-relockopt'); rb.onclick = () => { sh.close(); c.relock(); }; }
       sh.querySelectorAll('input[data-o]').forEach(i => { i.onchange = () => { opts[i.dataset.o] = i.checked; saveOpts(opts); }; });
       bindErrMode(sh);
       const mk = sh.querySelector('#rc-markopt'); if (mk) mk.onchange = () => { setReciteCfg({ marker: mk.checked }); if (markerRefresh) markerRefresh(); };
@@ -558,9 +631,9 @@ export default {
       if (mode === 'ai') {
         if (!cloud) { try { cloud = await cloudStatus(); } catch (e) { cloud = null; } }
         if (!isLive()) return;
-        if (!aiReady()) { toast('الوضع الدقيق غير متاح الآن — سيُستخدم الفوري'); mode = 'device'; }
+        if (!aiReady()) { tell('الوضع الدقيق غير متاح الآن — سيُستخدم الفوري'); mode = 'device'; }
       }
-      if (mode === 'quran' && !(engineSupported() && await engineCached())) { toast('حمّل المحرك القرآني أولاً — سيُستخدم الفوري'); mode = 'device'; }
+      if (mode === 'quran' && !(engineSupported() && await engineCached())) { tell('حمّل المحرك القرآني أولاً — سيُستخدم الفوري'); mode = 'device'; }
       if (!isLive()) return;
       const voiceLike = mode !== 'hide';
       // may fall back ai/quran -> device mid-session
@@ -606,11 +679,10 @@ export default {
       }).join(' ');
 
       const noVoice = engine === 'device' && voiceLike && support === 'none';
-      const fsCtl = `<button class="icon-btn rc-fsbtn" id="rc-fsm" aria-label="تصغير خط التسميع">أ<small>−</small></button><button class="icon-btn rc-fsbtn" id="rc-fsp" aria-label="تكبير خط التسميع">أ<small>+</small></button>`;
       const centerBtn = mode === 'hide'
         ? `<button class="btn rc-okbtn" id="rc-ok">${icon('check', 18)} تذكرتها</button>`
         : (noVoice ? '<span></span>' : `<button class="mic-btn rc-mic" id="rc-mic" aria-label="تشغيل الميكروفون">${icon('mic', 30)}</button>`);
-      el.innerHTML = header(MODE_TITLE[mode], { actions: fsCtl + gearBtn }) + `
+      el.innerHTML = `<div class="rc-root rc-fixed" id="rc-root">` + header(MODE_TITLE[mode], { actions: gearBtn }) + `
         ${noVoice ? `<div class="card"><p>التعرف على الصوت غير متاح على هذا الجهاز أو المتصفح.</p><button class="btn block" id="rc-tohide">جرّب اختبار الحفظ (إخفاء)</button></div>` : ''}
         <div class="rc-sub muted small">${esc(surahName(s))} · الآيات ${N(from)}–${N(to)}</div>
         <div class="mushaf-page rc-page${disp === 'full' ? ' rc-full' : ''}" id="rc-page" style="--rc-fs:${fs}px">
@@ -618,21 +690,18 @@ export default {
           ${showBasmala ? '<div class="basmala">بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ</div>' : ''}
           <div class="mushaf-text" id="rc-text">${body}</div>
         </div>
-        ${mode === 'hide' ? '<p class="muted small center mt">اضغط على مكان أي كلمة لكشفها (تُحسب خطأ)، أو «تذكرتها» عند إتقان الآية التالية.</p>'
-          : '<p class="muted small center mt">تُكتب الكلمة عند نطقها صحيحة، والأخطاء بالأحمر، وغير الواضحة بالأصفر — اضغط على الخطأ لسماعه.</p>'}
-        <div class="rc-spacer"></div>
+        <div class="rc-spacer" aria-hidden="true"></div>
         <div class="rc-dock" id="rc-dock">
-          <div class="rc-dock-top"><span class="small muted" id="rc-status">${voiceLike ? 'جارٍ تشغيل الميكروفون…' : 'تذكّر الآية التالية'}</span><b class="score" id="rc-score">٠٪</b></div>
-          ${voiceLike ? '<div class="rc-mstate" id="rc-mstate"></div>' : ''}
+          <div class="rc-msg" id="rc-msg"><span class="rc-status" id="rc-status">${voiceLike ? 'جارٍ تشغيل الميكروفون…' : 'تذكّر الآية التالية'}</span><div class="rc-hintnote" id="rc-hintnote" hidden></div><span class="rc-msg-detail" hidden></span></div>
+          <div class="rc-live" id="rc-live"></div>
           <div class="progress rc-prog"><i id="rc-prog" style="width:0%"></i></div>
-          <div class="rc-hintnote small" id="rc-hintnote" hidden></div>
-          ${voiceLike ? `<div class="rc-legend small" aria-label="دليل الألوان والرموز">${LEGEND_HTML}</div>` : ''}
-          <div class="rc-dock-row">
-            <button class="btn ghost sm" id="rc-hint">${icon('eye', 16)} تلميح</button>
+          <div class="rc-dock-row${mode === 'hide' ? ' two' : ''}">
+            <button class="rc-tl" id="rc-hint" type="button">${icon('eye', 22)}<span>تلميح</span></button>
             ${centerBtn}
-            <button class="btn sm" id="rc-end">إنهاء</button>
+            ${mode === 'hide' ? '' : `<div class="rc-sbox"><b class="score" id="rc-score">٠٪</b><small>أخطاء <b id="rc-errn">${N(0)}</b></small></div>`}
           </div>
-        </div>`;
+        </div></div>`;
+      const rootEl = $('#rc-root', el);
 
       { const hd = $('.page-head', el); if (hd) hd.classList.add('sticky-head'); }
       const spans = $$('.word', el);
@@ -643,7 +712,7 @@ export default {
       });
       const shown = new Array(total).fill(null);
       const pageEl = $('#rc-page', el);
-      const scoreEl = $('#rc-score', el), progEl = $('#rc-prog', el), micEl = $('#rc-mic', el), statusEl = $('#rc-status', el);
+      const progEl = $('#rc-prog', el), micEl = $('#rc-mic', el), statusEl = $('#rc-status', el);
       const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
 
       const setFs = v => {
@@ -652,17 +721,30 @@ export default {
         pageEl.style.setProperty('--rc-fs', fs + 'px');
         lastLineTop = null; scrollToCurrent(true);
       };
-      $('#rc-fsm', el).onclick = () => setFs(fs - 2);
-      $('#rc-fsp', el).onclick = () => setFs(fs + 2);
 
       const baseStates = () => (voiceLike ? mres.states : hst);
       const effective = () => baseStates().map((st, i) => (forced.has(i) ? 'peek' : st));
       let ms = { update() {} }, netErr = false, quranReady = false, hintTaps = 0;
       const setStatus = t => { if (statusEl) statusEl.textContent = t; ms.update(); };
-      if (voiceLike) {
-        ms = mountMicState($('#rc-mstate', el), () => ({ perm: micPerm, online: navigator.onLine !== false, netError: netErr, engine, listening, paused: aiState === 'paused', busy: ending || starting, quranReady, native: isNative() }));
-        if (engineSupported()) engineCached().then(v => { quranReady = v; ms.update(); }).catch(() => {});
-      }
+      msgSink = setStatus;
+      const micToggle = () => (engine === 'ai' ? toggleAi() : engine === 'quran' ? toggleQuran() : toggleMic());
+      const started = () => listening || aiState !== 'idle' || sess > 0;
+      // the recording row (also in hide mode, where it only holds «إنهاء»); the gear sheet holds font size, legend and the how-to
+      ms = mountLive($('#rc-live', el), {
+        voice: voiceLike, prefix: `<span class="rc-lv-main rc-lv-score"><b class="score" id="rc-score">٠٪</b><span class="muted">دقة</span><span class="rc-lv-time">أخطاء <b id="rc-errn">${N(0)}</b></span></span>`, msg: $('#rc-msg', el), started, onPause: () => { if (!noVoice) micToggle(); }, onEnd: () => finish(),
+        get: () => ({ perm: micPerm, online: navigator.onLine !== false, netError: netErr, engine, listening, paused: aiState === 'paused' || (engine === 'device' && sess > 0 && !listening && !ending), busy: ending || starting, quranReady, native: isNative() })
+      });
+      if (voiceLike && engineSupported()) engineCached().then(v => { quranReady = v; ms.update(); }).catch(() => {});
+      sessCtl = {
+        fs: { get: () => fs, set: setFs },
+        how: mode === 'hide' ? 'اضغط على مكان أي كلمة لكشفها (تُحسب خطأ)، أو «تذكرتها» عند إتقان الآية التالية.' : 'تُكتب الكلمة عند نطقها صحيحة، والأخطاء بالأحمر، وغير الواضحة بالأصفر — اضغط على الخطأ لسماعه.'
+      };
+      // tap an empty part of the page to hide / show the tools (the recording row + stop stay); ayahs, words and buttons never toggle
+      chromeCtl = bindChromeToggle(rootEl, {
+        persist: false, ignore: RC_IGNORE,
+        apply: off => rootEl.classList.toggle('chrome-off', off), onHint: t => setStatus(t)
+      });
+      barRO = reserveBar(rootEl, $('#rc-dock', el), '--rc-dock-h');
 
       // ---- keep the current line around the upper-middle of the viewport ----
       let curPtr = -1, lastLineTop = null;
@@ -707,9 +789,10 @@ export default {
       function paint() {
         const st = effective();
         const ptr = st.indexOf('pending');
-        let ok = 0, done = 0, newBad = false, newAyah = false, newBadIdx = -1;
+        let ok = 0, done = 0, newBad = false, newAyah = false, newBadIdx = -1, badN = 0;
         for (let i = 0; i < total; i++) {
           const x = st[i];
+          if (x === 'bad') badN++;
           if (x === 'ok' || x === 'uns') ok++;
           if (x !== 'pending') done++;
           if (x === prevSt[i]) continue;
@@ -736,7 +819,9 @@ export default {
         if (newBad && voiceLike && !ending && !finished) mistakeAlert(newBadIdx);
         if (fixIdx >= 0 && (st[fixIdx] === 'ok' || st[fixIdx] === 'uns')) { fixIdx = -1; hideFix(); }
         const acc = total ? Math.round(100 * ok / total) : 0;
-        scoreEl.textContent = N(acc) + '٪';
+        const scoreEl = $('#rc-score', el), errnEl = $('#rc-errn', el);
+        if (scoreEl) scoreEl.textContent = N(acc) + '٪';
+        if (errnEl) errnEl.textContent = N(badN);
         progEl.style.width = (total ? 100 * done / total : 0) + '%';
         if (ptr !== curPtr) { curPtr = ptr; if (ptr >= 0) scrollToCurrent(); }
         return ptr;
@@ -759,7 +844,7 @@ export default {
           if (micEl) micEl.classList.remove('live'); setLevel(0);
           setStatus('توقفنا عند الخطأ — اسمع الصواب ثم اضغط متابعة');
         } else if (engine === 'device' && listening) { errPaused = true; stopListeningNow(); setStatus('توقفنا عند الخطأ — اسمع الصواب ثم اضغط متابعة'); }
-        showFixWord(flat[i].w, { onContinue: resumeAfterError, onFix: () => playWord(i) });
+        showFixWord(flat[i].w, { onContinue: resumeAfterError, onFix: () => playWord(i), onEnd: () => finish() });
         playWord(i);
       }
       function resumeAfterError() {
@@ -802,7 +887,7 @@ export default {
         if (finished || ending) return;
         if (listening) { stopListeningNow(); return; }
         netErr = false; if (micPerm === 'denied') micPerm = 'unknown';
-        if (navigator.onLine === false && support !== 'native') { toast(micMsg('offline')); setStatus(micMsg('offline')); return; }
+        if (navigator.onLine === false && support !== 'native') { tell(micMsg('offline')); setStatus(micMsg('offline')); return; }
         setListening(true);
         const my = ++sess;
         try {
@@ -820,13 +905,13 @@ export default {
               if (err === 'permission') micPerm = 'denied';
               if (err === 'network') netErr = true;
               stopListeningNow();
-              toast(micMsg(err));
+              tell(micMsg(err));
               setStatus(micMsg(err));
             }
           });
           if (!isLive() || !listening) { try { stop(); } catch (e) {} return; }
           stopMic = stop;
-        } catch (e) { stopListeningNow(); toast(micMsg('error')); }
+        } catch (e) { stopListeningNow(); tell(micMsg('error')); }
       }
 
       // ----- precise (Whisper) engine -----
@@ -857,8 +942,8 @@ export default {
           if (finished || ending) return;
           const code = res.e && res.e.code;
           if (res.e && (res.e.name === 'AbortError' || code === 'aborted')) return;
-          if (code === 'rate_limited' || code === 'daily_limit') { toast('تحوّلنا إلى الوضع الفوري'); switchToDevice(true); return; }
-          if (++fails >= 2) { toast('تعذّر الوضع الدقيق — تحوّلنا إلى الفوري'); switchToDevice(true); }
+          if (code === 'rate_limited' || code === 'daily_limit') { tell('تحوّلنا إلى الوضع الفوري'); switchToDevice(true); return; }
+          if (++fails >= 2) { tell('تعذّر الوضع الدقيق — تحوّلنا إلى الفوري'); switchToDevice(true); }
           return;
         }
         fails = 0;
@@ -873,7 +958,7 @@ export default {
       function onRecError(err) {
         if (!isLive() || engine !== 'ai') return;
         if (err === 'permission') micPerm = 'denied';
-        toast(err === 'permission' ? micMsg('permission') : micMsg('error') + ' — سيُستخدم الوضع الفوري');
+        tell(err === 'permission' ? micMsg('permission') : micMsg('error') + ' — سيُستخدم الوضع الفوري');
         switchToDevice(err !== 'permission');
       }
 
@@ -889,7 +974,7 @@ export default {
         base = lastFull;
         support = await speechSupport();
         if (!isLive() || finished || ending) return;
-        if (support === 'none') { toast('التعرف على الصوت غير متاح هنا'); return; }
+        if (support === 'none') { tell('التعرف على الصوت غير متاح هنا'); return; }
         if (autoStart) toggleMic();
       }
 
@@ -943,7 +1028,7 @@ export default {
         let r = null, early = [], earlyLen = 0, live = false, appAudioTill = 0;
         const fallback = async msg => {
           if (!isLive() || engine !== 'quran' || finished || ending) return;
-          toast(msg);
+          tell(msg);
           engine = 'device'; aiState = 'idle';
           const old = rec || r; rec = null; recCtl = null;
           if (old) old.stop().catch(() => {});
@@ -966,7 +1051,7 @@ export default {
           }, onLevel: setLevel, onError: err => {
             if (!isLive() || engine !== 'quran') return;
             if (err === 'permission') micPerm = 'denied';
-            toast(micMsg(err === 'permission' ? 'permission' : 'error'));
+            tell(micMsg(err === 'permission' ? 'permission' : 'error'));
             setListening(false); aiState = 'idle';
           } });
           if (!r) { starting = false; ms.update(); return; }        // onError already explained why
@@ -979,7 +1064,7 @@ export default {
             onVerdicts: w => { if (isLive() && !finished) applyQuran(w); },
             onIssue: i => { if (isLive() && !finished) onQuranIssue(i); },
             onError: () => fallback('توقف المحرك القرآني — تحوّلنا إلى الفوري'),
-            onSlow: () => { if (isLive() && !finished) toast('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); }
+            onSlow: () => { if (isLive() && !finished) tell('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); }
           });
           activeEngine = qe;
           for (const b of early) qe.pcm(b);
@@ -1030,7 +1115,7 @@ export default {
       function hintWord() {
         if (finished || ending) return;
         const plan = planHint({ ...hintRange(), kind: 'word' });
-        if (!plan.indices.length) { toast('لا كلمات مخفية متبقية في هذا المقطع'); return; }
+        if (!plan.indices.length) { tell('لا كلمات مخفية متبقية في هذا المقطع'); return; }
         const i = plan.indices[0];
         noteHint(); forced.add(i); peekedAll.add(i); peekLetter.delete(i);
         setStatus('تلميح: الكلمة كاملة'); paint(); playWord(i);
@@ -1038,7 +1123,7 @@ export default {
       function hintAyah() {
         if (finished || ending) return;
         const plan = planHint({ ...hintRange(), kind: 'ayah' });
-        if (!plan.indices.length) { toast('لا كلمات مخفية متبقية في هذا المقطع'); return; }
+        if (!plan.indices.length) { tell('لا كلمات مخفية متبقية في هذا المقطع'); return; }
         noteHint();
         for (const k of plan.indices) { forced.add(k); peekedAll.add(k); peekLetter.delete(k); }
         setStatus('تلميح: الآية كاملة'); paint();
@@ -1057,7 +1142,7 @@ export default {
         if (finished || ending || showAll) return;
         const st = effective(); let n = 0;
         for (let i = 0; i < total; i++) if (st[i] === 'pending') { peekedAll.add(i); n++; }
-        if (!n) { toast('لا كلمات مخفية متبقية في هذا المقطع'); return; }
+        if (!n) { tell('لا كلمات مخفية متبقية في هذا المقطع'); return; }
         noteHint(); applyShowAll(true); setStatus('تلميح: النص كله ظاهر');
       }
       function hintHideAgain() { if (!showAll) return; applyShowAll(false); setStatus(listening ? 'أسمعك… اقرأ الآن' : 'أُعيد إخفاء النص'); }
@@ -1170,16 +1255,15 @@ export default {
       }
 
       if (noVoice) { $('#rc-tohide', el).onclick = () => { cfg.mode = 'hide'; startSession(); }; }
-      if (micEl) micEl.onclick = () => (engine === 'ai' ? toggleAi() : engine === 'quran' ? toggleQuran() : toggleMic());
+      if (micEl) micEl.onclick = micToggle;
       $('#rc-hint', el).onclick = hint;
       $('#rc-gear', el).onclick = openControls;
       const okBtn = $('#rc-ok', el); if (okBtn) okBtn.onclick = markNextAyah;
-      $('#rc-end', el).onclick = () => { finish(); };
       $('#rc-text', el).addEventListener('click', e => {
         const sp = e.target.closest('.word'); if (!sp || finished || ending) return;
         const i = +sp.dataset.i;
         const st = effective()[i];
-        if (st === 'bad' || st === 'peek') { playWord(i); toast('الصواب: ' + flat[i].w); return; }
+        if (st === 'bad' || st === 'peek') { playWord(i); tell('الصواب: ' + flat[i].w); return; }
         if (mode === 'hide' && hst[i] === 'pending') { hst[i] = 'bad'; paint(); playWord(i); }
       });
       paint();
@@ -1223,41 +1307,47 @@ export default {
       const hintPos = hasPg ? { surah: pageFirst(startPage).s, ayah: pageFirst(startPage).a } : pos0;
       const inkK = lsGet('noor.rd.ink', 'auto'), framed = lsGet('noor.rd.frame', '0') === '1';
       const metaHTML = p => `<span>صفحة ${N(p)}</span><i>|</i><span>جزء ${N(juzOfPage(p))}</span><i>|</i><span>حزب ${N(hizbNo(p))}</span>`;
-      el.innerHTML = `<div class="rd rc-rd${showText ? '' : ' rd-hidden'}${framed ? ' rd-framed' : ''} rd-ink-${['bright', 'warm'].includes(inkK) ? inkK : 'auto'}" id="rd">
+      const autoChip = on => `${icon(on ? 'check' : 'close', 16)}<span>انتقال تلقائي: <b>${on ? 'مفعّل' : 'متوقف'}</b></span>`;
+      const tl = (id, ic2, label, extra = '') => `<button class="rc-tl" id="${id}" type="button"${extra}>${ic2}<span>${label}</span></button>`;
+      el.innerHTML = `<div class="rd rc-rd${showText ? '' : ' rd-hidden'}${framed ? ' rd-framed' : ''} rd-ink-${['bright', 'warm'].includes(inkK) ? inkK : 'auto'}" id="rcrd">
         <div class="rd-top"><button class="rd-ic" id="rc-menu" aria-label="القائمة">${ic('menu')}</button>
           <div class="rd-cardbox"><div class="rd-card"><div class="rd-card-main"><div class="rd-sname" id="rc-sname">${esc(pageNames(startPage))}</div><div class="rd-meta" id="rc-meta">${metaHTML(startPage)}</div></div></div></div>
           <button class="rd-ic" data-go="search" aria-label="بحث">${icon('search')}</button><button class="rd-ic" id="rc-gear" aria-label="إعدادات التسميع">${icon('gear', 22)}</button></div>
-        <div class="rc-mstate rc-mstate-free" id="rc-mstate"></div>
-        <div class="rc-strip"><span class="rc-status small" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : sard ? 'اضغط المايك واسرد من حفظك، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع'}</span>
-          <b class="small rc-fcount" id="rc-count"></b><span class="small muted rc-ftime" id="rc-time">${clock(0)}</span>
-          <button class="rc-endbtn" id="rc-end">إنهاء</button></div>
+        <div class="rc-strip">
+          <button class="rc-autochip${loadAutoPage() ? ' on' : ''}" id="rc-auto" type="button" role="switch" aria-checked="${loadAutoPage()}" title="تنتقل الصفحة عند الوصول إلى آخر كلمة فيها فقط">${autoChip(loadAutoPage())}</button>
+          <b class="small rc-fcount" id="rc-count"></b>
+        </div>
         <div class="rd-stage"><div class="mp-book rc-fwrap${showText ? ' shown' : ''}" id="rc-fwrap"></div></div>
-        <div class="rd-bottom">
-          <div class="rc-hintnote small" id="rc-hintnote" hidden></div>
-          <div class="rc-legend small" aria-label="دليل الألوان والرموز">${LEGEND_HTML}</div>
-          <div class="rd-peek" id="rdPeek"><button class="rd-pk" id="pkMenu" aria-haspopup="dialog" aria-label="تلميح">${ic('peekWord', 20)}<span>تلميح</span></button></div>
-          <div class="rd-bar"><div class="rd-tools">
-            <button class="rd-pill" id="rc-mist">${ic('warn', 18)}<span>أخطاء</span><b class="rd-badge" id="rc-mistn" hidden></b></button>
-            <button class="rd-tool" id="rc-pgprev" aria-label="الصفحة السابقة" title="الصفحة السابقة">${icon('back', 22)}</button>
-            <button class="rd-tool" id="rc-pgnext" aria-label="الصفحة التالية" title="الصفحة التالية" style="transform:scaleX(-1)">${icon('back', 22)}</button>
-            <button class="rd-pill rc-auto" id="rc-auto" aria-pressed="${loadAutoPage()}" title="عند نهاية الصفحة تنتقل تلقائياً إلى التالية">انتقال تلقائي ${loadAutoPage() ? 'مفعّل' : 'متوقف'}</button>
-            <button class="rd-tool rc-relock" id="rc-relock" aria-label="إعادة تحديد الموضع" title="إن بدأت القراءة من موضع آخر في القرآن فاضغط هنا ليبحث التطبيق عن موضعك من جديد">${icon('repeat', 22)}<span>إعادة تحديد الموضع</span></button>
-            <button class="rd-tool rd-eye${showText ? '' : ' on'}" id="rc-eye" aria-pressed="${!showText}" aria-label="إخفاء الآيات">${ic(showText ? 'eye' : 'eyeoff', 22)}</button>
-          </div></div></div>
-        <button class="rd-fab" id="rc-mic" aria-label="تشغيل الميكروفون"><span class="rd-fab-mic">${icon('mic', 30)}</span></button>
+        <div class="rd-bottom rc-bottom"><div class="rc-bottom-in">
+          <div class="rc-msg" id="rc-msg"><span class="rc-status" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : sard ? 'اضغط المايك واسرد من حفظك، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع'}</span><div class="rc-hintnote" id="rc-hintnote" hidden></div><span class="rc-msg-detail" hidden></span><button class="rc-msg-act" id="rc-relock" type="button" hidden>${icon('repeat', 16)}<span>إعادة تحديد الموضع</span></button></div>
+          <div class="rc-live" id="rc-live"></div>
+          <div class="rc-tools">
+            <button class="rd-fab" id="rc-mic" type="button" aria-label="تشغيل الميكروفون"><span class="rd-fab-mic">${icon('mic', 30)}</span></button>
+            ${tl('pkMenu', icon('eye', 22), 'تلميح', ' aria-haspopup="dialog" aria-label="تلميح"')}
+            <button class="rc-tl" id="rc-mist" type="button">${ic('warn', 22)}<span>أخطاء</span><b class="rd-badge" id="rc-mistn" hidden></b></button>
+            ${tl('rc-pgprev', icon('back', 22), 'السابقة', ' aria-label="الصفحة السابقة"')}
+            ${tl('rc-pgnext', `<span class="rc-flip">${icon('back', 22)}</span>`, 'التالية', ' aria-label="الصفحة التالية"')}
+          </div>
+        </div></div>
       </div>`;
       document.body.classList.add('rd-mode');
-      const micEl = $('#rc-mic', el), statusEl = $('#rc-status', el), countEl = $('#rc-count', el), timeEl = $('#rc-time', el);
-      const wrap = $('#rc-fwrap', el), rootEl = $('#rd', el);
+      const micEl = $('#rc-mic', el), statusEl = $('#rc-status', el), countEl = $('#rc-count', el);
+      const wrap = $('#rc-fwrap', el), rootEl = $('#rcrd', el);
       let ms = { update() {} }, quranReady = true, hintTaps = 0;   // free mode only runs with the cached on-device engine
       const setStatus = t => { if (statusEl) statusEl.textContent = t; ms.update(); };
+      msgSink = setStatus;
       const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
       const listenText = () => (cur ? (sard ? 'أتابعك… واصل السرد' : 'أتابعك… واصل القراءة') : 'أسمعك… أبحث عن الموضع');
       const setCard = p => { const n = $('#rc-sname', el), m = $('#rc-meta', el); if (n) n.textContent = pageNames(p); if (m) m.innerHTML = metaHTML(p); };
 
       const t0 = Date.now();
       let rec = null, qe = null, starting = false, recState = 'idle', ending = false, finished = false;
-      ms = mountMicState($('#rc-mstate', el), () => ({ perm: micPerm, online: navigator.onLine !== false, engine: 'quran', listening: recState === 'rec', paused: recState === 'paused', busy: ending || starting, quranReady, native: isNative() }));
+      ms = mountLive($('#rc-live', el), {
+        voice: true, msg: $('#rc-msg', el), started: () => recState !== 'idle' || starting,
+        onPause: () => { if (recState === 'rec' || recState === 'paused') toggle(); }, onEnd: () => endNow(),
+        get: () => ({ perm: micPerm, online: navigator.onLine !== false, engine: 'quran', listening: recState === 'rec', paused: recState === 'paused', busy: ending || starting, quranReady, native: isNative() })
+      });
+      { const upd = ms.update; ms.update = () => { rootEl.classList.toggle('rc-active', recState !== 'idle' || starting); upd(); }; }
       let recBlob = null, recSecs = 0, muteTill = 0, lastWarn = 0, warnCount = 0, mistakes = 0, pcmN = 0, lastUnclear = 0;
       const peekPages = new Map();      // page -> Set of glyph/word indices revealed by «تلميح»
       const peekedKeys = new Set(), forcedKeys = new Set();   // 's:a:k' (k = 0-based word of the ayah): peeked at / fully shown
@@ -1302,17 +1392,13 @@ export default {
         const bd = $('#rc-mistn', el), n = hardIssues().length;
         if (bd) { bd.hidden = !n; bd.textContent = N(n); }
       };
-      timer = setInterval(() => { if (isLive() && rec && timeEl) timeEl.textContent = clock(rec.elapsed()); }, 1000);
 
       // eye = the reader's hidden mode («إخفاء الآيات»): rule lines + ayah medallions, recited words appear in ink
-      const eyeB = $('#rc-eye', el);
       const setHidden = (on, quiet) => {
         showText = !on; saveFlag(TEXT_KEY, showText);
-        eyeB.classList.toggle('on', on); eyeB.setAttribute('aria-pressed', String(on)); eyeB.innerHTML = ic(on ? 'eyeoff' : 'eye', 22);
         rootEl.classList.toggle('rd-hidden', on); wrap.classList.toggle('shown', !on);
-        if (!quiet) toast(on ? 'إخفاء الآيات: مفعّل' : 'إخفاء الآيات: متوقف');
+        if (!quiet) tell(on ? 'إخفاء الآيات: مفعّل' : 'إخفاء الآيات: متوقف');
       };
-      eyeB.onclick = () => setHidden(showText);
       $('#pkMenu', el).onclick = () => openHintMenu({
         rangeNote: 'ضمن السورة الجارية وصفحة العرض فقط',
         shown: () => showText, word: () => hint('word'), ayah: () => hint('ayah'), showAll: hintShowAll, hideAgain: hintHideAgain
@@ -1330,8 +1416,8 @@ export default {
           </div>`, { onClose: () => { if (mSheet === sh) mSheet = null; } });
         sh.classList.add('rd-sheet'); mSheet = sh;
         $('[data-x]', sh).onclick = () => sh.close();
-        $('[data-k]', sh).onclick = () => { if (!idleNow()) { toast('أنهِ الجلسة الجارية أولاً'); return; } sh.close(); startFree(sard ? 'free' : 'sard', { auto: false, page: page ? page.p : pageWant }); };
-        $('[data-r]', sh).onclick = () => { if (!idleNow()) { toast('أنهِ الجلسة الجارية أولاً'); return; } sh.close(); showSetup(); };
+        $('[data-k]', sh).onclick = () => { if (!idleNow()) { tell('أنهِ الجلسة الجارية أولاً'); return; } sh.close(); startFree(sard ? 'free' : 'sard', { auto: false, page: page ? page.p : pageWant }); };
+        $('[data-r]', sh).onclick = () => { if (!idleNow()) { tell('أنهِ الجلسة الجارية أولاً'); return; } sh.close(); showSetup(); };
         $('[data-m]', sh).onclick = () => { sh.close(); window.noorGo('mushaf/p' + (page ? page.p : pageWant || startPage)); };
       };
       // «أخطاء»: this session's mistakes, newest first
@@ -1350,27 +1436,44 @@ export default {
       };
       // free mode: the engine keeps the surah it locked on and holds back a match elsewhere (the place stays). This button
       // drops that lock and searches the whole Quran again: press it when you started reciting from a different place.
+      // the button lives in the message strip and only shows when the engine suspects another place (the gear sheet always offers it)
       const relockB = $('#rc-relock', el);
       const relocHint = s => {
-        if (!s) { relockB.classList.remove('rc-attn'); if (recState === 'rec') setStatus(listenText()); return; }
-        relockB.classList.add('rc-attn');
-        setStatus(`يبدو أنك تقرأ من سورة ${surahName(s)} — إن كان ذلك صحيحاً فاضغط «إعادة تحديد الموضع»`);
+        if (!s) { relockB.hidden = true; if (recState === 'rec') setStatus(listenText()); return; }
+        relockB.hidden = false;
+        setStatus(`يبدو أنك تقرأ من سورة ${surahName(s)} — إن كان صحيحاً فأعد تحديد الموضع`);
       };
-      relockB.onclick = () => {
+      const doRelock = () => {
         if (recState === 'rec' && qe && activeEngine === qe && !ending && !finished && qe.relock) {
-          qe.relock(); relockPending = true; manualPage = false; pendingPage = 0; relockB.classList.remove('rc-attn'); toast('أعدت البحث عن موضعك — تابع القراءة');
-        } else toast('ابدأ القراءة أولاً');
+          qe.relock(); relockPending = true; manualPage = false; pendingPage = 0; relockB.hidden = true; tell('أعدت البحث عن موضعك — تابع القراءة');
+        } else tell('ابدأ القراءة أولاً');
       };
+      relockB.onclick = doRelock;
       $('#rc-pgprev', el).onclick = () => goPage(-1);
       $('#rc-pgnext', el).onclick = () => goPage(1);
       const autoB = $('#rc-auto', el);
+      // «مفعّل» / «متوقف»: icon + text, never colour only. The page turns only once the last word of the shown page is reached.
+      const setAuto = on => {
+        autoPage = !!on; saveAutoPage(autoPage); pendingPage = 0;
+        autoB.classList.toggle('on', autoPage); autoB.setAttribute('aria-checked', String(autoPage));
+        autoB.innerHTML = autoChip(autoPage);
+      };
       autoB.onclick = () => {
-        autoPage = !autoPage; saveAutoPage(autoPage); pendingPage = 0;
-        autoB.setAttribute('aria-pressed', String(autoPage));
-        autoB.textContent = 'انتقال تلقائي ' + (autoPage ? 'مفعّل' : 'متوقف');
-        toast(autoPage ? 'الانتقال التلقائي للصفحة التالية مفعّل' : 'أوقفت الانتقال التلقائي — استخدم السهمين للتنقل بين الصفحات');
+        setAuto(!autoPage);
+        tell(autoPage ? 'الانتقال التلقائي مفعّل — تنتقل الصفحة عند الوصول إلى آخر كلمة فيها' : 'الانتقال التلقائي متوقف — استخدم «السابقة» و«التالية» للتنقل');
       };
       $('#rc-gear', el).onclick = openControls;
+      sessCtl = {
+        auto: { get: () => autoPage, set: setAuto },
+        eye: { get: () => !showText, set: v => setHidden(!!v, true) },
+        relock: doRelock
+      };
+      // tap an empty part of the page to hide / show the tools; the recording row + stop stay. Taps on ayahs, words and buttons never toggle.
+      chromeCtl = bindChromeToggle(rootEl, {
+        persist: false, ignore: RC_IGNORE,
+        apply: off => rootEl.classList.toggle('chrome-off', off), onHint: t => setStatus(t)
+      });
+      barRO = reserveBar(rootEl, $('.rc-bottom', el), '--rd-bot-h');
 
       // ---- page display: Madinah Mushaf page (QCF v2), or the plain text of the same page if it cannot load ----
       function textPage(p) {
@@ -1399,7 +1502,7 @@ export default {
         if (L) { const pg = pageGlyphs(L); groups = pg.groups; ends = pg.ends; mode = 'madani'; html = renderPageLines(L, { hideText: true, family: fam }); }
         else {
           ({ html, groups, ends } = textPage(p)); mode = 'text';
-          if (!mdWarnedHere) { mdWarnedHere = true; toast('تعذّر تحميل خط مصحف المدينة، عُرضت الصفحة بالخط العادي'); }
+          if (!mdWarnedHere) { mdWarnedHere = true; tell('تعذّر تحميل خط مصحف المدينة، عُرضت الصفحة بالخط العادي'); }
         }
         wrap.innerHTML = `<div class="mp-page rc-fpage page-${side(p)}${dir ? ' turn-' + dir : ''}" data-p="${p}">
           <div class="mp-body${mode === 'madani' ? ' madani' : ''}">${html}</div>
@@ -1491,9 +1594,9 @@ export default {
       const pendingOnPage = () => ({ isPending: k => !page.endSet.has(k) && page.st[k] === 'f-pend', groups: page.groups, lock: cur ? cur.s : null, from: page.lastJ + 1 });
       function hint(kind = 'word') {
         if (finished || ending || !page || !page.st) return;
-        if (showText) { toast('النص ظاهر الآن — اختر «إعادة الإخفاء» أولاً'); return; }
+        if (showText) { tell('النص ظاهر الآن — اختر «إعادة الإخفاء» أولاً'); return; }
         const plan = planHint({ ...pendingOnPage(), kind });
-        if (!plan.indices.length) { toast('لا كلمات مخفية متبقية في هذه الصفحة ضمن السورة الحالية'); return; }
+        if (!plan.indices.length) { tell('لا كلمات مخفية متبقية في هذه الصفحة ضمن السورة الحالية'); return; }
         const g = plan.group;
         hintTaps++; showHintNote($('#rc-hintnote', el));
         const set = peekPages.get(page.p) || peekPages.set(page.p, new Set()).get(page.p);
@@ -1510,7 +1613,7 @@ export default {
           if (lock != null && g.s !== lock) continue;
           for (let k = g.start; k < g.end; k++) if (!page.endSet.has(k) && page.st[k] === 'f-pend') { peekedKeys.add(g.s + ':' + g.a + ':' + (k - g.start)); n++; }
         }
-        if (!n && !plan.indices.length) { toast('لا كلمات مخفية متبقية في هذه الصفحة ضمن السورة الحالية'); return; }
+        if (!n && !plan.indices.length) { tell('لا كلمات مخفية متبقية في هذه الصفحة ضمن السورة الحالية'); return; }
         hintTaps++; showHintNote($('#rc-hintnote', el));
         setHidden(false, true); setStatus('تلميح: النص كله ظاهر');
       }
@@ -1561,7 +1664,7 @@ export default {
         const word = splitWords(ayah(g.s, g.a))[k];
         if (!word) return;
         if (recState === 'rec' && rec) { rec.pause(); recState = 'paused'; errHeld = true; micEl.classList.remove('live'); setLevel(0); setStatus('توقفنا عند الخطأ — اسمع الصواب ثم اضغط متابعة'); }
-        showFixWord(word, { onContinue: resumeFree, onFix: () => playWordAt(g.s, g.a, k + 1) });
+        showFixWord(word, { onContinue: resumeFree, onFix: () => playWordAt(g.s, g.a, k + 1), onEnd: () => endNow() });
         playWordAt(g.s, g.a, k + 1);
       }
       function resumeFree() {
@@ -1569,24 +1672,13 @@ export default {
         errHeld = false;
         if (recState === 'paused' && rec) { rec.resume(); recState = 'rec'; micEl.classList.add('live'); setStatus(listenText()); }
       }
-      function showPill(s, a, w) {
-        if (!wrap) return;
-        const pill = document.createElement('div');
-        pill.className = 'rc-warn'; pill.setAttribute('role', 'status'); pill.textContent = 'انتبه';
-        let placed = false;
-        if (page && page.keys.has(s + ':' + a)) {
-          const idx = [...mapVerdicts([{ s, a, w, st: 'wrong' }], page.groups, counts()).keys()][0];
-          const sp = idx != null ? page.spans[idx] : null;
-          if (sp) {
-            const r = sp.getBoundingClientRect(), b = wrap.getBoundingClientRect();
-            pill.style.left = Math.max(36, Math.min(b.width - 36, r.left + r.width / 2 - b.left)) + 'px';
-            pill.style.top = Math.max(0, r.top - b.top) + 'px';
-            placed = true;
-          }
-        }
-        if (!placed) pill.classList.add('top');
-        wrap.appendChild(pill);
-        setTimeout(() => { try { pill.remove(); } catch (e) {} }, 1600);
+      /** The light warning of the sard: «انتبه» in the message strip above the bar (the word itself turns red on the page). Never over the verses. */
+      let pillT = 0;
+      function showPill() {
+        const m = $('#rc-msg', el); if (!m) return;
+        setStatus('انتبه — راجع الكلمة المظللة'); m.classList.add('warn');
+        clearTimeout(pillT);
+        pillT = setTimeout(() => { m.classList.remove('warn'); if (isLive() && recState === 'rec' && !finished) setStatus(listenText()); }, 2200);
       }
       function warn(s, a, w) {
         const now = Date.now();
@@ -1598,7 +1690,7 @@ export default {
           try { vib = !!(navigator.vibrate && navigator.vibrate(60)); } catch (e) { vib = false; }
           if (!vib) haptic('light');
         }
-        showPill(s, a, w);
+        showPill();
       }
       function onIssue(issue) {
         const kind = ISSUE_KIND[issue.kind]; if (!kind) return;
@@ -1637,7 +1729,7 @@ export default {
           }, onLevel: setLevel, onError: err => {
             if (!isLive()) return;
             if (err === 'permission') micPerm = 'denied';
-            toast(micMsg(err === 'permission' ? 'permission' : 'error'));
+            tell(micMsg(err === 'permission' ? 'permission' : 'error'));
             recState = 'idle'; syncKind(); micEl.classList.remove('live'); setStatus('اضغط على الميكروفون للمحاولة مجدداً');
           } });
           if (!r) { starting = false; ms.update(); return; }
@@ -1648,8 +1740,8 @@ export default {
           qe.startFree({
             onVerdicts: w => { if (isLive() && !finished) applyWords(w); },
             onIssue: i => { if (isLive() && !finished) onIssue(i); },
-            onError: () => { if (isLive() && !finished && !ending) { toast('توقف المحرك القرآني — عرضنا ما سُمع'); finish(); } },
-            onSlow: () => { if (isLive() && !finished) toast('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); },
+            onError: () => { if (isLive() && !finished && !ending) { tell('توقف المحرك القرآني — عرضنا ما سُمع'); finish(); } },
+            onSlow: () => { if (isLive() && !finished) tell('الجهاز أبطأ من المحرك، قد تتأخر الكلمات قليلاً'); },
             onRelocate: s => { if (isLive() && !finished) relocHint(s); },
           }, { hint: hintPos });
           activeEngine = qe;
@@ -1657,7 +1749,7 @@ export default {
           early = []; earlyLen = 0; live = true;
           setStatus(listenText());
         } catch (e) {
-          toast('تعذّر تشغيل المحرك القرآني');
+          tell('تعذّر تشغيل المحرك القرآني');
           if (r) { r.stop().catch(() => {}); }
           rec = null; recCtl = null; recState = 'idle'; micEl.classList.remove('live');
           setStatus('اضغط على الميكروفون للمحاولة مجدداً');
@@ -1780,7 +1872,7 @@ export default {
       }
 
       micEl.onclick = toggle;
-      $('#rc-end', el).onclick = () => { if (recState === 'idle' && !qe && !starting) { toast('اضغط على المايك وابدأ القراءة'); return; } finish(); };
+      function endNow() { if (recState === 'idle' && !qe && !starting) { tell('اضغط على المايك وابدأ القراءة'); return; } finish(); }
       // a red word: tap to hear it
       wrap.addEventListener('click', e => {
         const sp = e.target.closest('.f-bad'); if (!sp || !page || ending) return;

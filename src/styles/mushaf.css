@@ -89,8 +89,10 @@
 .tj-bar[hidden] { display: none; }
 
 /* ===== Madinah Mushaf mode: 15 printed lines in the King Fahd Complex QCF v2 page font ===== */
-.mq-lines { --mq-fs: 20px; font-size: var(--mq-fs); color: var(--ink); direction: rtl; width: 100%; display: flex; flex-direction: column; flex: 1; justify-content: space-between; }
-.mq-line { display: flex; justify-content: space-between; align-items: center; white-space: nowrap; height: calc(var(--mq-fs) * 1.95); line-height: 1; }
+/* --mq-fs (font) and --mq-lh (line pitch) are set by fitLines (core/madani-render.js); the page has no fixed height, it is as tall as its lines.
+   Glyph shaping stays untouched: no letter / word spacing, kerning and ligatures on. */
+.mq-lines { --mq-fs: 20px; font-size: var(--mq-fs); color: var(--ink); direction: rtl; width: 100%; display: flex; flex-direction: column; flex: 1; justify-content: space-between; letter-spacing: 0; word-spacing: 0; font-kerning: normal; font-variant-ligatures: normal; text-rendering: optimizeLegibility; }
+.mq-line { display: flex; justify-content: space-between; align-items: center; flex: none; white-space: nowrap; height: var(--mq-lh, calc(var(--mq-fs) * 1.95)); line-height: 1; }
 .mq-lines.short { width: 82%; margin: auto; justify-content: center; }
 .mq-lines.short .mq-line { justify-content: center; gap: .18em; }
 .mq-w { cursor: pointer; border-radius: 4px; transition: background .2s; }
@@ -113,6 +115,8 @@
 
 /* the page does not fit even at the readable minimum: flagged in red, never clipped */
 .mq-lines.mq-overflow { box-shadow: inset 0 0 0 1px var(--bad, #c0392b); }
+/* the screen is too short for the whole page at the readable minimum font: the page scrolls (nothing is squeezed) */
+.mq-lines.mq-scroll { justify-content: flex-start; }
 
 /* ---- home: my bookmarks shortcut row */
 .hm-bms { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 0; }

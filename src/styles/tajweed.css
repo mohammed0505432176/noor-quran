@@ -54,6 +54,9 @@ html[data-theme='light'] {
 .tj-idgham_mutajanisayn, .tj-idgham_mutaqaribayn { color: var(--tj-idgham); }
 .tj-iqlab { color: var(--tj-iqlab); }
 
+/* Colour spans must never break Arabic joining or push marks: colour only, no box / spacing properties on .tj */
+.tj { display: inline; padding: 0; margin: 0; border: 0; background: none; letter-spacing: 0; word-spacing: normal; font: inherit; }
+
 /* Legend */
 .tj-legend { display: grid; gap: 8px; max-height: 58vh; overflow: auto; margin-top: 10px; }
 .tj-legend-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; background: var(--card-2); }

@@ -6,7 +6,8 @@ import { PAGE_COUNT, pageOf, pageContent, pageFirst, side, quarterOf, quarterSta
 import * as audio from '../core/audio.js';
 import { loadTajweed, TAJWEED_LEGEND } from '../core/tajweed.js';
 import * as madani from '../core/madani.js';
-import { fitLines } from '../core/madani-render.js';
+import { fitLines, syncReserve, setChromeOff } from '../core/madani-render.js';
+import { bindChromeToggle } from '../core/chrome-toggle.js';
 import * as store from '../core/store.js';
 import { findSimilar } from '../core/mutashabih.js';
 import { norm } from '../core/arabic.js';
@@ -24,6 +25,8 @@ const HID_KEY = 'noor.rd.hidden';
 const FRAME_KEY = 'noor.rd.frame';
 const INK_KEY = 'noor.rd.ink';
 const AWAKE_KEY = 'noor.rd.awake';
+// taps that never hide / show the bars: the helper's own list plus the reader's overlays, page-turn buttons and strips
+const CHROME_IGNORE = 'button,a,input,select,textarea,label,summary,[role="menu"],[role="dialog"],.sheet,.rd-dial,.rd-dimmer,.rd-edge,.rd-peek,.player-bar,.rd-bottom,.rd-top,.tj-bar,.ayah,.mq-w,[data-s],[data-go],[data-pl],[data-act]';
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } };
 const pad3 = n => String(n).padStart(3, '0');
@@ -162,6 +165,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
   let frameOn = lsGet(FRAME_KEY, '0') === '1';
   let ink = lsGet(INK_KEY, 'auto');
   let awakeOn = lsGet(AWAKE_KEY, '0') === '1';
+  let reserve = null, chrome = null;
   let dialOpen = false, wake = null, wAudio = null, lpTimer = 0, lpFired = false, lpX = 0, lpY = 0;
   const revW = new Set(), revA = new Set(); // revealed words ('page:idx') / ayahs ('s:a') in hidden mode
   const mdReady = new Set(), mdFail = new Set(), mdPending = new Set();
@@ -278,9 +282,10 @@ let manualNav = false;             // the reader turned the pages by hand since 
     `<div class="rd-dimmer" id="rdDim"></div>` +
     `<div class="rd-dial" id="rdDial" role="menu">${dialBtn('test', 'اختبار', 'brain')}${dialBtn('recite', 'تلاوة', 'mic')}${dialBtn('listen', 'استمع', 'play')}</div>` +
     `<div class="rd-bottom"><div class="rd-peek" id="rdPeek"><button class="rd-pk" id="pkAyah" aria-label="كشف بقية الآية">${ic('peekAyah', 20)}<span>بقية الآية</span></button><button class="rd-pk" id="pkWord" aria-label="كشف الكلمة التالية">${ic('peekWord', 20)}<span>كلمة</span></button></div>` +
-    `<div class="rd-bar"><div class="rd-tools"><button class="rd-pill" id="rdMist">${ic('warn', 18)}<span>أخطاء</span><b class="rd-badge" id="rdMistN" hidden></b></button>` +
-    `<button class="rd-tool" id="rdIdx" aria-label="فهرس المصحف">${icon('book', 22)}</button>` +
-    `<button class="rd-tool rd-eye${hiddenOn ? ' on' : ''}" id="rdEye" aria-pressed="${hiddenOn}" aria-label="إخفاء الآيات">${ic(hiddenOn ? 'eyeoff' : 'eye', 22)}</button></div></div></div>` +
+    `<div class="rd-bar"><div class="rd-tools"><button class="rd-pill" id="rdMist" aria-label="أخطائي في هذه الصفحة">${ic('warn', 18)}<span>أخطاء</span><b class="rd-badge" id="rdMistN" hidden></b></button>` +
+    `<button class="rd-tool rd-eye${hiddenOn ? ' on' : ''}" id="rdEye" aria-pressed="${hiddenOn}" aria-label="إخفاء الآيات">${ic(hiddenOn ? 'eyeoff' : 'eye', 22)}</button>` +
+    `<button class="rd-tool" data-pg="prev" aria-label="الصفحة السابقة"${shown[0] <= 1 ? ' disabled' : ''}>${icon('back', 22)}</button>` +
+    `<button class="rd-tool" data-pg="next" aria-label="الصفحة التالية"${shown[shown.length - 1] >= PAGE_COUNT ? ' disabled' : ''}><span class="rd-flip">${icon('back', 22)}</span></button></div></div></div>` +
     `<button class="rd-fab" id="rdFab" aria-label="الميكروفون والأدوات" aria-expanded="false"><span class="rd-fab-mic">${icon('mic', 30)}</span><span class="rd-fab-x">${icon('close', 28)}</span></button></div>`;
 
   document.body.classList.add('rd-mode');
@@ -489,6 +494,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     const pv = $('.mp-prev', el), nx = $('.mp-next', el);
     if (pv) pv.disabled = shown[0] <= 1;
     if (nx) nx.disabled = shown[shown.length - 1] >= PAGE_COUNT;
+    $$('[data-pg]', el).forEach(b => { b.disabled = b.dataset.pg === 'prev' ? shown[0] <= 1 : shown[shown.length - 1] >= PAGE_COUNT; });
     revW.clear(); revA.clear();
     updateTop();
     if (dir && !reduced()) {
@@ -508,7 +514,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
 
   // ---- audio ui
   let plOpen = false;               // expanded player sheet (reciter, speed, repeat); the mini bar is always compact
-  const setBarShown = on => { bar.classList.toggle('show', on); root.classList.toggle('rd-pl', on); if (!on) plOpen = false; };
+  const setBarShown = on => { bar.classList.toggle('show', on); root.classList.toggle('rd-pl', on); if (!on) plOpen = false; if (reserve) reserve.apply(); };
   const playOpts = () => audio.getRepeat();
   const drawBar = () => {
     const c = audio.current(), rp = audio.getRepeat(), rt = audio.getRate(), pl = audio.isPlaying();
@@ -662,7 +668,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
   const openMenu = () => {
     const sh = rdSheet(shHead('القائمة') +
       `<div class="rd-list">${goLink('home', 'home', 'الرئيسية')}${goLink('mushaf?tab=s', 'list', 'فهرس السور')}${goLink('mushaf?tab=j', 'list', 'الأجزاء')}${goLink('mushaf?tab=p', 'list', 'الصفحات')}${goLink('mushaf?tab=b', 'bookmark', 'العلامات المرجعية')}` +
-      row('goto', 'search', 'اذهب إلى صفحة') + row('markpage', 'check', 'تعليم الصفحة كمقروءة') + `</div>` +
+      row('index', 'book', 'فهرس المصحف') + row('goto', 'search', 'اذهب إلى صفحة') + row('markpage', 'check', 'تعليم الصفحة كمقروءة') + `</div>` +
       `<div class="rd-sh-sub">العرض</div><div class="rd-list">${swRow('tg-heat', 'chart', 'خريطة أخطائي', heatOn)}${swRow('tg-sim', 'similar', 'تلوين العبارات المتشابهة', simOn)}${swRow('tg-tj', 'spark', 'ألوان التجويد', tjOn)}${swRow('tg-md', 'book', 'خط مصحف المدينة', mdOn)}</div>` +
       `<div class="rd-sh-sub">لون الحبر</div><div class="rd-inks">${[['auto', 'تلقائي'], ['bright', 'ساطع'], ['warm', 'دافئ']].map(([k, l]) => `<button class="rd-ink${ink === k ? ' on' : ''}" data-ink="${k}">${l}</button>`).join('')}</div>`);
     sh.addEventListener('click', e => {
@@ -671,6 +677,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
       const b = e.target.closest('[data-act]'); if (!b) return;
       const a = b.dataset.act;
       if (a === 'close') { sh.close(); return; }
+      if (a === 'index') { sh.close(); openIndexSheet(); return; }
       if (a === 'goto') { sh.close(); openGoto(); return; }
       if (a === 'markpage') { sh.close(); markPage(); return; }
       if (a === 'tg-heat') { setHeat(!heatOn); setSw(b, heatOn); return; }
@@ -939,6 +946,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
       else if (k === 'more') { plOpen = !plOpen; drawBar(); }
       return;
     }
+    if (plOpen && !e.target.closest('.player-bar')) { plOpen = false; drawBar(); }   // the option panel is a pop-over: a tap elsewhere closes it
     if (e.target.closest('#rdDim')) { setDial(false); return; }
     if (e.target.closest('#rdFab')) { setDial(!dialOpen); return; }
     const dl = e.target.closest('[data-dial]');
@@ -955,7 +963,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     if (e.target.closest('#rdSet')) { openSettings(); return; }
     if (e.target.closest('#rdBm')) { toggleBm(); return; }
     if (e.target.closest('#rdMist')) { openMistakes(); return; }
-    if (e.target.closest('#rdIdx')) { openIndexSheet(); return; }
+    { const pgb = e.target.closest('[data-pg]'); if (pgb) { if (!pgb.disabled) (pgb.dataset.pg === 'next' ? goNext : goPrev)(); return; } }
     if (e.target.closest('#rdEye')) { setHidden(!hiddenOn); return; }
     if (e.target.closest('#pkWord')) { peekWord(); return; }
     if (e.target.closest('#pkAyah')) { peekAyah(); return; }
@@ -1032,6 +1040,8 @@ let manualNav = false;             // the reader turned the pages by hand since 
   el.addEventListener('touchend', onTe, { passive: true });
   if (mq) { if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq); }
 
+  reserve = syncReserve(root, () => fitAll());      // real bar heights -> page reserve (never under a bar)
+  chrome = bindChromeToggle(root, { apply: off => { setChromeOff(root, off); if (reserve) reserve.apply(); }, onHint: msg => toast(msg), ignore: CHROME_IGNORE });
   fitAll(); ensureMadani(); updateMistN();
   if (awakeOn) setAwake(true);
   if (tjOn) applyTj();
@@ -1050,6 +1060,8 @@ let manualNav = false;             // the reader turned the pages by hand since 
     unsub();
     audio.stop();
     clearTimeout(hiTimer); clearTimeout(animTimer); cancelAnimationFrame(rzT);
+    if (chrome) chrome.unbind();
+    if (reserve) reserve.dispose();
     window.removeEventListener('resize', onRz);
     if (tafsirAbort) tafsirAbort.abort();
     if (openSheet) openSheet.close();

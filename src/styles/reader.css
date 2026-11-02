@@ -1,5 +1,12 @@
 /* ===== Shared reader chrome (mushaf page reader + free recitation) =====
-   Classes: .rd-top .rd-card .rd-bottom .rd-fab .rd-dial .rd-hidden .rd-peek .rd-sheet */
+   Classes: .rd-top .rd-card .rd-bottom .rd-fab .rd-dial .rd-hidden .rd-peek .rd-sheet
+
+   FULL-SCREEN READING: class `chrome-off` on the reader root (#rd) hides the top bar, the bottom bar and the mic button
+   (opacity + transform, no layout change, so no line of text moves). A tap on an empty part of the page toggles it:
+     import { bindChromeToggle } from '../core/chrome-toggle.js'; import { setChromeOff, syncReserve } from '../core/madani-render.js';
+     bindChromeToggle(root, { apply: off => { setChromeOff(root, off); reserve.apply(); }, onHint: toast });
+   The .rd-fab.live (mic listening) stays visible. syncReserve(root, refit) measures the real bar heights into
+   --rd-top-h / --rd-base-h / --rd-pl-h / --rd-fit-bot, so the page always reserves exactly the space the bars take. */
 :root {
   --rd-green: #22b573; --rd-green-2: #14895a; --rd-on-green: #fff;
   --rd-band: rgba(212, 175, 98, .2); --rd-rule: rgba(212, 175, 98, .3);
@@ -14,7 +21,9 @@
 body.rd-mode .tabbar { display: none; }
 body.rd-mode #app { max-width: none; padding: 0; }
 
-.rd { --rd-top-h: calc(66px + var(--safe-t)); --rd-base-h: calc(84px + var(--safe-b)); --rd-pl-h: 0px; --rd-bot-h: calc(var(--rd-base-h) + var(--rd-pl-h)); position: relative; min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; }
+.rd { --rd-fab: 58px; --rd-top-h: calc(66px + var(--safe-t)); --rd-base-h: calc(74px + var(--safe-b)); --rd-pl-h: 0px; --rd-bot-h: calc(var(--rd-base-h) + var(--rd-pl-h)); --rd-fit-bot: var(--rd-bot-h); position: relative; min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; }
+/* bars hidden: the bottom reserve shrinks to the safe area (the page keeps its own height via --rd-fit-bot, so text stays put) */
+.rd.chrome-off { --rd-base-h: calc(var(--safe-b) + 12px); }
 .rd-ink-bright { --rd-ink: #fff; }
 .rd-ink-warm { --rd-ink: #f0dba0; }
 @media (prefers-color-scheme: light) {
@@ -25,7 +34,7 @@ body.rd-mode #app { max-width: none; padding: 0; }
 :root[data-theme='light'] .rd-ink-warm { --rd-ink: #4a3208; }
 
 /* ---- top bar ---- */
-.rd-top { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 8px; padding: calc(var(--safe-t) + 8px) max(10px, env(safe-area-inset-right, 0px)) 10px max(10px, env(safe-area-inset-left, 0px)); background: var(--bg); box-shadow: 0 1px 0 var(--hairline); }
+.rd-top { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 8px; padding: calc(var(--safe-t) + 8px) max(10px, env(safe-area-inset-right, 0px)) 10px max(10px, env(safe-area-inset-left, 0px)); background: var(--bg); box-shadow: 0 1px 0 var(--hairline); transition: transform .24s var(--ease), opacity .2s, visibility 0s; }
 .rd-top .mp-progress { position: absolute; left: 0; right: 0; bottom: 0; max-width: none; height: 2px; margin: 0; border-radius: 0; }
 .rd-ic { flex: 0 0 auto; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold-2); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--hairline); transition: transform var(--dur-1), background var(--dur-2); }
 .rd-ic:active { transform: scale(.92); background: var(--gold-soft); }
@@ -39,15 +48,19 @@ body.rd-mode #app { max-width: none; padding: 0; }
 .rd-bm:active { transform: scale(.88); }
 .rd-bm.on { color: var(--gold); }
 .rd-bm.on svg { fill: currentColor; }
-.rd-tjbar { margin: 4px 12px 0; }
+.rd-tjbar { margin: 4px 12px 0; transition: opacity .2s, visibility 0s; }
+.rd.chrome-off .rd-top { transform: translateY(-100%); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .24s var(--ease), opacity .2s, visibility 0s .24s; }
+.rd.chrome-off .rd-tjbar { opacity: 0; visibility: hidden; pointer-events: none; }
 
-/* ---- page area (maximised Madinah page) ---- */
-.rd-stage { position: relative; flex: 1 1 auto; padding: 4px max(4px, env(safe-area-inset-right, 0px)) calc(var(--rd-bot-h) + 10px) max(4px, env(safe-area-inset-left, 0px)); }
+/* ---- page area (maximised Madinah page) ----
+   Vertical budget: top block (--rd-top-h, measured) + 4px + page + (--rd-bot-h + 8px) = 100dvh. The page never has a fixed height:
+   it is at least that tall, and as tall as its lines need (line pitch comes from fitLines as --mq-lh), so a short screen scrolls. */
+.rd-stage { position: relative; flex: 1 1 auto; padding: 4px max(4px, env(safe-area-inset-right, 0px)) calc(var(--rd-bot-h) + 8px) max(4px, env(safe-area-inset-left, 0px)); }
 .rd .mp-book { max-width: 720px; margin: 0 auto; }
 .rd .mp-book.spread { max-width: 1240px; }
 @media (max-width: 899px) { .rd .mp-book.spread { max-width: 720px; } }
 .rd .mp-page, .rd .mp-page.page-right, .rd .mp-page.page-left {
-  min-height: calc(100dvh - var(--rd-top-h) - var(--rd-bot-h) - 12px); padding: 4px 4px 2px; border: 0; border-radius: 10px;
+  min-height: calc(100dvh - var(--rd-top-h) - var(--rd-fit-bot) - 12px); padding: 4px 4px 2px; border: 0; border-radius: 10px;
   background-image: none; background-color: var(--paper); box-shadow: none;
 }
 .rd .mp-page::before, .rd .mp-page::after { display: none; }
@@ -61,7 +74,9 @@ body.rd-mode #app { max-width: none; padding: 0; }
 .rd .mp-num { min-width: 30px; height: 30px; font-size: .78rem; }
 .rd .mp-body { padding: 2px 2px; }
 .rd .mq-lines, .rd .mushaf-text { color: var(--rd-ink, var(--ink)); position: relative; }
-.rd .mq-line { position: relative; z-index: 1; height: min(calc(var(--mq-fs) * 1.95), calc((100dvh - var(--rd-top-h) - var(--rd-bot-h) - 48px) / 15)); }
+.rd .mq-line { position: relative; z-index: 1; }
+/* plain-text view: room for madd / shadda / waqf signs above and below the line, ayah medallion included */
+.rd .mushaf-text { line-height: 2.4; word-spacing: .06em; }
 .rd .mq-end { color: var(--gold-2); }
 .rd .mq-w.selected { background: none; }
 
@@ -86,36 +101,41 @@ body.rd-mode #app { max-width: none; padding: 0; }
 .rd-pk { pointer-events: auto; height: 40px; padding: 0 14px 0 12px; display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; font-family: var(--font-ui); font-size: .82rem; font-weight: 700; color: var(--rd-rv-ink); background: var(--card-2); box-shadow: inset 0 0 0 1.5px var(--rd-rv-ink), var(--shadow-1); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 .rd-pk:active { transform: scale(.95); }
 
-/* ---- bottom bar ---- */
-.rd-bottom { position: fixed; left: 0; right: 0; bottom: 0; z-index: 120; display: flex; flex-direction: column; gap: 8px; padding: 22px 12px calc(var(--safe-b) + 12px); background: linear-gradient(0deg, var(--bg) 58%, transparent); pointer-events: none; }
-.rd-bar { display: flex; align-items: center; width: 100%; max-width: 720px; margin: 0 auto; padding-inline-start: 76px; direction: rtl; pointer-events: none; }
-.rd-tools { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; pointer-events: auto; }
-.rd-pill { height: 48px; padding: 0 16px; display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; font-family: var(--font-ui); font-weight: 700; color: var(--ink); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-1); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
-.rd-pill svg { color: var(--gold); }
-.rd-badge { min-width: 20px; height: 20px; padding: 0 5px; display: inline-grid; place-items: center; border-radius: 10px; font-family: var(--font-ui); font-size: .7rem; color: #fff; background: var(--bad); }
+/* ---- bottom bar: one solid row (nothing scrolls behind it), the mic sits at its start, then errors, view, page turns ---- */
+.rd-bottom { position: fixed; left: 0; right: 0; bottom: 0; z-index: 120; display: flex; flex-direction: column; gap: 8px; padding: 8px max(12px, env(safe-area-inset-right, 0px)) calc(var(--safe-b) + 8px) max(12px, env(safe-area-inset-left, 0px)); background: var(--bg); box-shadow: 0 -1px 0 var(--hairline); transition: transform .24s var(--ease), opacity .2s, visibility 0s; }
+.rd.chrome-off .rd-bottom { transform: translateY(100%); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .24s var(--ease), opacity .2s, visibility 0s .24s; }
+.rd-bar { display: flex; align-items: center; width: 100%; max-width: 720px; min-height: var(--rd-fab); margin: 0 auto; padding-inline-start: calc(var(--rd-fab) + 12px); direction: rtl; }
+.rd-tools { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex: 1; min-width: 0; max-width: 380px; }
+.rd-pill { position: relative; flex: 0 1 auto; min-width: 0; height: 46px; padding: 0 14px; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; font-family: var(--font-ui); font-size: .92rem; font-weight: 700; color: var(--ink); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line); }
+.rd-pill svg { flex: 0 0 auto; color: var(--gold); }
+.rd-pill span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-badge { position: absolute; top: -5px; inset-inline-start: -3px; min-width: 18px; height: 18px; padding: 0 4px; display: inline-grid; place-items: center; border-radius: 9px; font-family: var(--font-ui); font-size: .68rem; line-height: 1; color: #fff; background: var(--bad); }
 .rd-badge[hidden] { display: none; }
-.rd-tool { flex: 0 0 auto; width: 48px; height: 48px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold-2); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-1); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); transition: color var(--dur-2), box-shadow var(--dur-2); }
+.rd-tool { flex: 0 0 auto; width: 46px; height: 46px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold-2); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line); transition: color var(--dur-2), box-shadow var(--dur-2); }
 .rd-pill:active, .rd-tool:active { transform: scale(.95); }
-.rd-tool.on { color: var(--rd-green); box-shadow: inset 0 0 0 2.5px var(--rd-green), 0 0 16px rgba(34, 181, 115, .3); }
+.rd-tool:disabled { opacity: .35; }
+.rd-flip { display: inline-flex; transform: scaleX(-1); }
+.rd-tool.on { color: var(--rd-green); box-shadow: inset 0 0 0 2.5px var(--rd-green), 0 0 14px rgba(34, 181, 115, .3); }
 
 /* ---- FAB + speed dial ---- */
-.rd-fab { position: fixed; z-index: 730; right: max(14px, calc((100vw - 720px) / 2 + 14px)); bottom: calc(var(--safe-b) + 14px); width: 62px; height: 62px; display: grid; place-items: center; border-radius: 50%; color: var(--rd-on-green); background: linear-gradient(155deg, var(--rd-green), var(--rd-green-2)); box-shadow: 0 8px 22px rgba(20, 137, 90, .5), inset 0 1px 0 rgba(255, 255, 255, .35); transition: transform var(--dur-2) var(--ease); }
+.rd-fab { position: fixed; z-index: 730; right: max(12px, env(safe-area-inset-right, 0px), calc((100vw - 720px) / 2)); bottom: calc(var(--safe-b) + 8px); width: var(--rd-fab); height: var(--rd-fab); display: grid; place-items: center; border-radius: 50%; color: var(--rd-on-green); background: linear-gradient(155deg, var(--rd-green), var(--rd-green-2)); box-shadow: 0 6px 18px rgba(20, 137, 90, .45), inset 0 1px 0 rgba(255, 255, 255, .35); transition: transform var(--dur-2) var(--ease), opacity .2s, visibility 0s; }
 .rd-fab:active { transform: scale(.93); }
+.rd.chrome-off .rd-fab:not(.live) { transform: translateY(24px) scale(.9); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .24s var(--ease), opacity .2s, visibility 0s .24s; }
 .rd-fab-x { display: none; }
 .dial-open .rd-fab-x { display: block; }
 .dial-open .rd-fab-mic { display: none; }
 .dial-open .rd-fab { transform: rotate(90deg); }
 .rd-dimmer { position: fixed; inset: 0; z-index: 700; background: rgba(3, 10, 8, .66); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); opacity: 0; visibility: hidden; transition: opacity var(--dur-2), visibility var(--dur-2); }
 .dial-open .rd-dimmer { opacity: 1; visibility: visible; }
-.rd-dial { position: fixed; z-index: 720; right: max(14px, calc((100vw - 720px) / 2 + 14px)); bottom: calc(var(--safe-b) + 14px + 62px + 18px); display: flex; flex-direction: column; align-items: flex-end; gap: 14px; visibility: hidden; }
+.rd-dial { position: fixed; z-index: 720; right: max(12px, env(safe-area-inset-right, 0px), calc((100vw - 720px) / 2)); bottom: calc(var(--safe-b) + 8px + var(--rd-fab) + 14px); display: flex; flex-direction: column; align-items: flex-end; gap: 12px; visibility: hidden; }
 .dial-open .rd-dial { visibility: visible; }
 .rd-dial-it { display: flex; align-items: center; gap: 12px; direction: rtl; opacity: 0; transform: translateY(14px) scale(.9); transition: opacity var(--dur-2) var(--ease), transform var(--dur-2) var(--ease); }
 .dial-open .rd-dial-it { opacity: 1; transform: none; }
 .dial-open .rd-dial-it:nth-last-child(1) { transition-delay: 30ms; }
 .dial-open .rd-dial-it:nth-last-child(2) { transition-delay: 70ms; }
 .dial-open .rd-dial-it:nth-last-child(3) { transition-delay: 110ms; }
-.rd-dial-bt { width: 52px; height: 52px; margin-inline-end: 5px; display: grid; place-items: center; border-radius: 50%; color: var(--rd-on-green); background: linear-gradient(155deg, var(--rd-green), var(--rd-green-2)); box-shadow: 0 6px 16px rgba(20, 137, 90, .45); }
-.rd-dial-lb { padding: 9px 16px; border-radius: 14px; font-family: var(--font-ui); font-weight: 700; color: var(--ink); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-2); }
+.rd-dial-bt { width: 50px; height: 50px; margin-inline-end: 4px; display: grid; place-items: center; border-radius: 50%; color: var(--rd-on-green); background: linear-gradient(155deg, var(--rd-green), var(--rd-green-2)); box-shadow: 0 6px 16px rgba(20, 137, 90, .45); }
+.rd-dial-lb { padding: 8px 16px; border-radius: 14px; font-family: var(--font-ui); font-weight: 700; color: var(--ink); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-2); }
 
 /* ---- edge page-turn buttons (mouse / tablets only; touch devices swipe) ---- */
 .rd-edge { display: none; position: fixed; z-index: 50; top: 50%; width: 44px; height: 44px; margin-top: -22px; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold-2); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-1); }
@@ -123,16 +143,17 @@ body.rd-mode #app { max-width: none; padding: 0; }
 .rd-edge-l { left: 10px; }
 .rd-edge-l svg { transform: scaleX(-1); }
 .rd-edge:disabled { opacity: .3; }
+.rd.chrome-off .rd-edge { opacity: 0; pointer-events: none; }
 @media (hover: hover) and (pointer: fine) and (min-width: 700px) { .rd-edge { display: inline-flex; } }
 
-/* player bar sits above the reader's bottom bar */
-/* while the mini player shows, the page area reserves its height (portrait: the page shrinks to fit; landscape: it scrolls, the stage gets bottom padding) */
+/* player bar sits above the reader's bottom bar; while it shows, the page reserves its height (--rd-pl-h, measured) and scrolls if it must.
+   Its option panel is an explicit pop-over: capped so it never takes more than about half the screen. */
 .rd .rd-player { bottom: calc(var(--rd-base-h) + 6px); z-index: 140; }
-.rd.rd-pl { --rd-pl-h: 80px; }
-@media (orientation: landscape) {
-  .rd.rd-pl { --rd-bot-h: var(--rd-base-h); }
-  .rd.rd-pl .rd-stage { padding-bottom: calc(var(--rd-base-h) + 10px + var(--rd-pl-h) + 8px); }
-}
+.rd.rd-pl { --rd-pl-h: 64px; }
+.rd .pl-panel { max-height: min(46dvh, 360px); }
+
+/* messages (toasts) in the reader go in the top band (the bar's place, reserved even when the bars are hidden), never over the verses */
+body.rd-mode #toast { top: calc(var(--safe-t) + 8px); z-index: 900; max-width: min(92vw, 520px); padding: 8px 18px; border-radius: 18px; font-size: .88rem; line-height: 1.45; }
 
 /* ---- list sheets ---- */
 .rd-sheet .sheet { padding-inline: 16px; }
@@ -185,13 +206,28 @@ body.rd-mode #app { max-width: none; padding: 0; }
 .rd-empty { padding: 26px 0; }
 
 @media (max-width: 400px) {
+  .rd { --rd-fab: 54px; }
   .rd-top { gap: 6px; padding-inline: 8px; }
   .rd-ic { width: 40px; height: 40px; }
   .rd-sname { font-size: 1.15rem; }
-  .rd-pill { padding: 0 12px; }
-  .rd-tool { width: 44px; height: 44px; }
-  .rd-bar { padding-inline-start: 72px; }
-  .rd-fab { width: 58px; height: 58px; }
+  .rd-pill { padding: 0 11px; font-size: .88rem; }
+  .rd-tool { width: 42px; height: 42px; }
+  .rd-bottom { padding-inline: max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-left, 0px)); }
+  .rd-bar { padding-inline-start: calc(var(--rd-fab) + 10px); }
+  .rd-fab, .rd-dial { right: max(10px, env(safe-area-inset-right, 0px)); }
+}
+/* landscape phones: compact bars so the page keeps most of the screen */
+@media (orientation: landscape) and (max-height: 500px) {
+  .rd { --rd-fab: 46px; }
+  .rd-top { padding-block: calc(var(--safe-t) + 4px) 6px; }
+  .rd-ic { width: 38px; height: 38px; }
+  .rd-card { min-height: 44px; }
+  .rd-sname { font-size: 1.1rem; }
+  .rd-bottom { padding-block: 5px calc(var(--safe-b) + 5px); }
+  .rd-pill, .rd-tool { height: 40px; }
+  .rd-tool { width: 40px; }
+  .rd-fab { bottom: calc(var(--safe-b) + 5px); }
+  .rd-dial { bottom: calc(var(--safe-b) + 5px + var(--rd-fab) + 12px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .rd *, .rd-sheet * { transition-duration: 0s !important; animation: none !important; }
@@ -199,7 +235,7 @@ body.rd-mode #app { max-width: none; padding: 0; }
 }
 
 /* hidden mode: taller bottom bar (peek row) */
-.rd.rd-hidden { --rd-base-h: calc(132px + var(--safe-b)); }
+.rd.rd-hidden:not(.chrome-off) { --rd-base-h: calc(126px + var(--safe-b)); }
 /* ayah sheet preview stays veiled in hidden mode until tapped */
 .rd-prev.rd-prev-hid { filter: blur(9px); cursor: pointer; -webkit-user-select: none; user-select: none; }
 .rd-prev-hint { margin: -6px 0 10px; }

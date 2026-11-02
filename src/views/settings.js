@@ -111,7 +111,7 @@ export default {
           <input type="file" id="d-file" accept="application/json,.json" hidden></div>
 
         <div class="card mt"><div class="section-title">عن التطبيق</div>
-          <p><b>نور الحياة ١٫٠</b></p>
+          <p><b>نور الحياة</b> <span class="muted small" dir="ltr">${typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''}</span></p>
           <p class="muted small">نص المصحف: موسوعة القرآن الكريم quranenc.com عبر quran-json (CC BY 4.0).<br>التلاوات: everyayah.com.<br>التفسير: alquran.cloud.<br>المواقيت: مكتبة adhan.</p></div>`;
       bind();
     };
