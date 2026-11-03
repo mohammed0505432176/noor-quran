@@ -32,11 +32,35 @@ const DEFAULTS = () => ({
   badges: {}       // badgeId -> 'YYYY-MM-DD' unlocked
 });
 
+// ---- storage health: localStorage can be missing (private mode, blocked site data) or full. The app keeps working from
+// the in-memory state S; this flag/event lets the UI tell the user ONCE that progress is not being saved.
+/** 'blocked' (no access) | 'full' (quota) | 'error' */
+export function storageFailReason(e) {
+  const n = e && (e.name || '');
+  if (n === 'QuotaExceededError' || n === 'NS_ERROR_DOM_QUOTA_REACHED' || (e && (e.code === 22 || e.code === 1014))) return 'full';
+  if (n === 'SecurityError' || (e && e.code === 18)) return 'blocked';
+  return 'error';
+}
+export const storageHealth = { ok: true, reason: '', notified: false };
+let healthPending = false;
+function markStorageFail(e) {
+  if (!storageHealth.ok) return;
+  storageHealth.ok = false; storageHealth.reason = storageFailReason(e);
+  healthPending = true;
+}
+/** Arabic one-liner for the UI (null while storage works). */
+export function storageNotice() {
+  if (storageHealth.ok) return null;
+  return storageHealth.reason === 'full'
+    ? 'مساحة التخزين في المتصفح ممتلئة، لن يُحفظ تقدمك بعد إغلاق الصفحة. صدّر نسخة احتياطية من الإعدادات.'
+    : 'المتصفح يمنع حفظ البيانات (ربما التصفح الخاص)، لن يُحفظ تقدمك بعد إغلاق الصفحة.';
+}
+
 function load() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY));
     if (raw && raw.v === 1) return deepMerge(DEFAULTS(), raw);
-  } catch (e) { /* ignore */ }
+  } catch (e) { if (!(e instanceof SyntaxError)) markStorageFail(e); }
   return DEFAULTS();
 }
 const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -55,7 +79,13 @@ export const S = load();
 if (S.settings && S.settings.ai && S.settings.ai.provider === 'free' && !S.settings.ai.chosen) S.settings.ai.provider = 'auto';
 
 export function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* storage full or blocked */ }
+  try { localStorage.setItem(KEY, JSON.stringify(S)); if (!storageHealth.ok && storageHealth.reason === 'full') { storageHealth.ok = true; storageHealth.reason = ''; storageHealth.notified = false; } }
+  catch (e) { markStorageFail(e); }   // full or blocked: keep running from memory
+  if (healthPending && !storageHealth.notified) {   // tell the UI once: on('storage', ({ reason }) => ...)
+    healthPending = false; storageHealth.notified = true;
+    emit('storage', { reason: storageHealth.reason });
+    try { if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('noor:storage', { detail: { reason: storageHealth.reason } })); } catch (e) { /* ignore */ }
+  }
   emit('change');
 }
 

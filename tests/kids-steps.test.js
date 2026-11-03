@@ -1,9 +1,11 @@
-// Kids prayer guide pictures: one illustrated set in public/kids/steps (scripts/gen-prayer-art.mjs).
+// Kids prayer guide pictures: one photographic set in public/kids/steps (scripts/import-photos.mjs, Gemini photographs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { PRAYER_STEPS } from '../src/data/kids-prayer.js';
-import { NAMES } from '../scripts/gen-prayer-art.mjs';
+import { MAP } from '../scripts/import-photos.mjs';
+import { CATEGORIES } from '../src/data/azkar.js';
+import { azkarImg, AZKAR_ALT } from '../src/data/azkar-images.js';
 
 const file = (n, ext) => new URL(`../public/kids/steps/${n}.${ext}`, import.meta.url);
 const kidsJs = readFileSync(new URL('../src/views/kids.js', import.meta.url), 'utf8');
@@ -17,25 +19,36 @@ function webpSize(buf) {
   return [buf.readUInt16LE(26) & 0x3fff, buf.readUInt16LE(28) & 0x3fff];
 }
 
-test('every prayer step picture has a 960x720 webp and its svg source', () => {
+test('every prayer step picture is a 960x720 webp photograph', () => {
   assert.ok(imgs.length >= 8);
   for (const n of imgs) {
     assert.ok(existsSync(file(n, 'webp')), `missing public/kids/steps/${n}.webp`);
-    assert.ok(existsSync(file(n, 'svg')), `missing public/kids/steps/${n}.svg`);
     assert.deepEqual(webpSize(readFileSync(file(n, 'webp'))), [960, 720], `${n}.webp size`);
-    const svg = readFileSync(file(n, 'svg'), 'utf8');
-    assert.match(svg, /viewBox="0 0 960 720"/, `${n}.svg viewBox`);
-    assert.doesNotMatch(svg, /<text|<image|https?:\/\/(?!www\.w3\.org)/, `${n}.svg must be self-contained, no text`);
+    assert.ok(!existsSync(file(n, 'svg')), `${n}.svg: the drawn set was replaced by photographs`);
+    assert.ok(MAP['kids/steps'].includes(n), `import-photos.mjs does not import ${n}`);
   }
 });
 
-test('the generator draws every step picture', () => {
-  for (const n of imgs) assert.ok(NAMES.includes(n), `gen-prayer-art.mjs does not draw ${n}`);
+test('home cards and azkar categories have photographs with alt text', () => {
+  const azkarJs = readFileSync(new URL('../src/views/azkar.js', import.meta.url), 'utf8');
+  for (const id of Object.keys(MAP['kids/photo'])) {
+    const u = new URL(`../public/kids/photo/${id}.webp`, import.meta.url);
+    assert.ok(existsSync(u), `missing kids photo ${id}`);
+    assert.deepEqual(webpSize(readFileSync(u)), [960, 720]);
+    assert.match(kidsJs, new RegExp(`'${id}': \{[^}]*alt:`), `${id} has no alt text`);
+  }
+  for (const id of Object.keys(MAP.azkar)) assert.ok(existsSync(new URL(`../public/azkar/${id}.webp`, import.meta.url)), `missing azkar photo ${id}`);
+  for (const c of CATEGORIES) {
+    const p = azkarImg(c.id);
+    assert.ok(existsSync(new URL(`../public/${p}.webp`, import.meta.url)), `category ${c.id}: missing ${p}.webp`);
+    assert.ok(AZKAR_ALT[p], `${p} has no alt text`);
+  }
+  assert.match(azkarJs, /azkarImg\(c\.id\)/);
+  assert.ok(existsSync(new URL('../public/kids/photo/mascot.webp', import.meta.url)));
 });
 
-test('kids view uses the step set (webp -> svg -> icon) for the steps, the end screen and the order quiz', () => {
+test('kids view uses the step set (webp -> icon tile) for the steps, the end screen and the order quiz', () => {
   assert.match(kidsJs, /kids\/steps\/\$\{esc\(name\)\}\.webp/);
-  assert.match(kidsJs, /data-fb="\$\{BASE\}kids\/steps\/\$\{esc\(name\)\}\.svg"/);
   assert.match(kidsJs, /const prayerArt = \(name, _fb, cls = ''\) => stepArt\(name, cls\)/);
   const icons = kidsJs.match(/const STEP_ICON = \{([^}]*)\}/)[1];
   const quiz = kidsJs.match(/const POSES = \[([^\]]*)\]/)[1].match(/'([a-z]+)'/g).map(s => s.slice(1, -1));

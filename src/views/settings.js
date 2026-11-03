@@ -89,7 +89,8 @@ export default {
             <p class="quran center" id="f-prev" style="font-size:${esc(String(s.fontSize))}px;line-height:2">${PREVIEW}</p></div>
           <div class="field"><label for="s-rec">القارئ</label>
             <select class="select" id="s-rec">${reciters.map(r => `<option value="${esc(r.id)}"${r.id === s.reciter ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
-          <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح'], ['paper', 'ورقي دافئ'], ['oled', 'أسود OLED']], s.theme)}</div></div>
+          <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح'], ['paper', 'ورقي دافئ'], ['oled', 'أسود OLED']], s.theme)}</div>
+          <div class="field"><label>حفظ تسجيلات صوتي بعد التسميع</label>${seg('s-saverec', [['0', 'لا (الافتراضي)'], ['1', 'نعم، على جهازي فقط']], s.saveRecordings === true ? '1' : '0')}<small class="muted">الصوت الخام لا يُحفظ ولا يُرفع إلا إن اخترت «نعم» (يبقى على جهازك). المحرك القرآني يعمل على جهازك بلا إرسال صوت.</small></div></div>
 
         <div class="card mt"><div class="section-title">الذكاء الاصطناعي</div>
           <div id="ai-card" style="margin-bottom:.8rem"><p class="muted small">جارٍ فحص الخدمات…</p></div>
@@ -139,6 +140,11 @@ export default {
         updateSettings({ fontSize: v });
       };
       q('#s-rec').onchange = e => updateSettings({ reciter: e.target.value });
+      q('#s-saverec').onclick = e => {
+        const b = e.target.closest('button'); if (!b) return;
+        updateSettings({ saveRecordings: b.dataset.v === '1' });
+        q('#s-saverec').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+      };
       q('#s-theme').onclick = e => {
         const b = e.target.closest('[data-v]'); if (!b) return;
         updateSettings({ theme: b.dataset.v });

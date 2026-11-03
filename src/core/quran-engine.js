@@ -28,8 +28,54 @@ export const ENGINE_MB = 72;
 const base = () => (!isNative() && typeof location !== 'undefined' && location.origin + '/' === new URL(PAGES).origin + '/' ? import.meta.env.BASE_URL : PAGES);
 const url = k => new URL(FILES[k], new URL(base(), typeof location !== 'undefined' ? location.href : PAGES)).href;
 
-export function engineSupported() {
-  return typeof WebAssembly === 'object' && typeof Worker === 'function' && typeof caches === 'object';
+/** Why the engine cannot run here: null when it can, else 'wasm' | 'worker' | 'cache' (pure on its argument, so testable). */
+export function unsupportedReason(env = globalThis) {
+  if (typeof env.WebAssembly !== 'object' || !env.WebAssembly) return 'wasm';
+  if (typeof env.Worker !== 'function') return 'worker';
+  if (typeof env.caches !== 'object' || !env.caches) return 'cache';
+  return null;
+}
+export function engineSupported() { return unsupportedReason() === null; }
+
+const REASON_TEXT = {
+  wasm: 'المتصفح لا يدعم WebAssembly المطلوب للمحرك القرآني، حدّث المتصفح أو استخدم كروم.',
+  worker: 'المتصفح لا يدعم العمليات الخلفية (Web Worker) المطلوبة للمحرك القرآني.',
+  cache: 'تخزين المتصفح غير متاح (ربما التصفح الخاص)، لا يمكن حفظ المحرك القرآني. استخدم نافذة عادية.',
+  quota: 'لا توجد مساحة كافية لحفظ المحرك القرآني (نحو ٧٢ ميغابايت)، أفرغ مساحة ثم أعد المحاولة.',
+  memory: 'ذاكرة الجهاز لا تكفي لتشغيل المحرك القرآني، أغلق التطبيقات الأخرى أو استخدم التسميع الفوري.',
+  network: 'تعذّر تنزيل المحرك القرآني، تحقق من الإنترنت وأعد المحاولة (يكمل من حيث توقف).',
+  incomplete: 'انقطع التنزيل قبل اكتماله، أعد المحاولة (يكمل من حيث توقف).',
+  timeout: 'تأخر تشغيل المحرك القرآني، أعد المحاولة أو استخدم التسميع الفوري.',
+  not_downloaded: 'المحرك القرآني غير محمّل بعد.',
+  unknown: 'تعذّر تشغيل المحرك القرآني.',
+};
+/** Readable reason for any engine/download failure: { code, text, retry } (retry: the same action may succeed later). Never throws. */
+export function classifyEngineError(e) {
+  const name = (e && e.name) || '', msg = String((e && e.message) || e || '');
+  let code = 'unknown';
+  if (e && e.code && REASON_TEXT[e.code]) code = e.code;
+  else if (name === 'QuotaExceededError' || /quota/i.test(msg)) code = 'quota';
+  else if (e instanceof RangeError || /out of memory|oom|allocation failed|array buffer allocation|memory access out of bounds/i.test(msg)) code = 'memory';
+  else if (/incomplete/.test(msg)) code = 'incomplete';
+  else if (/timeout/i.test(msg)) code = 'timeout';
+  else if (/not downloaded/.test(msg)) code = 'not_downloaded';
+  else if (/^download \d+/.test(msg) || name === 'TypeError' || /failed to fetch|network|load failed/i.test(msg)) code = 'network';
+  return { code, text: REASON_TEXT[code], retry: code === 'network' || code === 'incomplete' || code === 'timeout' };
+}
+export const engineUnsupportedText = () => { const r = unsupportedReason(); return r ? REASON_TEXT[r] : ''; };
+const engineErr = (code, cause) => { const err = new Error(REASON_TEXT[code] || code); err.code = code; if (cause) err.cause = cause; return err; };
+const rethrow = e => { throw (e && e.code && REASON_TEXT[e.code] ? e : engineErr(classifyEngineError(e).code, e)); };
+
+/** Resume plan for a partial download: continue with a Range request only when we hold bytes and the file size is known. */
+export function resumePlan(have, size) {
+  if (!(have > 0) || !(size > 0) || have >= size) return { start: 0, range: null };
+  return { start: have, range: 'bytes=' + have + '-' };
+}
+/** Does this response continue our partial download at byte `have`? (206 + matching Content-Range start) */
+export function continuesAt(status, contentRange, have) {
+  if (status !== 206) return false;
+  const m = /^bytes\s+(\d+)-/.exec(String(contentRange || ''));
+  return !!m && Number(m[1]) === have;
 }
 
 export async function engineCached() {
@@ -47,37 +93,60 @@ export function downloadEngine(onProgress = () => {}) {
   dlListeners.add(onProgress);
   if (!dlPromise) {
     const notify = p => { for (const f of [...dlListeners]) { try { f(p); } catch (e) { /* ignore */ } } };
-    dlPromise = doDownload(notify).finally(() => { dlPromise = null; dlListeners.clear(); });
+    dlPromise = doDownload(notify).catch(rethrow).finally(() => { dlPromise = null; dlListeners.clear(); });
   }
   return dlPromise;
 }
 
+// bytes of a download that failed half way, kept in memory so a retry continues instead of starting over
+let partial = null;   // { k, parts: Uint8Array[], got }
+
 async function doDownload(onProgress) {
-  const c = await caches.open(CACHE);
+  const reason = unsupportedReason();
+  if (reason) throw engineErr(reason);
   const sizes = { model: 69246033, corpus: 5453439 };
   const total = sizes.model + sizes.corpus;
+  try {   // refuse early when the browser says there is clearly no room (the estimate is optional and may be absent)
+    const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
+    if (est && est.quota && est.usage != null && est.quota - est.usage < total * 1.1) throw engineErr('quota');
+  } catch (e) { if (e && e.code === 'quota') throw e; }
+  let c;
+  try { c = await caches.open(CACHE); } catch (e) { throw engineErr('cache', e); }
   let done = 0;
   for (const k of Object.keys(FILES)) {
     if (await c.match(FILES[k])) { done += sizes[k]; onProgress(done / total); continue; }
-    const res = await fetch(url(k), { cache: 'no-store' });
-    if (!res.ok || !res.body) throw new Error('download ' + res.status);
-    const reader = res.body.getReader(), parts = [];
-    let got = 0;
-    for (;;) {
-      const { done: end, value } = await reader.read();
-      if (end) break;
-      parts.push(value); got += value.length;
-      onProgress(Math.min(0.999, (done + got) / total));
+    if (!partial || partial.k !== k) partial = { k, parts: [], got: 0 };
+    const p = partial;
+    let res = null;
+    for (let tryRange = p.got > 0; !res; tryRange = false) {
+      const plan = tryRange ? resumePlan(p.got, sizes[k]) : { range: null };
+      try { res = await fetch(url(k), { cache: 'no-store', headers: plan.range ? { Range: plan.range } : {} }); }
+      catch (e) { if (tryRange) { p.parts = []; p.got = 0; continue; } throw engineErr('network', e); }   // Range refused (CORS...): start over once
+      if (!res.ok || !res.body) { if (tryRange) { res = null; p.parts = []; p.got = 0; continue; } throw engineErr('network'); }
+      if (!plan.range || !continuesAt(res.status, res.headers.get('Content-Range'), p.got)) { p.parts = []; p.got = 0; }   // full body: restart this file
     }
-    // a truncated download must never be cached as the model
-    if (got < sizes[k] * 0.98) throw new Error('incomplete');
-    await c.put(FILES[k], new Response(new Blob(parts), { headers: { 'Content-Type': k === 'corpus' ? 'application/json' : 'application/octet-stream' } }));
+    const reader = res.body.getReader();
+    try {
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (end) break;
+        p.parts.push(value); p.got += value.length;
+        onProgress(Math.min(0.999, (done + p.got) / total));
+      }
+    } catch (e) { throw engineErr('network', e); }     // bytes already read stay in `partial` for the retry
+    // a truncated download must never be cached as the model (the bytes are kept: the retry fetches only the rest)
+    if (p.got < sizes[k] * 0.98) throw engineErr('incomplete');
+    try {
+      await c.put(FILES[k], new Response(new Blob(p.parts), { headers: { 'Content-Type': k === 'corpus' ? 'application/json' : 'application/octet-stream' } }));
+    } catch (e) { partial = null; throw engineErr(classifyEngineError(e).code, e); }
+    partial = null;
     done += sizes[k];
   }
   onProgress(1);
 }
 
 export async function removeEngine() {
+  partial = null;
   try { await caches.delete(CACHE); } catch (e) { /* ignore */ }
   if (worker) { try { worker.terminate(); } catch (e) {} worker = null; ready = null; }
 }
@@ -93,9 +162,11 @@ function resetWorkerState() {
 export function openEngine() {
   if (ready) return ready;
   const p = (async () => {
+    const why = unsupportedReason();
+    if (why) throw engineErr(why);
     const c = await caches.open(CACHE);
     const [m, j] = await Promise.all([c.match(FILES.model), c.match(FILES.corpus)]);
-    if (!m || !j) throw new Error('not downloaded');
+    if (!m || !j) throw engineErr('not_downloaded');
     // the 5 MB corpus goes over as raw bytes and is parsed in the worker (no JSON parse + structured clone on the UI thread)
     const [model, corpus] = await Promise.all([m.arrayBuffer(), j.arrayBuffer()]);
     const w = new Worker(new URL('./quran-worker.js', import.meta.url), { type: 'module' });
@@ -117,9 +188,10 @@ export function openEngine() {
     w.onerror = e => { if (cur && cur.handlers.onError) cur.handlers.onError((e && e.message) || 'worker'); };
     return { start, startFree, relock, pcm, stop, cancel, counts: () => counts };
   })();
-  ready = p;
-  p.catch(() => { if (ready === p) resetWorkerState(); });
-  return p;
+  const guarded = p.catch(rethrow);        // callers get an Error with .code and a readable Arabic .message
+  ready = guarded;
+  guarded.catch(() => { if (ready === guarded) resetWorkerState(); });
+  return guarded;
 }
 
 function finishStop(c, words) {

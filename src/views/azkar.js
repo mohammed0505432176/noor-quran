@@ -4,6 +4,7 @@ import { azkarDone, dateKey } from '../core/store.js';
 import { haptic } from '../core/platform.js';
 import { loadQuran, ayah } from '../core/quran.js';
 import { AZKAR, CATEGORIES } from '../data/azkar.js';
+import { azkarImg, AZKAR_ALT } from '../data/azkar-images.js';
 
 const doneKey = cat => `noor.azkar.${dateKey()}.${cat}`;
 const progKey = cat => `noor.azkar.${dateKey()}.${cat}.p`;
@@ -41,19 +42,22 @@ function quranHtml(q) {
 }
 
 // ---------- index ----------
+// Gemini photographs (src/data/azkar-images.js, 4:3). A failed image falls back to the emoji tile.
+const onZkErr = e => { const i = e.target; if (i && i.tagName === 'IMG' && i.closest('.zk-ph')) i.closest('.zk-ph').classList.add('zk-fail'); };
 function renderIndex(el) {
   const sug = suggested();
   el.innerHTML = `<div>${header('الأذكار', { back: 'home' })}
     <p class="muted small mb">حصن المسلم، أذكار اليوم بنقرة واحدة.</p>
     <div class="grid-2">${CATEGORIES.map(c => {
       const done = isDone(c.id);
-      return `<button class="card ${c.id === sug && !done ? 'hero' : ''} center" data-go="azkar/${c.id}" style="cursor:pointer;text-align:center;font:inherit;color:inherit">
-        <div style="font-size:34px;line-height:1.2">${c.icon}</div>
-        <b style="display:block;margin-top:6px">${esc(c.title)}</b>
+      return `<button class="card zk-cat ${c.id === sug && !done ? 'hero' : ''} center" data-go="azkar/${c.id}" style="cursor:pointer;text-align:center;font:inherit;color:inherit">
+        <span class="zk-ph"><img src="${import.meta.env.BASE_URL}${azkarImg(c.id)}.webp" alt="${esc(AZKAR_ALT[azkarImg(c.id)] || c.title)}" loading="lazy" decoding="async" draggable="false"><span class="zk-fb" aria-hidden="true">${c.icon}</span></span>
+        <b style="display:block;margin-top:8px">${esc(c.title)}</b>
         <span class="muted small">${N(AZKAR[c.id].length)} ذكراً</span>
         <div class="mt small ${done ? 'gold' : 'muted'}">${done ? icon('check', 16) + ' تم اليوم' : c.id === sug ? 'الأنسب الآن' : 'لم يكتمل بعد'}</div>
       </button>`;
     }).join('')}</div></div>`;
+  el.addEventListener('error', onZkErr, true);
 }
 
 // ---------- list ----------

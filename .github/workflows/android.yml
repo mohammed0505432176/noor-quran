@@ -14,12 +14,18 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      VERSION: 2.1.${{ github.run_number }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      # ONE version for the APK and the web app (see pages.yml): <major.minor from package.json>.<commits>. versionCode stays the run number.
+      - name: Compute version
+        run: |
+          set -euo pipefail
+          MM=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
+          echo "VERSION=$MM.$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
       # Release signing comes only from repository secrets. There is no fallback key: the key that used to be bundled in
       # this repository is public, so it is treated as compromised (see android-signing/README.md). Fail before any work.
@@ -122,7 +128,7 @@ jobs:
           NOOR_KEY_ALIAS: ${{ secrets.NOOR_KEY_ALIAS || 'noor' }}
           NOOR_KEY_PASSWORD: ${{ secrets.NOOR_KEY_PASSWORD }}
           NOOR_VERSION_CODE: ${{ github.run_number }}
-          NOOR_VERSION_NAME: 2.1.${{ github.run_number }}
+          NOOR_VERSION_NAME: ${{ env.VERSION }}
         run: |
           set -o pipefail
           chmod +x gradlew
@@ -149,15 +155,15 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: v2.1.${{ github.run_number }}
-          name: نور 2.1.${{ github.run_number }}
+          tag_name: v${{ env.VERSION }}
+          name: نور ${{ env.VERSION }}
           make_latest: true
           files: Noor-Quran-${{ env.VERSION }}.apk
           body: |
-            ## تطبيق نور - الإصدار 2.1.${{ github.run_number }}
+            ## تطبيق نور - الإصدار ${{ env.VERSION }}
 
             ### طريقة التثبيت على أندرويد
-            1. حمّل ملف APK من الأسفل (Noor-Quran-2.1.${{ github.run_number }}.apk).
+            1. حمّل ملف APK من الأسفل (Noor-Quran-${{ env.VERSION }}.apk).
             2. افتح الملف، وإذا طلب الجهاز فاسمح بالتثبيت من مصادر غير معروفة لهذا المتصفح أو مدير الملفات.
             3. اضغط تثبيت ثم افتح التطبيق.
             ### إذا لم يتثبّت التطبيق

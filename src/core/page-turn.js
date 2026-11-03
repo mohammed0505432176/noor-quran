@@ -95,3 +95,26 @@ export function acceptPosition({ cur = null, next, relock = false, lastAyahOf = 
   if (next.s === cur.s) return true;
   return next.s === cur.s + 1 && next.a <= 2 && cur.a >= lastAyahOf(cur.s);
 }
+
+/** Inside one surah an ayah further than NEAR_AYAHS away (one back) is only believed after FAR_CONFIRM consecutive reports of it:
+ *  a common word or a repeated phrase seen once never moves the place. Surah changes stay with acceptPosition. */
+export const NEAR_AYAHS = 3, NEAR_BACK = 1, FAR_CONFIRM = 3;
+export function createPositionGuard({ near = NEAR_AYAHS, back = NEAR_BACK, confirm = FAR_CONFIRM } = {}) {
+  let pend = null, n = 0;
+  const reset = () => { pend = null; n = 0; };
+  return {
+    reset,
+    /** same arguments as acceptPosition. -> { ok, pending }: pending = a far jump waiting for confirmation */
+    check(args = {}) {
+      if (!acceptPosition(args)) { reset(); return { ok: false, pending: false }; }
+      const { cur, next, relock, lockRange } = args;
+      if (!cur || relock || lockRange || next.s !== cur.s) { reset(); return { ok: true, pending: false }; }
+      const d = next.a - cur.a;
+      if (d <= near && d >= -back) { reset(); return { ok: true, pending: false }; }
+      const key = next.s + ':' + next.a;
+      if (pend === key) n++; else { pend = key; n = 1; }
+      if (n >= confirm) { reset(); return { ok: true, pending: false }; }
+      return { ok: false, pending: true };
+    }
+  };
+}

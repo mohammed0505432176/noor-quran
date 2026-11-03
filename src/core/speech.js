@@ -40,10 +40,19 @@ export async function speechSupport() {
  * that best matches the expected next words). Returns stop().
  */
 export async function startListening({ onText = () => {}, onState = () => {}, onError = () => {}, pick = null, onLevel = null } = {}) {
-  const mode = await speechSupport();
-  if (mode === 'none') { onError('unsupported'); return () => {}; }
-  if (mode === 'native' && await hasNoorSpeech()) return startNoor({ onText, onState, onError, pick, onLevel });
-  return mode === 'native' ? startNative({ onText, onState, onError, pick }) : startWeb({ onText, onState, onError, pick });
+  try {
+    const mode = await speechSupport();
+    if (mode === 'none') { onError('unsupported'); return () => {}; }
+    if (mode === 'native' && await hasNoorSpeech()) return await startNoor({ onText, onState, onError, pick, onLevel });
+    return await (mode === 'native' ? startNative({ onText, onState, onError, pick }) : startWeb({ onText, onState, onError, pick }));
+  } catch (e) { onError('error'); return () => {}; }   // never throws: the caller always gets a stop() and an error code
+}
+
+/** Arabic explanation for onError('unsupported') in a browser without SpeechRecognition (Firefox, some iOS Safari/webviews). Pure. */
+export function speechUnsupportedText(ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '') {
+  if (/firefox|fxios/i.test(ua)) return 'متصفح فايرفوكس لا يدعم التعرف على الصوت. افتح التطبيق في كروم أو إيدج أو سفاري، أو استخدم تطبيق أندرويد.';
+  if (/iphone|ipad|ipod/i.test(ua)) return 'هذا المتصفح على الآيفون لا يدعم التعرف على الصوت. جرّب سفاري (iOS 14.5 أو أحدث) أو كروم.';
+  return 'هذا المتصفح لا يدعم التعرف على الصوت. استخدم كروم أو إيدج أو سفاري، أو تطبيق أندرويد.';
 }
 
 /**

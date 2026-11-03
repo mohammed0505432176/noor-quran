@@ -366,3 +366,13 @@ button.card:active, .card[data-go]:active { transform: scale(.985); }
 .more-row { display: flex; align-items: center; gap: 14px; }
 .more-row .li-sub { margin-top: 2px; }
 .card > .section-title:first-child, .card > h3:first-child + .section-title { margin-top: 0; }
+
+/* azkar category photos: 4:3 frame, shimmer while loading, emoji tile when the picture fails */
+.zk-cat { padding: 0; overflow: hidden; }
+.zk-cat > b, .zk-cat > span.muted, .zk-cat > div { padding-inline: 8px; }
+.zk-cat > div:last-child { padding-bottom: 12px; }
+.zk-ph { position: relative; display: block; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; background: #e8e1d3; }
+.zk-ph > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; display: block; }
+.zk-fb { position: absolute; inset: 0; display: none; place-items: center; font-size: 44px; background: radial-gradient(circle at 50% 40%, #fff4d6, #d7eee8); }
+.zk-fail > img { display: none; }
+.zk-fail > .zk-fb { display: grid; }

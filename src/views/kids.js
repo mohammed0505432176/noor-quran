@@ -53,30 +53,33 @@ const emo = (code, cls = '') => `<img class="k-emo ${cls}" src="${BASE}kids/emoj
 const icon = (name, cls = '') => `<img class="k-icon ${cls}" src="${BASE}kids/icons/${esc(name)}.svg" alt="" draggable="false">`;
 /** Icon inside a rounded tile whose colour comes from the shared 4-colour palette. */
 const iconTile = (name, cls = '') => `<span class="k-ic ${cls}" style="--k:${PASTEL[Math.max(0, ICONS.indexOf(name)) % PASTEL.length]}">${icon(name)}</span>`;
-const art = (name, ic = 'general', cls = '') => `<img class="k-art ${cls}" src="${BASE}kids/img/${name}.webp" alt="" draggable="false" data-fb="${BASE}kids/icons/${esc(ic)}.svg">`;
 // Per-photo framing, checked by eye against each 640x640 source: --pos is the object-position,
 // fit:'contain' shows the whole picture on a blurred copy of itself when no crop keeps the subject (quiz-star: tip and base
 // are both near the edges). Home / quiz-menu tiles only: the prayer steps use the illustrated set below.
+// Gemini photographs (scripts/import-photos.mjs). pos = per-card focal point for the 16:9 / 4:3 crops: the face, hands and subject stay inside
 const PHOTOS = {
-  'prayer-tile': { icon: 'mosque', pos: '50% 62%' },
-  'dua-hands': { icon: 'hands-dua', pos: '50% 45%' },
-  'letters-book': { icon: 'quran-book', pos: '50% 75%' },
-  'surahs-mosque': { icon: 'mosque', pos: '50% 20%' },
-  'quiz-star': { icon: 'star', fit: 'contain' }
+  'prayer-tile': { icon: 'mosque', pos: '50% 55%', alt: 'طفل يصلّي في غرفة مضيئة مواجهاً النافذة' },
+  'dua-hands': { icon: 'hands-dua', pos: '50% 38%', alt: 'طفل يرفع يديه بالدعاء' },
+  'letters-book': { icon: 'quran-book', pos: '50% 48%', alt: 'طفل يتعلم من كتاب ملوّن' },
+  'surahs-mosque': { icon: 'mosque', pos: '50% 42%', alt: 'طفل يمشي نحو مسجد أبيض عند الغروب' },
+  'quiz-star': { icon: 'star', pos: '50% 36%', alt: 'طفل يبتسم ويرفع نجمة ذهبية' }
 };
-// Prayer steps: one illustrated set (scripts/gen-prayer-art.mjs -> public/kids/steps/<name>.webp + .svg), same boy, same
-// direction, same mosque. Names match PRAYER_STEPS[].img; tests/kids-steps.test.js checks every file exists.
+const STEP_ALT = {
+  wudu: 'طفل يغسل يديه عند الوضوء', takbir: 'طفل واقف يرفع يديه للتكبير', qiyam: 'طفل واقف واضعاً يده اليمنى على اليسرى',
+  ruku: 'طفل راكع ويداه على ركبتيه', itidal: 'طفل واقف معتدلاً بعد الركوع', sujud: 'طفل ساجد على سجادة', julus: 'طفل جالس بين السجدتين', salam: 'طفل جالس يسلّم في نهاية الصلاة'
+};
+// Prayer steps: one photographic set (scripts/import-photos.mjs -> public/kids/steps/<name>.webp), same boy, same room. Names match PRAYER_STEPS[].img; tests/kids-steps.test.js checks every file exists.
 const STEP_ICON = { wudu: 'wudu-drop', takbir: 'mosque', qiyam: 'mosque', ruku: 'mosque', itidal: 'mosque', sujud: 'mosque', julus: 'mosque', salam: 'star' };
 // Every picture sits in a .k-ph frame: shimmer skeleton behind it while loading, and a tile with the matching icon when it fails
 const frame = (img, ic, cls = '', style = '') => `<span class="k-ph ${cls}" style="${style}">${img}<span class="k-ph-fb" aria-hidden="true">${icon(ic)}</span></span>`;
 // webp -> svg of the same picture -> icon tile. object-fit: contain on a matching background: the figure is never cropped.
-const stepArt = (name, cls = '') => frame(`<img class="k-art k-step ${cls}" src="${BASE}kids/steps/${esc(name)}.webp" alt="" draggable="false" decoding="async" data-fb="${BASE}kids/steps/${esc(name)}.svg">`, STEP_ICON[name] || 'mosque', 'k-ph-contain k-ph-step');
+const stepArt = (name, cls = '') => frame(`<img class="k-art k-step ${cls}" src="${BASE}kids/steps/${esc(name)}.webp" alt="${esc(STEP_ALT[name] || '')}" draggable="false" decoding="async">`, STEP_ICON[name] || 'mosque', 'k-ph-contain k-ph-step');
 // photographs (public/kids/photo) for the home / menu tiles; a missing photo falls back to the vector set, then to the icon tile
 const photoArt = (name, _fb, cls = '') => {
   const p = PHOTOS[name];
   if (!p) return stepArt(name, cls);
   const src = `${BASE}kids/photo/${name}.webp`;
-  return frame(`<img class="k-art k-photo ${cls}" src="${src}" alt="" draggable="false" decoding="async" loading="lazy" data-fb="${BASE}kids/real/${name}.svg">`, p.icon, p.fit === 'contain' ? 'k-ph-contain' : '', `--pos:${p.pos || '50% 50%'};--bg:url('${new URL(src, document.baseURI).href}')`);
+  return frame(`<img class="k-art k-photo ${cls}" src="${src}" alt="${esc(p.alt || '')}" draggable="false" decoding="async" loading="lazy">`, p.icon, '', `--pos:${p.pos || '50% 50%'}`);
 };
 const prayerArt = (name, _fb, cls = '') => stepArt(name, cls);
 // CSP forbids inline handlers: delegated capture listeners on the view root.
@@ -146,7 +149,7 @@ function home(el) {
   ];
   el.innerHTML = `<div class="kids">${header('ركن الأطفال', { back: 'more', actions: pill() })}
     <section class="k-hero">
-      <div class="k-mascot">${art('mascot', 'moon', 'k-bounce')}</div>
+      <div class="k-mascot"><img class="k-art k-bounce k-mascot-img" src="${BASE}kids/photo/mascot.webp" alt="طفل يبتسم ويحمل نجمة" draggable="false" data-fb="${BASE}kids/icons/moon.svg"></div>
       <div class="k-hello"><h2>أهلًا يا بطل!</h2><p>تعلّم، استمع، واجمع النجوم</p></div>
     </section>
     <div class="k-grid">${tiles.map(([r, t, im, c]) => `<button class="k-tile ${c}" data-go="kids/${r}"><span class="k-tile-art">${im}</span><b>${t}</b></button>`).join('')}</div>

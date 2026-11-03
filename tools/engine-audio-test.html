@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>engine audio test</title>
+<pre id="o">engine real-audio harness (dev only): run window.runCase(name)</pre>
+<script type="module">
+// Feeds REAL recitation audio (everyayah.com, Alafasy) through the REAL on-device engine (model from the Pages build) and prints verdicts.
+// Not a unit test: needs network + ~72 MB model. Cases are listed in CASES. Used for docs/RECITE-TESTING.md.
+import { downloadEngine, engineCached, openEngine } from '/src/core/quran-engine.js';
+const p3 = n => String(n).padStart(3, '0');
+const ctx = new AudioContext({ sampleRate: 16000 });
+const cache = new Map();
+async function pcm(s, a) {
+  const k = s + ':' + a; if (cache.has(k)) return cache.get(k);
+  const r = await fetch(`https://everyayah.com/data/Alafasy_128kbps/${p3(s)}${p3(a)}.mp3`);
+  const b = await ctx.decodeAudioData(await r.arrayBuffer());
+  const d = b.getChannelData(0); cache.set(k, d); return d;
+}
+const sil = n => new Float32Array(Math.round(16000 * n));
+async function feed(e, parts, speed = 4) {
+  for (const x of parts) {
+    for (let i = 0; i < x.length; i += 7680) { e.pcm(x.subarray(i, Math.min(x.length, i + 7680))); await new Promise(r => setTimeout(r, 480 / speed)); }
+  }
+}
+const CASES = {
+  correct: { mode: 'range', s: 112, from: 1, to: 4, audio: [[112, 1], [112, 2], [112, 3], [112, 4]] },
+  omit_ayah2: { mode: 'range', s: 112, from: 1, to: 4, audio: [[112, 1], [112, 3], [112, 4]] },
+  replace_ayah2: { mode: 'range', s: 112, from: 1, to: 4, audio: [[112, 1], [113, 1], [112, 3], [112, 4]] },
+  repeat_ayah1: { mode: 'range', s: 112, from: 1, to: 4, audio: [[112, 1], [112, 1], [112, 2], [112, 3], [112, 4]] },
+  free_similar_other_surah: { mode: 'free', audio: [[2, 1], [2, 2], [2, 3], [2, 4], [2, 5], [3, 1], [3, 2], [2, 6], [2, 7]] },
+  free_natural_next: { mode: 'free', audio: [[1, 1], [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [2, 1], [2, 2], [2, 3]] }
+};
+window.runCase = async function (name) {
+  const c = CASES[name], out = { name, verdicts: null, relocate: [], issues: [], slow: false };
+  const e = await openEngine();
+  const h = { onVerdicts: w => { out.verdicts = w; }, onIssue: i => out.issues.push(i.kind + '@' + i.a + ':' + i.w), onError: m => { out.error = m; }, onSlow: () => { out.slow = true; }, onRelocate: s => out.relocate.push(s) };
+  if (c.mode === 'range') e.start(c.s, c.from, c.to, h); else e.startFree(h);
+  const parts = []; for (const [s, a] of c.audio) { parts.push(await pcm(s, a)); parts.push(sil(0.7)); }
+  parts.push(sil(2));
+  await feed(e, parts);
+  const fin = await e.stop();
+  const by = {};
+  for (const w of (fin && fin.length ? fin : out.verdicts) || []) { const k = (w.s || '') + ':' + w.a; (by[k] ||= []).push(w.st[0]); }
+  out.byAyah = Object.fromEntries(Object.entries(by).map(([k, v]) => [k, v.join('')]));
+  return out;
+};
+window.prepare = async function () { if (!(await engineCached())) await downloadEngine(); return engineCached(); };
+document.getElementById('o').textContent = 'ready';
+</script>

@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>لوحة معاينة الصور</title>
+<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:16px}h2{margin:20px 0 8px}
+.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}figure{margin:0;background:#1c1c1c;border-radius:10px;overflow:hidden}
+img{display:block;width:100%;aspect-ratio:4/3;object-fit:contain;background:#222}figcaption{padding:6px 8px;font-size:12px;direction:ltr}</style>
+<h1>Photo preview board (public/kids, public/azkar)</h1>
+<script>
+const sets={'Prayer steps (contain)':['wudu','takbir','qiyam','ruku','itidal','sujud','julus','salam'].map(n=>'../public/kids/steps/'+n+'.webp'),
+'Home cards':['prayer-tile','dua-hands','letters-book','surahs-mosque','quiz-star','mascot'].map(n=>'../public/kids/photo/'+n+'.webp'),
+'Azkar':['morning','evening','afterPrayer','sleep'].map(n=>'../public/azkar/'+n+'.webp')};
+for(const [t,l] of Object.entries(sets)){document.body.insertAdjacentHTML('beforeend','<h2>'+t+'</h2><div class="g">'+l.map(u=>'<figure><img src="'+u+'" alt=""><figcaption>'+u.split('/').pop()+'</figcaption></figure>').join('')+'</div>')}
+</script>

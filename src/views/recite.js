@@ -18,7 +18,7 @@ import { renderPageLines, pageGlyphs, fitLines, BASMALA } from '../core/madani-r
 import { pageOf, pageContent, side, juzOfPage, pageFirst, quarterOf, PAGE_COUNT } from '../core/pages.js';
 import { scoreSession } from '../core/recite-score.js';
 import { bindChromeToggle } from '../core/chrome-toggle.js';
-import { pageEndReached, pageAction, planHint, markerPlan, errorAction, issueCertainty, normErrorMode, acceptPosition, turnCooldownOk } from '../core/page-turn.js';
+import { pageEndReached, pageAction, planHint, markerPlan, errorAction, issueCertainty, normErrorMode, createPositionGuard, turnCooldownOk } from '../core/page-turn.js';
 import '../styles/reader.css';
 import '../styles/recite.css';
 
@@ -164,6 +164,10 @@ function showHintNote(host) {
 /** The message sink of the running session (its status line in the strip above the bar); helper messages go here, not into floating toasts. */
 let msgSink = null;
 const tell = (t) => { if (msgSink) msgSink(t); else toast(t); };
+// «إعادة المحاولة» in the message strip after a mic / engine failure (a clear state + one tap to try again); cleared when tapped
+let retrySink = null;
+const offerRetry = fn => { if (retrySink) retrySink(fn); };
+const bindRetry = root => { retrySink = fn => { const b = root.querySelector('#rc-retry'); if (!b) return; b.hidden = !fn; b.onclick = fn ? () => { b.hidden = true; fn(); } : null; }; };
 
 const ic = (n, size = 22) => XP[n] ? `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${XP[n]}</svg>` : icon(n, size);
 // taps that never hide / show the tools: buttons, bars, sheets, ayahs and words
@@ -692,7 +696,7 @@ export default {
         </div>
         <div class="rc-spacer" aria-hidden="true"></div>
         <div class="rc-dock" id="rc-dock">
-          <div class="rc-msg" id="rc-msg"><span class="rc-status" id="rc-status">${voiceLike ? 'جارٍ تشغيل الميكروفون…' : 'تذكّر الآية التالية'}</span><div class="rc-hintnote" id="rc-hintnote" hidden></div><span class="rc-msg-detail" hidden></span></div>
+          <div class="rc-msg" id="rc-msg"><span class="rc-status" id="rc-status">${voiceLike ? 'جارٍ تشغيل الميكروفون…' : 'تذكّر الآية التالية'}</span><div class="rc-hintnote" id="rc-hintnote" hidden></div><span class="rc-msg-detail" hidden></span><button class="rc-msg-act" id="rc-retry" type="button" hidden>${icon('repeat', 16)}<span>إعادة المحاولة</span></button></div>
           <div class="rc-live" id="rc-live"></div>
           <div class="progress rc-prog"><i id="rc-prog" style="width:0%"></i></div>
           <div class="rc-dock-row${mode === 'hide' ? ' two' : ''}">
@@ -726,7 +730,7 @@ export default {
       const effective = () => baseStates().map((st, i) => (forced.has(i) ? 'peek' : st));
       let ms = { update() {} }, netErr = false, quranReady = false, hintTaps = 0;
       const setStatus = t => { if (statusEl) statusEl.textContent = t; ms.update(); };
-      msgSink = setStatus;
+      msgSink = setStatus; bindRetry(el);
       const micToggle = () => (engine === 'ai' ? toggleAi() : engine === 'quran' ? toggleQuran() : toggleMic());
       const started = () => listening || aiState !== 'idle' || sess > 0;
       // the recording row (also in hide mode, where it only holds «إنهاء»); the gear sheet holds font size, legend and the how-to
@@ -887,7 +891,7 @@ export default {
         if (finished || ending) return;
         if (listening) { stopListeningNow(); return; }
         netErr = false; if (micPerm === 'denied') micPerm = 'unknown';
-        if (navigator.onLine === false && support !== 'native') { tell(micMsg('offline')); setStatus(micMsg('offline')); return; }
+        if (navigator.onLine === false && support !== 'native') { tell(micMsg('offline')); setStatus(micMsg('offline')); offerRetry(toggleMic); return; }
         setListening(true);
         const my = ++sess;
         try {
@@ -907,11 +911,12 @@ export default {
               stopListeningNow();
               tell(micMsg(err));
               setStatus(micMsg(err));
+              offerRetry(err === 'permission' ? null : toggleMic);
             }
           });
           if (!isLive() || !listening) { try { stop(); } catch (e) {} return; }
           stopMic = stop;
-        } catch (e) { stopListeningNow(); tell(micMsg('error')); }
+        } catch (e) { stopListeningNow(); tell(micMsg('error')); offerRetry(toggleMic); }
       }
 
       // ----- precise (Whisper) engine -----
@@ -1051,7 +1056,7 @@ export default {
           }, onLevel: setLevel, onError: err => {
             if (!isLive() || engine !== 'quran') return;
             if (err === 'permission') micPerm = 'denied';
-            tell(micMsg(err === 'permission' ? 'permission' : 'error'));
+            tell(micMsg(err === 'permission' ? 'permission' : 'error')); offerRetry(toggleQuran);
             setListening(false); aiState = 'idle';
           } });
           if (!r) { starting = false; ms.update(); return; }        // onError already explained why
@@ -1319,7 +1324,7 @@ export default {
         </div>
         <div class="rd-stage"><div class="mp-book rc-fwrap${showText ? ' shown' : ''}" id="rc-fwrap"></div></div>
         <div class="rd-bottom rc-bottom"><div class="rc-bottom-in">
-          <div class="rc-msg" id="rc-msg"><span class="rc-status" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : sard ? 'اضغط المايك واسرد من حفظك، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع'}</span><div class="rc-hintnote" id="rc-hintnote" hidden></div><span class="rc-msg-detail" hidden></span><button class="rc-msg-act" id="rc-relock" type="button" hidden>${icon('repeat', 16)}<span>إعادة تحديد الموضع</span></button></div>
+          <div class="rc-msg" id="rc-msg"><span class="rc-status" id="rc-status">${auto ? 'جارٍ تشغيل الميكروفون…' : sard ? 'اضغط المايك واسرد من حفظك، وسأنبّهك بلطف عند الخطأ' : 'اضغط المايك واقرأ من أي موضع'}</span><div class="rc-hintnote" id="rc-hintnote" hidden></div><span class="rc-msg-detail" hidden></span><button class="rc-msg-act" id="rc-retry" type="button" hidden>${icon('repeat', 16)}<span>إعادة المحاولة</span></button><button class="rc-msg-act" id="rc-relock" type="button" hidden>${icon('repeat', 16)}<span>إعادة تحديد الموضع</span></button></div>
           <div class="rc-live" id="rc-live"></div>
           <div class="rc-tools">
             <button class="rd-fab" id="rc-mic" type="button" aria-label="تشغيل الميكروفون"><span class="rd-fab-mic">${icon('mic', 30)}</span></button>
@@ -1335,7 +1340,7 @@ export default {
       const wrap = $('#rc-fwrap', el), rootEl = $('#rcrd', el);
       let ms = { update() {} }, quranReady = true, hintTaps = 0;   // free mode only runs with the cached on-device engine
       const setStatus = t => { if (statusEl) statusEl.textContent = t; ms.update(); };
-      msgSink = setStatus;
+      msgSink = setStatus; bindRetry(el);
       const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
       const listenText = () => (cur ? (sard ? 'أتابعك… واصل السرد' : 'أتابعك… واصل القراءة') : 'أسمعك… أبحث عن الموضع');
       const setCard = p => { const n = $('#rc-sname', el), m = $('#rc-meta', el); if (n) n.textContent = pageNames(p); if (m) m.innerHTML = metaHTML(p); };
@@ -1619,9 +1624,11 @@ export default {
       }
       function hintHideAgain() { if (!showText) return; setHidden(true, true); setStatus(recState === 'rec' ? listenText() : 'أُعيد إخفاء النص'); }
 
+      const posGuard = createPositionGuard();
       function moveTo(s, a) {
         // never jump to another surah because an ayah there sounds similar: only the natural continuation or an explicit re-lock
-        if (!acceptPosition({ cur, next: { s, a }, relock: relockPending, lastAyahOf: lastAyah })) return;
+        // and inside the surah a far jump (a common word, a repeated phrase) needs several consecutive words before the place moves
+        if (!posGuard.check({ cur, next: { s, a }, relock: relockPending, lastAyahOf: lastAyah }).ok) return;
         relockPending = false;
         const first = !cur;
         cur = { s, a };
@@ -1729,7 +1736,7 @@ export default {
           }, onLevel: setLevel, onError: err => {
             if (!isLive()) return;
             if (err === 'permission') micPerm = 'denied';
-            tell(micMsg(err === 'permission' ? 'permission' : 'error'));
+            tell(micMsg(err === 'permission' ? 'permission' : 'error')); offerRetry(toggle);
             recState = 'idle'; syncKind(); micEl.classList.remove('live'); setStatus('اضغط على الميكروفون للمحاولة مجدداً');
           } });
           if (!r) { starting = false; ms.update(); return; }
@@ -2040,7 +2047,7 @@ export default {
           ${hintTaps ? '<p class="muted small mt">التلميح يُحتسب على نتيجة الجلسة: كشف الكلمة أو بقية الآية خطأ، والحرف الأول وحده لا يُعدّ خطأً.</p>' : ''}`;
       };
       const snapshot = () => { const c = repCounts(); return { bad: c.confirmed, unsure: c.unsure, unreached: c.unreached, hints: hintTaps, revealed: revealedN, secs: Math.round(repSecs()), weak: c.weak.slice(0, 30).map(x => (flat[x.i] ? flat[x.i].w : '')).filter(Boolean) }; };
-      if (blob) {
+      if (blob && S.settings.saveRecordings === true) {   // the raw recording is kept only when the user chose so (off by default)
         recordings.save({ blob, s, from, to, acc, durationMs: Math.round((secs || 0) * 1000) }).then(id => {
           recId = id;
           if (!id) return;
