@@ -1,8 +1,9 @@
 // Platform detection + small native helpers. Works in browser (PWA) and Capacitor Android.
 import { Capacitor } from '@capacitor/core';
 
-export const isNative = () => Capacitor.isNativePlatform();
-export const platform = () => Capacitor.getPlatform(); // 'web' | 'android' | 'ios'
+// never throws: a broken/missing Capacitor bridge means plain web. Every @capacitor/* plugin import elsewhere is dynamic and behind isNative().
+export const isNative = () => { try { return !!Capacitor.isNativePlatform(); } catch (e) { return false; } };
+export const platform = () => { try { return Capacitor.getPlatform(); } catch (e) { return 'web'; } }; // 'web' | 'android' | 'ios'
 
 export async function haptic(kind = 'light') {
   try {

@@ -121,7 +121,7 @@ export default {
       <div id="fam-box"></div>
       <div class="section-title">اختصارات</div>
       <div class="grid-3 hm-quick-grid">${quick}</div>
-      <button class="k-entry mt" data-go="kids"><span class="k-entry-art"><img class="k-art" src="${import.meta.env.BASE_URL}kids/img/mascot.webp" alt=""></span>
+      <button class="k-entry mt" data-go="kids"><span class="k-entry-art"><img class="k-art" src="${import.meta.env.BASE_URL}kids/photo/mascot.webp" alt="طفل يبتسم ويحمل نجمة"></span>
           <span style="flex:1"><b>ركن الأطفال ✨</b><small>تعلّم ممتع بالصوت والنجوم</small></span></button>`;
 
     // Next prayer (lazy)

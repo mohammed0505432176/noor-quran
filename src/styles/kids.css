@@ -228,7 +228,7 @@
 .k-ph-contain > img { object-fit: contain; object-position: 50% 50%; }
 .k-ph-contain[style*='--bg']::before { content: ''; position: absolute; inset: -14%; background: var(--bg) center / cover; filter: blur(16px) saturate(1.1); opacity: .95; }
 /* illustrated prayer steps: whole picture (contain) on a background that continues the picture (cream wall, teal floor at 80%) */
-.k-ph-step.k-ph-ready, .k-ph-step.k-ph-fail { background: linear-gradient(180deg, #fff7e5 0%, #fff4d6 74.6%, #e7cd98 75%, #e7cd98 79.8%, #2a8f7d 80%, #17635a 100%); }
+.k-ph-step.k-ph-ready, .k-ph-step.k-ph-fail { background: #efe6d6; }
 .k-ph-step > img { object-fit: contain; object-position: 50% 50%; }
 .k-ph-fb { position: absolute; inset: 0; display: none; place-items: center; background: radial-gradient(circle at 50% 38%, #fff4d6, #d7eee8); }
 .k-ph-fb .k-icon { width: 52%; max-width: 120px; height: auto; aspect-ratio: 1; }
@@ -247,3 +247,6 @@
 .k-pq-n { position: static; flex: none; background: var(--k); color: #11382d; }
 .k-pq-n:empty { display: none; }
 @media (orientation: landscape) and (max-height: 520px) { .k-pr-art { max-height: 70vh; } }
+
+/* photographic portrait in the round mascot / entry slots */
+.k-mascot > img, .k-entry-art > img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 3px 8px rgba(0, 0, 0, .25); }
