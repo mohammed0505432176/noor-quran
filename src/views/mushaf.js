@@ -258,7 +258,9 @@ let manualNav = false;             // the reader turned the pages by hand since 
       `<div class="mp-body${md ? ' madani' : ''}">${body}</div>` +
       `<div class="mp-foot"><span class="mp-num">${N(p)}</span><span class="mp-side">${side(p) === 'right' ? 'صفحة يمنى' : 'صفحة يسرى'}</span></div></section>`;
   };
-  const progressHTML = () => `<div class="mp-progress"><i style="width:${(cur / PAGE_COUNT * 100).toFixed(2)}%"></i></div>`;
+  // juz boundaries drawn on the progress bar (a tick where each juz starts), so the reader sees where it is in the Quran
+  const juzTicks = JUZ.map(([s, a]) => `<b class="mp-tick" style="left:${(pageOf(s, a) / PAGE_COUNT * 100).toFixed(2)}%"></b>`).join('');
+  const progressHTML = () => `<div class="mp-progress"><i style="width:${(cur / PAGE_COUNT * 100).toFixed(2)}%"></i>${juzTicks}</div>`;
   const bookHTML = () => `<div class="mp-book${shown.length > 1 ? ' spread' : ''}${heatOn ? ' heat-on' : ''}">${shown.map(pageHTML).join('')}</div>`;
   shown = pagesFor(cur);
   rubs = new Set(shown.flatMap(p => quarterStartsOn(p).map(x => x.s + ':' + x.a)));

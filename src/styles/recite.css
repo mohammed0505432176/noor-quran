@@ -307,7 +307,11 @@
 .rc-lv-btn:active { transform: scale(.95); }
 .rc-lv-btn:disabled { opacity: .5; }
 .rc-lv-allow { color: var(--on-gold); background: var(--gold); box-shadow: none; }
-.rc-lv-end { color: #fff; background: var(--bad); box-shadow: none; }
+/* ending the session is not an alarm: a quiet red outline, the solid red stays for permission / offline states */
+.rc-lv-end { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 40%, transparent); }
+/* the mic is the centre of the dock: a little larger, with the same gold ring language as the rest of the reader */
+.rc-dock-row .mic-btn { width: 74px; height: 74px; }
+.rc-dock-row .mic-btn svg { width: 32px; height: 32px; }
 .rc-live[data-state="hide"] .rc-lv-score { gap: 6px; }
 .rc-lv-score .score { font-size: 1.1rem; text-shadow: none; }
 .rc-dock-row.two { grid-template-columns: 1fr 1fr; }
@@ -359,6 +363,11 @@
 .rc-sbox { display: flex; flex-direction: column; align-items: center; min-width: 56px; line-height: 1.2; }
 .rc-sbox .score { font-size: 1.3rem; text-shadow: none; }
 .rc-sbox small { font-size: .72rem; color: var(--muted); white-space: nowrap; }
+/* progress ring around the score: the part of the range already judged (--p, 0-100), drawn as a gold arc */
+.rc-ring { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 58px; height: 58px; border-radius: 50%; isolation: isolate;
+  background: conic-gradient(var(--gold) calc(var(--p, 0) * 1%), var(--gold-soft) 0); transition: background .35s var(--ease, ease); }
+.rc-ring::before { content: ''; position: absolute; inset: 5px; border-radius: 50%; background: var(--bg); z-index: -1; }
+.rc-ring .score { font-size: 1.05rem; }
 
 /* the «correct word» card: inside the bar's own space (it replaces the message + recording rows), never over the verses */
 .rc-fix {

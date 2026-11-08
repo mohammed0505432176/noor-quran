@@ -702,7 +702,7 @@ export default {
           <div class="rc-dock-row${mode === 'hide' ? ' two' : ''}">
             <button class="rc-tl" id="rc-hint" type="button">${icon('eye', 22)}<span>تلميح</span></button>
             ${centerBtn}
-            ${mode === 'hide' ? '' : `<div class="rc-sbox"><b class="score" id="rc-score">٠٪</b><small>أخطاء <b id="rc-errn">${N(0)}</b></small></div>`}
+            ${mode === 'hide' ? '' : `<div class="rc-sbox"><span class="rc-ring" id="rc-ring" style="--p:0"><b class="score" id="rc-score">٠٪</b></span><small>أخطاء <b id="rc-errn">${N(0)}</b></small></div>`}
           </div>
         </div></div>`;
       const rootEl = $('#rc-root', el);
@@ -717,6 +717,7 @@ export default {
       const shown = new Array(total).fill(null);
       const pageEl = $('#rc-page', el);
       const progEl = $('#rc-prog', el), micEl = $('#rc-mic', el), statusEl = $('#rc-status', el);
+      const ringEl = $('#rc-ring', el);   // the score ring: how much of the range is judged (same value as the bar)
       const setLevel = v => { if (micEl) micEl.style.setProperty('--lvl', Math.max(0, Math.min(1, v)).toFixed(2)); };
 
       const setFs = v => {
@@ -827,6 +828,7 @@ export default {
         if (scoreEl) scoreEl.textContent = N(acc) + '٪';
         if (errnEl) errnEl.textContent = N(badN);
         progEl.style.width = (total ? 100 * done / total : 0) + '%';
+        if (ringEl) ringEl.style.setProperty('--p', total ? Math.round(100 * done / total) : 0);
         if (ptr !== curPtr) { curPtr = ptr; if (ptr >= 0) scrollToCurrent(); }
         return ptr;
       }
