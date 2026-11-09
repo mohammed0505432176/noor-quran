@@ -126,3 +126,5 @@
 .hm-bms-t { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); }
 .hm-bm { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline); background: var(--card); color: var(--ink); font: inherit; font-size: .85rem; cursor: pointer; min-height: 36px; }
 .hm-bm:active { transform: scale(.97); }
+/* reader setting «إظهار علامات نهاية الآيات» off: the end marks keep their place (no line shifts) but are not drawn */
+.no-ayah-marks .mp-page .mq-end, .no-ayah-marks .mp-page .ayah-no, .no-ayah-marks .rc-page .ayah-no { visibility: hidden; }

@@ -3,8 +3,10 @@ import { S, save, updateSettings, exportData, importData, resetAll } from '../co
 import { esc, icon, toast, sheet, header, N } from '../ui.js';
 import { cloudStatus } from '../core/cloud.js';
 import { sync, onSyncState, startGoogle, signOut, pushNow, fetchAccount, hasGoogle } from '../core/sync.js';
+import { downloadMushaf, storedPages, clearOfflineMushaf, cacheSupported, PAGES } from '../core/mushaf-offline.js';
 
 const FALLBACK_RECITERS = [{ id: 'Alafasy_128kbps', name: 'مشاري العفاسي' }];
+let offlineJob = null;   // the running «المصحف دون إنترنت» download (survives re-drawing the page)
 const PREVIEW = 'بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ';
 const seg = (id, items, cur) => `<div class="seg" id="${id}">${items.map(([v, t]) => `<button data-v="${v}" class="${v === cur ? 'active' : ''}">${t}</button>`).join('')}</div>`;
 
@@ -92,6 +94,10 @@ export default {
           <div class="field"><label>المظهر</label>${seg('s-theme', [['auto', 'تلقائي'], ['dark', 'داكن'], ['light', 'فاتح'], ['paper', 'ورقي دافئ'], ['oled', 'أسود OLED']], s.theme)}</div>
           <div class="field"><label>حفظ تسجيلات صوتي بعد التسميع</label>${seg('s-saverec', [['0', 'لا (الافتراضي)'], ['1', 'نعم، على جهازي فقط']], s.saveRecordings === true ? '1' : '0')}<small class="muted">الصوت الخام لا يُحفظ ولا يُرفع إلا إن اخترت «نعم» (يبقى على جهازك). المحرك القرآني يعمل على جهازك بلا إرسال صوت.</small></div></div>
 
+        <div class="card mt"><div class="section-title">المصحف دون إنترنت</div>
+          <div id="mo-card"><p class="muted small">جارٍ الفحص…</p></div>
+        </div>
+
         <div class="card mt"><div class="section-title">الذكاء الاصطناعي</div>
           <div id="ai-card" style="margin-bottom:.8rem"><p class="muted small">جارٍ فحص الخدمات…</p></div>
           <div class="row"><button class="btn sm ghost" id="ai-refresh">تحديث الحالة</button></div>
@@ -139,6 +145,36 @@ export default {
         const v = +e.target.value; q('#f-val').textContent = N(v); q('#f-prev').style.fontSize = v + 'px';
         updateSettings({ fontSize: v });
       };
+      // ---- offline mushaf (all 604 pages stored on this device; resumes after a dropped connection)
+      const moCard = q('#mo-card');
+      const moDraw = async (prog) => {
+        if (!moCard || !moCard.isConnected) return;
+        if (!cacheSupported()) { moCard.innerHTML = '<p class="muted small">هذا المتصفح لا يدعم التخزين دون إنترنت.</p>'; return; }
+        const have = prog ? prog.done : (await storedPages()).size;
+        const busy = !!offlineJob;
+        const pct = Math.round(100 * have / PAGES);
+        moCard.innerHTML = `<p class="muted small">يحفظ خطوط وصفحات المصحف (٦٠٤ صفحة، نحو ٥٠ ميغابايت) على جهازك فيُقرأ المصحف بلا إنترنت.</p>
+          <div class="progress mt"><i style="width:${pct}%"></i></div>
+          <p class="small mt" id="mo-t">${have >= PAGES ? 'تم تنزيل المصحف كاملاً ✓' : `تم تنزيل ${N(have)} من ${N(PAGES)} صفحة`}${prog && prog.failed ? ` — تعذّر ${N(prog.failed)} (ستُعاد المحاولة)` : ''}</p>
+          <div class="row mt">${have >= PAGES ? '' : `<button class="btn sm" id="mo-go"${busy ? ' disabled' : ''}>${busy ? 'جارٍ التنزيل…' : have ? 'متابعة التنزيل' : 'تنزيل المصحف'}</button>`}
+          ${busy ? '<button class="btn ghost sm" id="mo-stop">إيقاف</button>' : have ? '<button class="btn ghost sm" id="mo-del">حذف التنزيل</button>' : ''}</div>`;
+        const go = moCard.querySelector('#mo-go'), stop = moCard.querySelector('#mo-stop'), del = moCard.querySelector('#mo-del');
+        if (go) go.onclick = async () => {
+          if (offlineJob) return;
+          offlineJob = new AbortController();
+          moDraw({ done: have, failed: 0 });
+          try {
+            const r = await downloadMushaf({ signal: offlineJob.signal, onProgress: x => { const bar = moCard.isConnected && moCard.querySelector('.progress i'), t = moCard.querySelector('#mo-t'); if (bar) bar.style.width = Math.round(100 * x.done / PAGES) + '%'; if (t) t.textContent = `تم تنزيل ${N(x.done)} من ${N(PAGES)} صفحة`; } });
+            offlineJob = null;
+            toast(r.aborted ? 'أُوقف التنزيل — يمكنك المتابعة لاحقاً' : r.failed.length ? `اكتمل التنزيل عدا ${N(r.failed.length)} صفحة، اضغط متابعة` : 'اكتمل تنزيل المصحف');
+          } catch (e) { offlineJob = null; toast('تعذّر التنزيل، تأكد من الاتصال ثم تابع'); }
+          moDraw();
+        };
+        if (stop) stop.onclick = () => { if (offlineJob) offlineJob.abort(); };
+        if (del) del.onclick = async () => { await clearOfflineMushaf(); toast('حُذف المصحف المحفوظ'); moDraw(); };
+      };
+      moDraw();
+
       q('#s-rec').onchange = e => updateSettings({ reciter: e.target.value });
       q('#s-saverec').onclick = e => {
         const b = e.target.closest('button'); if (!b) return;

@@ -13,6 +13,7 @@ const VERSION = SHELL_PREFIX + BUILD;
 const AUDIO = 'noor-audio';
 const AUDIO_MAX = 300;
 const MUSHAF = 'noor-mushaf-v1';
+const MUSHAF_OFFLINE = 'noor-mushaf-offline-v1';   // «المصحف دون إنترنت»: written by core/mushaf-offline.js, read first, never trimmed
 const MODELS = 'noor-models-v1';       // owned by quran-engine.js, only protected from deletion here
 const ORT = 'noor-ort-v1';
 const LAYOUT_V = '2';
@@ -77,10 +78,10 @@ self.addEventListener('fetch', e => {
   if (url.hostname === 'static.qurancdn.com' || url.hostname === 'verses.quran.foundation' || (url.origin === location.origin && url.pathname.includes('/mushaf/p/'))) {
     const isLayout = url.origin === location.origin;
     if (isLayout && url.searchParams.get('v') !== LAYOUT_V) return;
-    e.respondWith(caches.open(MUSHAF).then(c => c.match(req.url).then(hit => hit || fetch(req).then(res => {
+    e.respondWith(caches.open(MUSHAF_OFFLINE).then(o => o.match(req.url)).catch(() => null).then(off => off || caches.open(MUSHAF).then(c => c.match(req.url).then(hit => hit || fetch(req).then(res => {
       if (res && res.ok && res.type !== 'opaque') c.put(req.url, res.clone()).then(() => (isLayout ? dropOldLayouts(c) : trimFonts(c))).catch(() => {});
       return res;
-    }))));
+    })))));
     return;
   }
   if (url.origin !== location.origin) return;

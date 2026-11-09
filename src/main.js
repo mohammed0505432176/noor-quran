@@ -19,7 +19,7 @@ import './styles/kids.css';
 import './styles/prayer.css';
 import './styles/hifz.css';
 import { S, on } from './core/store.js';
-import { icon, celebrate, toast, keepFocusVisible } from './ui.js';
+import { icon, celebrate, toast, keepFocusVisible, marksOn, setMarksPref } from './ui.js';
 import { loadQuran } from './core/quran.js';
 import { initSync, initNativeReturn } from './core/sync.js';
 import { showWelcome } from './core/welcome.js';
@@ -119,6 +119,7 @@ function init() {
   on('goal', () => celebrate('🎯', 'حققت هدف اليوم', 'بارك الله فيك، استمر'));
   on('change', applyTheme);
   applyTheme();
+  setMarksPref(marksOn());
   loadQuran().catch(() => toast('تعذر تحميل نص المصحف'));
   initSync(toast);
   route();
