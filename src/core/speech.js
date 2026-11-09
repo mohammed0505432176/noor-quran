@@ -272,7 +272,7 @@ function startWeb({ onText, onState, onError, pick }) {
 export function micState({ perm = 'unknown', online = true, netError = false, engine = 'device', listening = false, paused = false, busy = false, quranReady = false, native = false } = {}) {
   if (perm === 'denied') {
     return { key: 'permission', icon: 'micoff', label: 'يحتاج إذن الميكروفون', allow: true,
-      detail: 'اضغط «السماح». إن لم يظهر طلب الإذن فالميكروفون محظور: افتح إعدادات التطبيق أو المتصفح (الأذونات) وفعّل الميكروفون ثم عُد.' };
+      detail: 'اضغط «السماح»، أو فعّل الميكروفون من إعدادات التطبيق (الأذونات) ثم عُد.' };
   }
   const needsNet = engine !== 'quran';
   if (needsNet && (online === false || netError)) {
