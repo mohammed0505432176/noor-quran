@@ -1,0 +1,3 @@
+Kids prayer narration (Arabic)
+Generated locally with Chatterbox Multilingual TTS (Resemble AI, MIT license).
+Each clip was transcribed with Whisper (small) and checked against its script (tools/kids-narration.json).

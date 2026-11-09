@@ -1,52 +1,53 @@
 // Kids prayer guide: a 2-rak'ah prayer explained simply.
 // Phrases: local clips under public/kids/prayer/audio (hisnmuslim/Fares Abbad, trimmed to the dua; see CREDITS.txt). Each text matches its clip (Whisper-verified, .router/KIDS_PRAYER_VERIFY.md). `repeat` = times the clip is played.; Fatiha: everyayah Husary_Muallim_128kbps.
+// narr: a spoken explanation of the step for children who cannot read yet (generated with open-source Chatterbox TTS, see tools/tts-kids.py and kids/prayer/narr/CREDITS.txt).
 // say item: { text, audio (full URL or path under BASE), repeat } or { text, surah } (played ayah by ayah).
 
 export const FATIHA_AYAT = 7;
 export const ayahUrl = (s, a) => `https://everyayah.com/data/Husary_Muallim_128kbps/${String(s).padStart(3, '0')}${String(a).padStart(3, '0')}.mp3`;
 
 export const PRAYER_STEPS = [
-  { id: 'wudu', title: 'الوضوء أولًا', img: 'wudu',
+  { id: 'wudu', narr: 'kids/prayer/narr/wudu.mp3', title: 'الوضوء أولًا', img: 'wudu',
     desc: 'قبل الصلاة نتوضّأ ونصير نظيفين. نغسل بالترتيب:',
     list: ['اليدين', 'الفم', 'الأنف', 'الوجه', 'اليدين إلى المرفقين', 'نمسح الرأس', 'نغسل القدمين'],
     say: [] },
-  { id: 'takbir', title: 'النية والتكبير', img: 'takbir',
+  { id: 'takbir', narr: 'kids/prayer/narr/takbir.mp3', title: 'النية والتكبير', img: 'takbir',
     desc: 'نقف مستقبلين القبلة وننوي الصلاة في قلوبنا، ثم نرفع يدينا ونقول الله أكبر.',
     say: [{ text: 'الله أكبر', audio: 'kids/prayer/audio/takbir.mp3', repeat: 1 }] },
-  { id: 'qiyam', title: 'القيام وقراءة الفاتحة', img: 'qiyam',
+  { id: 'qiyam', narr: 'kids/prayer/narr/qiyam.mp3', title: 'القيام وقراءة الفاتحة', img: 'qiyam',
     desc: 'نضع اليد اليمنى على اليسرى على صدرنا، ونقرأ دعاء الاستفتاح ثم سورة الفاتحة.',
     say: [
       { text: 'سُبْحانَكَ اللَّهُمَّ وَبِحَمْدِكَ، وَتَبارَكَ اسْمُكَ، وَتَعَالَى جَدُّكَ، وَلاَ إِلَهَ غَيْرُكَ', audio: 'kids/prayer/audio/istiftah.mp3', repeat: 1 },
       { text: 'سورة الفاتحة', surah: 1, repeat: 1 }
     ] },
-  { id: 'ruku', title: 'الركوع', img: 'ruku',
+  { id: 'ruku', narr: 'kids/prayer/narr/ruku.mp3', title: 'الركوع', img: 'ruku',
     desc: 'ننحني ونضع يدينا على ركبتينا وظهرنا مستقيم، ونقول الذكر ثلاث مرات.',
     say: [{ text: 'سُبْحانَ رَبِّيَ الْعَظِيمِ', audio: 'kids/prayer/audio/ruku.mp3', repeat: 3 }] },
-  { id: 'itidal', title: 'الرفع من الركوع', img: 'itidal',
+  { id: 'itidal', narr: 'kids/prayer/narr/itidal.mp3', title: 'الرفع من الركوع', img: 'itidal',
     desc: 'نرفع ظهرنا ونقف مستقيمين، ونقول:',
     say: [
       { text: 'سَمِعَ اللَّهُ لِمَنْ حَمِدَهُ', audio: 'kids/prayer/audio/itidal1.mp3', repeat: 1 },
       { text: 'رَبَّنَا وَلَكَ الْحَمْدُ، حَمْداً كَثيراً طَيِّباً مُبارَكاً فِيهِ', audio: 'kids/prayer/audio/itidal2.mp3', repeat: 1 }
     ] },
-  { id: 'sujud', title: 'السجود', img: 'sujud',
+  { id: 'sujud', narr: 'kids/prayer/narr/sujud.mp3', title: 'السجود', img: 'sujud',
     desc: 'نسجد على سبعة أعضاء: الجبهة مع الأنف، واليدين، والركبتين، وأطراف القدمين. ونقول ثلاث مرات:',
     say: [{ text: 'سُبْحَانَ رَبِّيَ الأَعْلَى', audio: 'kids/prayer/audio/sujud.mp3', repeat: 3 }] },
-  { id: 'julus', title: 'الجلوس بين السجدتين', img: 'julus',
+  { id: 'julus', narr: 'kids/prayer/narr/julus.mp3', title: 'الجلوس بين السجدتين', img: 'julus',
     desc: 'نرفع من السجود ونجلس مطمئنين، ونقول:',
     say: [{ text: 'رَبِّ اغْفِرْ لِي، رَبِّ اغْفِرْ لِي', audio: 'kids/prayer/audio/julus.mp3', repeat: 1 }] },
-  { id: 'sujud2', title: 'السجدة الثانية', img: 'sujud',
+  { id: 'sujud2', narr: 'kids/prayer/narr/sujud2.mp3', title: 'السجدة الثانية', img: 'sujud',
     desc: 'نسجد مرة ثانية ونقول مثل السجدة الأولى.',
     say: [{ text: 'سُبْحَانَ رَبِّيَ الأَعْلَى', audio: 'kids/prayer/audio/sujud.mp3', repeat: 3 }] },
-  { id: 'rakah2', title: 'الركعة الثانية', img: 'qiyam',
+  { id: 'rakah2', narr: 'kids/prayer/narr/rakah2.mp3', title: 'الركعة الثانية', img: 'qiyam',
     desc: 'نقوم للركعة الثانية.',
     say: [{ text: 'تقوم وتفعل مثل الركعة الأولى' }] },
-  { id: 'tashahhud', title: 'التشهد', img: 'julus',
+  { id: 'tashahhud', narr: 'kids/prayer/narr/tashahhud.mp3', title: 'التشهد', img: 'julus',
     desc: 'في آخر الركعة الثانية نجلس ونقرأ التشهد، ثم الصلاة على النبي ﷺ.',
     say: [
       { text: 'التَّحِيَّاتُ لِلَّهِ، وَالصَّلَواتُ، وَالطَّيِّباتُ، السَّلاَمُ عَلَيْكَ أَيُّهَا النَّبِيُّ وَرَحْمَةُ اللَّهِ وَبَرَكَاتُهُ، السَّلاَمُ عَلَيْنَا وَعَلَى عِبَادِ اللَّهِ الصَّالِحِينَ. أَشْهَدُ أَنْ لاَ إِلَهَ إِلاَّ اللَّهُ وَأَشْهَدُ أَنَّ مُحَمَّداً عَبْدُهُ وَرَسولُهُ', audio: 'kids/prayer/audio/tashahhud.mp3', repeat: 1 },
       { text: 'اللَّهُمَّ صَلِّ عَلَى مُحَمَّدٍ، وَعَلَى آلِ مُحَمَّدٍ، كَمَا صَلَّيتَ عَلَى إِبْرَاهِيمَ، وَعَلَى آلِ إِبْرَاهِيمَ، إِنَّكَ حَمِيدٌ مَجِيدٌ، اللَّهُمَّ بَارِكْ عَلَى مُحَمَّدٍ وَعَلَى آلِ مُحَمَّدٍ، كَمَا بَارَكْتَ عَلَى إِبْرَاهِيمَ وَعَلَى آلِ إِبْرَاهِيمَ، إِنَّكَ حَمِيدٌ مَجِيدٌ', audio: 'kids/prayer/audio/ibrahimiyya.mp3', repeat: 1 }
     ] },
-  { id: 'salam', title: 'التسليم', img: 'salam',
+  { id: 'salam', narr: 'kids/prayer/narr/salam.mp3', title: 'التسليم', img: 'salam',
     desc: 'ننهي الصلاة بالسلام: نلتفت إلى اليمين ثم إلى اليسار ونقول في كل مرة:',
     note: 'نكمل بعدها: ورحمة الله.',
     say: [{ text: 'السَّلامُ عَلَيْكُمْ', audio: 'kids/prayer/audio/salam.mp3', repeat: 1 }] }
