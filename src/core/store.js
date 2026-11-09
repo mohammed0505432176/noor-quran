@@ -3,6 +3,8 @@
 // Ayah keys are always `${s}:${a}` with 1-based surah (1..114) and ayah numbers.
 
 import { pageOf, pageContent, PAGE_COUNT } from './pages.js';
+import { review as fsrsReview, fromBox, newCard, retrievability } from './fsrs.js';
+import { makePlan, logPage, status as wirdState } from './wird.js';
 
 const KEY = 'noor.v1';
 
@@ -26,6 +28,9 @@ const DEFAULTS = () => ({
   rec: [],         // recitation history [{ d, s, from, to, acc, miss: [words] }] newest first
   reviews: [],     // spaced repetition [{ id, s, from, to, box, due, added, last }]
   hifz: { pages: {} }, // memorization tracker: pages[p] = { lvl 0..3, at 'YYYY-MM-DD', n, m? first-memorized date }
+  savers: { have: 0, used: [], at: null }, // streak savers (see touchStreak)
+  spot: { n: 0, last: null }, // random spot tests started: count and last date (core/spot-test.js)
+  wird: { plan: null, log: {} }, // daily wird: plan { kind, days, perDay, start, startPage }, log { 'YYYY-MM-DD': [pages read] } (core/wird.js)
   goals: [],       // [{ id, type:'memorize'|'review'|'recite', unit:'page'|'ayah'|'minute', target, period:'day'|'week', created }]
   wm: {},          // per-word recitation history 's:a:w' -> { n, k, d, ok } (w 1-based within ayah)
   tasbeeh: 0,
@@ -105,10 +110,25 @@ export function dayStat(offset = 0) { return S.days[dateKey(offset)] || { a: 0, 
 function todayRec() { return (S.days[today()] ||= { a: 0, r: 0, z: 0 }); }
 const active = d => d && (d.a > 0 || d.r > 0);
 
+// Streak savers: one missed day does not break a streak while a saver is available. A saver is earned for every 7 days of streak
+// (at most SAVER_MAX kept) and is used automatically for the single day missed between two active days.
+export const SAVER_MAX = 2, SAVER_EVERY = 7;
+const covered = k => !!(S.savers && Array.isArray(S.savers.used) && S.savers.used.includes(k));
+const live = k => active(S.days[k]) || covered(k);
 export function streak() {
-  let c = 0, o = active(S.days[dateKey(0)]) ? 0 : 1;
-  while (active(S.days[dateKey(o)])) { c++; o++; }
+  let c = 0, o = live(dateKey(0)) ? 0 : 1;
+  while (live(dateKey(o))) { if (active(S.days[dateKey(o)])) c++; o++; }
   return c;
+}
+export const saverInfo = () => ({ have: (S.savers && S.savers.have) | 0, max: SAVER_MAX, every: SAVER_EVERY });
+/** Call after today became active: spend a saver on a single missed day, and earn one on every 7th day of streak. */
+export function touchStreak() {
+  const sv = (S.savers ||= { have: 0, used: [], at: null });
+  const t = dateKey(0), y = dateKey(1), y2 = dateKey(2);
+  if (!active(S.days[t])) return;
+  if (!live(y) && active(S.days[y2]) && sv.have > 0) { sv.have--; sv.used = [...(sv.used || []), y].slice(-60); emit('saver', { day: y }); }
+  const st = streak();
+  if (st > 0 && st % SAVER_EVERY === 0 && sv.at !== t) { sv.have = Math.min(SAVER_MAX, sv.have + 1); sv.at = t; }
 }
 export function bestStreak() {
   const keys = Object.keys(S.days).filter(k => active(S.days[k])).sort();
@@ -148,6 +168,7 @@ export function markRead(s, a) {
   try { localStorage.setItem(RT_KEY(), JSON.stringify([...readToday])); } catch (e) {}
   if (!S.read[k]) S.read[k] = t;
   const d = todayRec(); d.a++;
+  touchStreak();
   addPoints(2, 'read');
   let goalHit = false;
   if (d.a === S.settings.goal) { addPoints(25, 'goal'); goalHit = true; emit('goal'); }
@@ -171,6 +192,7 @@ export function addRecitation({ s, from, to, acc, miss = [] }) {
   S.rec.unshift({ d: today(), s, from, to, acc, miss: miss.slice(0, 30) });
   S.rec = S.rec.slice(0, 200);
   todayRec().r++;
+  touchStreak();
   const words = Math.max(1, to - from + 1);
   const p = Math.round(5 + (acc / 100) * 10 * Math.min(words, 10) / 2);
   addPoints(p, 'recite');
@@ -241,6 +263,24 @@ export function lastAttempt(s, from, to, skip = 0) {
   return null;
 }
 
+// ---- random spot test of memorised pages (picking is core/spot-test.js) ----
+/** Memorised pages with their level (1..3) and days since last recited, for weighting the pick. */
+export function spotPages() {
+  const out = [];
+  for (let p = 1; p <= PAGE_COUNT; p++) { const lvl = hifzLevel(p); if (lvl > 0) out.push({ p, lvl, daysAgo: daysSince(((S.hifz || {}).pages || {})[p] && S.hifz.pages[p].at) }); }
+  return out;
+}
+export function noteSpot() { const sp = (S.spot ||= { n: 0, last: null }); sp.n = Math.min(100000, (sp.n | 0) + 1); sp.last = today(); save(); }
+
+// ---- daily wird (plan + pages read per day; the maths lives in core/wird.js) ----
+const WIRD_LOG_DAYS = 400;
+/** Record a page as read today for the wird (no save: callers save). */
+function logWird(p) { const w = S.wird; if (w && w.plan) logPage(w.log ||= {}, today(), p); }
+export function markWirdPage(p) { if (!(S.wird && S.wird.plan)) return false; logWird(p); save(); return true; }
+export function setWird(opts) { S.wird = { plan: makePlan({ ...opts, start: today() }), log: (S.wird && S.wird.log) || {} }; save(); return S.wird.plan; }
+export function clearWird() { S.wird = { plan: null, log: {} }; save(); }
+export const wirdStatus = () => (S.wird && S.wird.plan ? wirdState(S.wird.plan, S.wird.log || {}, today()) : null);
+
 // ---- hifz tracker, goals, word heat ----
 const dayNum = k => Math.round(new Date(k + 'T12:00:00').getTime() / 864e5);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -270,6 +310,7 @@ export function notePagesRecited(pages, quality) {
     else e.lvl = Math.max(cur, 1);
     if (!e.m) e.m = today();
     e.at = today();
+    logWird(p);
   }
   save();
 }
@@ -338,23 +379,35 @@ export function wordErrorHeat(s, a, w) {
   return Math.max(0, Math.min(1, h));
 }
 
-// ---- spaced repetition review (Leitner boxes) ----
+// ---- spaced repetition review (FSRS scheduler, see core/fsrs.js; `box` is kept as a coarse 0..6 level for display and old backups) ----
 const BOX_DAYS = [0, 1, 3, 7, 14, 30, 60];
+const boxOfStability = st => { let b = 0; for (let i = 0; i < BOX_DAYS.length; i++) if (st >= BOX_DAYS[i]) b = i; return b; };
+const addDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+/** The FSRS card of a review: its own fields, or (for a review made before FSRS) built from its old Leitner box. */
+const cardOf = r => (r.st > 0 ? { st: r.st, df: r.df || 5, rp: r.rp || 0, lp: r.lp || 0 } : (r.last || r.box > 0) ? fromBox(r.box) : newCard());
 export function addReview(s, from, to) {
   if (S.reviews.some(r => r.s === s && r.from === from && r.to === to)) return null;
-  const r = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), s, from, to, box: 0, due: today(), added: today(), last: null };
+  const r = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), s, from, to, box: 0, due: today(), added: today(), last: null, st: 0, df: 0, rp: 0, lp: 0 };
   S.reviews.push(r); save(); return r;
 }
 export function removeReview(id) { S.reviews = S.reviews.filter(r => r.id !== id); save(); }
 export function dueReviews() { const t = today(); return S.reviews.filter(r => r.due <= t).sort((a, b) => a.due.localeCompare(b.due)); }
-/** quality: 0 forgot, 1 hesitant, 2 perfect */
+/** Chance (0..1) of recalling a passage right now, or null when it has never been reviewed. */
+export function recallNow(r) {
+  const c = cardOf(r);
+  if (!(c.st > 0) || !r.last) return null;
+  return retrievability(Math.max(0, dayNum(today()) - dayNum(r.last)), c.st);
+}
+/** quality: 0 forgot, 1 hesitant, 2 good, 3 easy (FSRS ratings 1..4). */
 export function gradeReview(id, quality, doSave = true) {
   const r = S.reviews.find(x => x.id === id); if (!r) return;
-  r.box = quality === 2 ? Math.min(BOX_DAYS.length - 1, r.box + 1) : quality === 1 ? r.box : 0;
-  const d = new Date(); d.setDate(d.getDate() + Math.max(1, BOX_DAYS[r.box]));
-  r.due = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const elapsed = r.last ? Math.max(0, dayNum(today()) - dayNum(r.last)) : 0;
+  const out = fsrsReview(cardOf(r), Math.min(3, Math.max(0, quality | 0)) + 1, elapsed);
+  Object.assign(r, out.card);
+  r.box = boxOfStability(r.st);
+  r.due = addDays(out.interval);
   r.last = today();
-  addPoints(quality === 2 ? 8 : 3, 'review');
+  addPoints(quality >= 2 ? 8 : 3, 'review');
   if (doSave) { checkBadges(); save(); }
 }
 
@@ -401,7 +454,19 @@ export function importData(json) {
   d.bookmarks = (Array.isArray(d.bookmarks) ? d.bookmarks : []).map(b => ({ s: int(b.s), a: int(b.a), at: +b.at || 0 })).filter(b => b.s >= 1 && b.s <= 114 && b.a >= 1);
   d.last = d.last ? { s: Math.min(114, Math.max(1, int(d.last.s))), a: Math.max(1, int(d.last.a)) } : null;
   d.rec = (Array.isArray(d.rec) ? d.rec : []).map(r => ({ d: String(r.d || '').slice(0, 10), s: int(r.s), from: int(r.from), to: int(r.to), acc: int(r.acc), miss: (Array.isArray(r.miss) ? r.miss : []).map(String).slice(0, 30) }));
-  d.reviews = (Array.isArray(d.reviews) ? d.reviews : []).map(r => ({ id: String(r.id).replace(/[^\w-]/g, ''), s: int(r.s), from: int(r.from), to: int(r.to), box: int(r.box), due: String(r.due || '').slice(0, 10), added: String(r.added || '').slice(0, 10), last: r.last ? String(r.last).slice(0, 10) : null }));
+  {
+    const w = d.wird && typeof d.wird === 'object' ? d.wird : {}, pl = w.plan && typeof w.plan === 'object' ? w.plan : null;
+    const okKey = k => /^\d{4}-\d{2}-\d{2}$/.test(k);
+    const log = {};
+    if (w.log && typeof w.log === 'object' && !Array.isArray(w.log)) {
+      const keys = Object.keys(w.log).filter(okKey).sort().slice(-WIRD_LOG_DAYS);
+      for (const k of keys) { const ps = [...new Set((Array.isArray(w.log[k]) ? w.log[k] : []).map(x => parseInt(x, 10)).filter(x => x >= 1 && x <= PAGE_COUNT))]; if (ps.length) log[k] = ps; }
+    }
+    d.wird = { plan: pl && okKey(String(pl.start || '')) ? makePlan({ kind: pl.kind === 'pages' ? 'pages' : 'khatma', days: +pl.days, perDay: +pl.perDay, start: String(pl.start), startPage: +pl.startPage || 1 }) : null, log };
+  }
+  d.spot = { n: int(d.spot && d.spot.n), last: d.spot && /^\d{4}-\d{2}-\d{2}$/.test(String(d.spot.last || '')) ? String(d.spot.last) : null };
+  { const sv = d.savers && typeof d.savers === 'object' ? d.savers : {}; const k = x => /^\d{4}-\d{2}-\d{2}$/.test(String(x || '')); d.savers = { have: Math.min(2, int(sv.have)), used: (Array.isArray(sv.used) ? sv.used : []).filter(k).map(String).slice(-60), at: k(sv.at) ? String(sv.at) : null }; }
+  d.reviews = (Array.isArray(d.reviews) ? d.reviews : []).map(r => ({ id: String(r.id).replace(/[^\w-]/g, ''), s: int(r.s), from: int(r.from), to: int(r.to), box: int(r.box), due: String(r.due || '').slice(0, 10), added: String(r.added || '').slice(0, 10), last: r.last ? String(r.last).slice(0, 10) : null, st: Math.max(0, +r.st || 0), df: Math.min(10, Math.max(0, +r.df || 0)), rp: int(r.rp), lp: int(r.lp) }));
   const wm = {};
   if (d.wm && typeof d.wm === 'object' && !Array.isArray(d.wm)) {
     let count = 0;

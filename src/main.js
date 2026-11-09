@@ -29,7 +29,9 @@ const ROUTES = {
   mushaf: () => import('./views/mushaf.js'),       // surah/juz index; mushaf/<s>?a=<ayah> opens reader
   search: () => import('./views/search.js'),
   recite: () => import('./views/recite.js'),       // recite/<s>?from=&to= starts session
-  review: () => import('./views/review.js'),       // spaced-repetition hifz review
+  review: () => import('./views/review.js'),       // spaced-repetition hifz review (FSRS)
+  spot: () => import('./views/spot.js'),           // random spot test of memorised pages
+  wird: () => import('./views/wird.js'),           // daily wird: khatma / pages-per-day reading plan
   prayer: () => import('./views/prayer.js'),
   qibla: () => import('./views/qibla.js'),
   ai: () => import('./views/ai.js'),               // ai?s=&a= opens with ayah context
@@ -45,7 +47,7 @@ const ROUTES = {
   settings: () => import('./views/settings.js')
 };
 const TABS = [['home', 'home', 'الرئيسية'], ['mushaf', 'book', 'المصحف'], ['recite', 'mic', 'التسميع'], ['prayer', 'mosque', 'الصلاة'], ['more', 'grid', 'المزيد']];
-const TAB_OF = { search: 'mushaf', train: 'recite', family: 'more', recordings: 'recite', review: 'more', hifz: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', kids: 'more', tasbeeh: 'more', settings: 'more' };
+const TAB_OF = { search: 'mushaf', wird: 'more', spot: 'more', train: 'recite', family: 'more', recordings: 'recite', review: 'more', hifz: 'more', qibla: 'prayer', ai: 'more', stats: 'more', azkar: 'more', kids: 'more', tasbeeh: 'more', settings: 'more' };
 
 const main = document.getElementById('app');
 const nav = document.getElementById('tabs');
