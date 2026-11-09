@@ -77,6 +77,14 @@ export function icon(name, size = 22) {
 /** Ornamental ayah end marker ﴿n﴾ as styled span. */
 export const ayahMark = n => `<span class="ayah-no">${N(n)}</span>`;
 
+/** Reader preference: show the ayah end marks on the mushaf pages (a memory test hides them). Stored per device. */
+export const MARKS_KEY = 'noor.rd.marks';
+export const marksOn = () => { try { return localStorage.getItem(MARKS_KEY) !== '0'; } catch (e) { return true; } };
+export function setMarksPref(on) {
+  try { localStorage.setItem(MARKS_KEY, on ? '1' : '0'); } catch (e) { /* storage unavailable: applies to this session only */ }
+  document.body.classList.toggle('no-ayah-marks', !on);
+}
+
 /** Standard page header. back: route string or null. */
 export function header(title, { back = null, actions = '' } = {}) {
   return `<header class="page-head">${back ? `<button class="icon-btn" data-go="${back}" aria-label="رجوع">${icon('back')}</button>` : ''}<h1 class="page-title">${esc(title)}</h1><div class="head-actions">${actions}</div></header>`;

@@ -1,5 +1,5 @@
 // Mushaf: index (surahs / juz / bookmarks / pages) and the page-based reader with audio.
-import { esc, $, $$, toast, sheet, icon, ayahMark, header, N } from '../ui.js';
+import { esc, $, $$, toast, sheet, icon, ayahMark, header, N, marksOn, setMarksPref } from '../ui.js';
 import { S, markRead, setLast, isBookmarked, toggleBookmark, addReview } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, typeName, ayah, JUZ, SURAH_COUNT } from '../core/quran.js';
 import { PAGE_COUNT, pageOf, pageContent, pageFirst, side, quarterOf, quarterStartsOn, hizbLabel, juzOfPage } from '../core/pages.js';
@@ -693,7 +693,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     const sh = rdSheet(shHead('إعدادات القارئ') +
       `<div class="rd-list"><div class="rd-row rd-static"><span class="rd-row-ic">${ic('sliders', 21)}</span><span class="rd-row-lb">حجم الخط (النص العادي)</span>` +
       `<span class="rd-step"><button data-act="fs-" aria-label="تصغير">${icon('minus', 18)}</button><b id="rdFs">${N(S.settings.fontSize)}</b><button data-act="fs+" aria-label="تكبير">${icon('plus', 18)}</button></span></div>` +
-      swRow('tg-frame', 'book', 'إظهار إطار الصفحة', frameOn) + (canWake ? swRow('tg-awake', 'eye', 'إبقاء الشاشة مضاءة', awakeOn) : '') + `</div>`);
+      swRow('tg-frame', 'book', 'إظهار إطار الصفحة', frameOn) + swRow('tg-marks', 'book', 'إظهار علامات نهاية الآيات', marksOn()) + (canWake ? swRow('tg-awake', 'eye', 'إبقاء الشاشة مضاءة', awakeOn) : '') + `</div>`);
     sh.addEventListener('click', e => {
       const b = e.target.closest('[data-act]'); if (!b) return;
       const a = b.dataset.act;
@@ -705,6 +705,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
         return;
       }
       if (a === 'tg-frame') { setFrame(!frameOn); setSw(b, frameOn); return; }
+      if (a === 'tg-marks') { setMarksPref(!marksOn()); setSw(b, marksOn()); return; }
       if (a === 'tg-awake') { const on = !awakeOn; setSw(b, on); setAwake(on).then(() => setSw(b, awakeOn && !!wake)); }
     });
   };
