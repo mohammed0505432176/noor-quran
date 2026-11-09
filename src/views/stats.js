@@ -1,5 +1,5 @@
 // Reports + achievements.
-import { S, dateKey, streak, bestStreak, totalRead, level, LEVELS, BADGES } from '../core/store.js';
+import { S, dateKey, streak, bestStreak, totalRead, level, LEVELS, BADGES, hifzTotals, recallNow, saverInfo, wirdStatus, dueReviews } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, juzOf, SURAH_COUNT } from '../core/quran.js';
 import { esc, icon, toast, header, N } from '../ui.js';
 
@@ -65,6 +65,25 @@ function recList() {
   }).join('')}</div>`;
 }
 
+/** Memorisation statistics: pages memorised, how well the reviewed passages are remembered right now (FSRS), spot tests, wird, savers. */
+function hifzStats() {
+  const ht = hifzTotals();
+  const rs = S.reviews.map(recallNow).filter(x => x !== null);
+  const avg = rs.length ? Math.round(100 * rs.reduce((t, x) => t + x, 0) / rs.length) : null;
+  const lapses = S.reviews.reduce((t, r) => t + (r.lp || 0), 0);
+  const w = wirdStatus(), sv = saverInfo();
+  const stat = (v, l) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`;
+  return `<div class="section-title mt">إحصاءات الحفظ</div><div class="grid-2">
+    ${stat(`${N(ht.pages)} <small>(${N(ht.pct)}٪)</small>`, 'صفحات محفوظة من ٦٠٤')}
+    ${stat(avg === null ? '—' : N(avg) + '٪', 'متوسط ثبات مراجعاتك الآن')}
+    ${stat(N(S.reviews.length) + (dueReviews().length ? ` <small>(${N(dueReviews().length)} مستحقة)</small>` : ''), 'مقاطع في المراجعة')}
+    ${stat(N(lapses), 'مرات النسيان في المراجعة')}
+    ${stat(N((S.spot && S.spot.n) || 0), 'اختبارات النقاط العشوائية')}
+    ${stat(w ? `${N(w.streak)} <small>يوم</small>` : '—', 'سلسلة الورد اليومي')}
+    ${stat(`${N(sv.have)} / ${N(sv.max)}`, `حمايات السلسلة (تُكسب كل ${N(sv.every)} أيام)`)}
+  </div>`;
+}
+
 function reports() {
   const tr = totalRead(), pct = tr / 6236 * 100;
   return `
@@ -74,6 +93,7 @@ function reports() {
       <div class="stat"><b>${N(Math.max(bestStreak(), streak()))}</b><span>أفضل سلسلة (يوم)</span></div>
       <div class="stat"><b>${N(S.pts)}</b><span>مجموع النقاط</span></div>
     </div>
+    ${hifzStats()}
     <div class="section-title mt">القراءة آخر ٧ أيام</div>
     <div class="card">${bars()}</div>
     <div class="section-title mt">نشاطك آخر ١٢ أسبوعاً</div>

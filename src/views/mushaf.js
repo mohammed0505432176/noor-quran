@@ -1,6 +1,6 @@
 // Mushaf: index (surahs / juz / bookmarks / pages) and the page-based reader with audio.
 import { esc, $, $$, toast, sheet, icon, ayahMark, header, N, marksOn, setMarksPref } from '../ui.js';
-import { S, markRead, setLast, isBookmarked, toggleBookmark, addReview } from '../core/store.js';
+import { S, markRead, setLast, isBookmarked, toggleBookmark, addReview, markWirdPage } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, typeName, ayah, JUZ, SURAH_COUNT } from '../core/quran.js';
 import { PAGE_COUNT, pageOf, pageContent, pageFirst, side, quarterOf, quarterStartsOn, hizbLabel, juzOfPage } from '../core/pages.js';
 import * as audio from '../core/audio.js';
@@ -486,6 +486,15 @@ let manualNav = false;             // the reader turned the pages by hand since 
         `<div><b>${esc(l.name)}</b><small>${esc(l.desc)}</small></div></div>`).join('') + `</div>`);
   };
 
+  // the wird counts a page as read once it has stayed on screen for WIRD_DWELL_MS (a page flipped past in a second is not read)
+  const WIRD_DWELL_MS = 40000;
+  let dwellTimer = 0;
+  function startDwell() {
+    clearTimeout(dwellTimer);
+    const pages = shown.slice();
+    dwellTimer = setTimeout(() => { if (!dead && document.visibilityState === 'visible') for (const p of pages) markWirdPage(p); }, WIRD_DWELL_MS);
+  }
+
   // ---- turning
   const show = (p, dir) => {
     cur = clampP(p);
@@ -510,6 +519,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
     const f = pageFirst(cur); setLast(f.s, f.a);
     window.scrollTo(0, 0);
     if (tjOn) applyTj();
+    startDwell();
   };
   const goNext = () => { manualNav = true; const hi = shown[shown.length - 1]; if (hi < PAGE_COUNT) show(hi + 1, 'next'); };
   const goPrev = () => { manualNav = true; const lo = shown[0]; if (lo > 1) show(lo - 1, 'prev'); };
@@ -930,6 +940,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
       addCls(g.s, a, 'read');
     }
     { const f = pageFirst(cur); setLast(f.s, f.a); }
+    for (const p of shown) markWirdPage(p);
     toast(counted ? `عُلّمت ${N(n)} آية كمقروءة` : 'سُجّلت قراءتها اليوم مسبقًا');
   };
 
@@ -1045,7 +1056,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
 
   reserve = syncReserve(root, () => fitAll());      // real bar heights -> page reserve (never under a bar)
   chrome = bindChromeToggle(root, { apply: off => { setChromeOff(root, off); if (reserve) reserve.apply(); }, onHint: msg => toast(msg), ignore: CHROME_IGNORE });
-  fitAll(); ensureMadani(); updateMistN();
+  fitAll(); ensureMadani(); updateMistN(); startDwell();
   if (awakeOn) setAwake(true);
   if (tjOn) applyTj();
   if (focusS) {
@@ -1058,6 +1069,7 @@ let manualNav = false;             // the reader turned the pages by hand since 
 
   return () => {
     dead = true;
+    clearTimeout(dwellTimer);
     userStopped = true;
     tjSeq++;
     unsub();

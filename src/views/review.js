@@ -1,5 +1,5 @@
 // Spaced-repetition hifz review.
-import { S, save, today, dueReviews, addReview, removeReview, gradeReview } from '../core/store.js';
+import { S, save, today, dueReviews, addReview, removeReview, gradeReview, recallNow } from '../core/store.js';
 import { loadQuran, surahName, ayahCount, SURAH_COUNT } from '../core/quran.js';
 import { esc, icon, toast, sheet, header, N } from '../ui.js';
 
@@ -13,18 +13,23 @@ function rel(due) {
   return `بعد ${N(d)} يوماً`;
 }
 const range = r => (r.from === 1 && r.to === ayahCount(r.s) ? 'السورة كاملة' : `الآيات ${N(r.from)}–${N(r.to)}`);
-const dots = box => `<span aria-label="المستوى ${N(box)}" style="display:inline-flex;gap:3px;direction:ltr">${[0, 1, 2, 3, 4, 5, 6].map(i =>
-  `<i style="width:7px;height:7px;border-radius:50%;background:${i <= box ? 'var(--gold)' : 'var(--line)'}"></i>`).join('')}</span>`;
+// how likely the passage is remembered right now (FSRS): a small bar and a percentage; «جديد» before its first review
+const recallMeter = r => {
+  const p = recallNow(r);
+  if (p === null) return '<span class="muted small">جديد</span>';
+  const pct = Math.round(p * 100);
+  return `<span class="small" style="display:inline-flex;align-items:center;gap:6px" aria-label="احتمال التذكّر ${N(pct)} بالمئة"><span style="width:46px;height:6px;border-radius:3px;background:var(--line);overflow:hidden;direction:ltr"><i style="display:block;height:100%;width:${pct}%;background:${pct >= 85 ? 'var(--ok, var(--gold))' : pct >= 60 ? 'var(--gold)' : 'var(--bad)'}"></i></span><b>${N(pct)}٪</b></span>`;
+};
 
 function item(r, isDue) {
   return `<div class="card tight" data-id="${esc(r.id)}">
     <div class="row" style="align-items:center;justify-content:space-between">
       <div><b>${esc(surahName(r.s))}</b> <span class="muted small">${range(r)}</span></div>
-      ${dots(r.box)}</div>
+      ${recallMeter(r)}</div>
     ${isDue ? '' : `<div class="muted small">موعد المراجعة: ${rel(r.due)}</div>`}
     <div class="row mt" style="gap:6px">
       <button class="btn sm" data-act="rec">${icon('mic', 16)} سمّع الآن</button>
-      ${isDue ? `<button class="btn sm ghost" data-act="g0">نسيت</button><button class="btn sm ghost" data-act="g1">تردد</button><button class="btn sm ghost" data-act="g2">متقن</button>` : ''}
+      ${isDue ? `<button class="btn sm ghost" data-act="g0">نسيت</button><button class="btn sm ghost" data-act="g1">تردد</button><button class="btn sm ghost" data-act="g2">جيد</button><button class="btn sm ghost" data-act="g3">سهل</button>` : ''}
       <button class="icon-btn" data-act="del" aria-label="حذف">${icon('close', 18)}</button>
     </div></div>`;
 }
@@ -64,7 +69,7 @@ export default {
       const dueIds = new Set(due.map(r => r.id));
       const upcoming = S.reviews.filter(r => !dueIds.has(r.id)).sort((a, b) => a.due.localeCompare(b.due));
       el.innerHTML = `${header('المراجعة', { back: 'more', actions: `<button class="icon-btn" id="add" aria-label="إضافة مقطع">${icon('plus')}</button>` })}
-        <p class="muted small">نظام تكرار متباعد: كلما أتقنت مقطعاً تباعدت مراجعته.</p>
+        <p class="muted small">جدولة ذكية (FSRS): يتعلّم التطبيق مدى ثبات كل مقطع عندك، فيراجعه قبل أن تنساه ويباعد ما أتقنته.</p>
         ${S.reviews.length ? '' : `<div class="card empty"><div class="gold">${icon('brain', 40)}</div>
           <p>ابدأ بإضافة مقاطع حفظتها لتراجعها في مواعيدها. نقترح قصار السور من جزء عمّ.</p>
           <button class="btn" id="juz">أضف قصار السور (الناس → الضحى)</button>
