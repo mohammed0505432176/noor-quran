@@ -401,7 +401,16 @@ function prayer(el, ctx) {
       const b = c.querySelector('.k-sayplay'); if (b) { b.classList.toggle('playing', j === k); b.querySelector('.k-ico').textContent = j === k ? '❚❚' : '▶'; }
     });
   }
-  function stop() { token++; ctx.stop(); setPlaying(-1); }
+  function paintNarr(on) { const b = el.querySelector('#k-narr'); if (b) { b.classList.toggle('playing', on); b.querySelector('.k-ico').textContent = on ? '❚❚' : '▶'; } }
+  function stop() { token++; ctx.stop(); setPlaying(-1); paintNarr(false); }
+  /** Play the spoken explanation of the current step, then call cb (also when it cannot be played: the practice goes on). */
+  function playNarr(cb) {
+    const st = S[i]; if (!st.narr) { if (cb) cb(); return; }
+    const my = ++token; ctx.stop(); setPlaying(-1); paintNarr(true);
+    const done = () => { if (my !== token) return; paintNarr(false); if (cb) cb(); };
+    au.onended = done; au.onerror = () => { if (my !== token) return; paintNarr(false); if (cb) cb(); else toast('تأكد من الإنترنت'); };
+    au.src = mediaUrl(st.narr); const p = au.play(); if (p && p.catch) p.catch(au.onerror);
+  }
   /** Play one say item (all its clips in sequence), then call cb. */
   function playItem(k, cb) {
     const it = S[i].say[k], clips = sayClips(it);
@@ -446,8 +455,12 @@ function prayer(el, ctx) {
       if (k >= st.say.length) { ctx.t(() => { if (auto) advance(); }, 1800); return; }
       playItem(k, () => ctx.t(() => seq(k + 1), 900));
     };
-    if (!st.say.some(x => x.audio || x.surah)) { ctx.t(() => { if (auto) advance(); }, st.list ? 7000 : 5000); return; }
-    ctx.t(() => seq(0), 700);
+    const go = () => {
+      if (!auto) return;
+      if (!st.say.some(x => x.audio || x.surah)) { ctx.t(() => { if (auto) advance(); }, st.narr ? 1500 : st.list ? 7000 : 5000); return; }
+      ctx.t(() => seq(0), 700);
+    };
+    if (st.narr) playNarr(() => ctx.t(go, 500)); else go();
   }
   function draw() {
     stop();
@@ -467,6 +480,7 @@ function prayer(el, ctx) {
       </div>
       <h2 class="k-pr-title">${esc(st.title)}</h2>
       <p class="k-pr-desc">${esc(st.desc)}</p>
+      ${st.narr ? `<button class="k-narr" id="k-narr" type="button" aria-label="استمع لشرح الخطوة"><span class="k-ico">▶</span> استمع للشرح</button>` : ''}
       ${st.list ? `<ol class="k-pr-list">${st.list.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}
       ${st.say.length ? `<div class="k-dua k-pr-say" style="--k:${PASTEL[i % PASTEL.length]}"><div class="k-pr-q">ماذا أقول؟</div>${say}${st.note ? `<small class="k-ref">${esc(st.note)}</small>` : ''}</div>` : ''}
       <button class="k-auto" id="k-auto"><span>تدرّب معي</span></button>
@@ -476,6 +490,7 @@ function prayer(el, ctx) {
         <button class="k-nbtn" id="k-next">${i === n - 1 ? 'إنهاء' : 'التالي'}</button>
       </div></div>`;
     el.querySelectorAll('.k-sayplay').forEach(b => { b.onclick = () => { const k = +b.dataset.k; if (playing === k) stop(); else { auto = false; paintAuto(); playItem(k); } }; });
+    const nb = el.querySelector('#k-narr'); if (nb) nb.onclick = () => { if (nb.classList.contains('playing')) stop(); else { auto = false; paintAuto(); playNarr(); } };
     el.querySelector('#k-auto').onclick = () => { if (auto) { auto = false; stop(); paintAuto(); } else { auto = true; paintAuto(); runAuto(); } };
     el.querySelector('#k-prev').onclick = () => { auto = false; if (i > 0) { i--; draw(); } };
     el.querySelector('#k-next').onclick = () => { auto = false; if (i < n - 1) { i++; draw(); } else finishAll(); };

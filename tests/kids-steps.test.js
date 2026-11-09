@@ -60,3 +60,12 @@ test('kids view uses the step set (webp -> icon tile) for the steps, the end scr
   const photos = kidsJs.match(/const PHOTOS = \{([\s\S]*?)\n\};/)[1];
   for (const n of imgs) assert.doesNotMatch(photos, new RegExp(`^\\s*'?${n}'?:`, 'm'), `${n} still mapped to a photo`);
 });
+
+test('every step has a small spoken narration clip', () => {
+  for (const s of PRAYER_STEPS) {
+    assert.ok(s.narr, `${s.id}: no narr`);
+    const u = new URL(`../public/${s.narr}`, import.meta.url);
+    assert.ok(existsSync(u), `missing ${s.narr}`);
+    assert.ok(readFileSync(u).length < 120 * 1024, `${s.narr} is too big`);
+  }
+});
