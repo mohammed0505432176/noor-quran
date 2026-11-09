@@ -7,7 +7,7 @@ import { loadQuran, surahName, ayahCount, ayah, SURAH_COUNT } from '../core/qura
 import { words as splitWords } from '../core/arabic.js';
 import { createMatcher, createLockedTracker, stripOpeners } from '../core/matcher.js';
 import { speechSupport, startListening, micState, micPermission, requestMicAccess } from '../core/speech.js';
-import { haptic, isNative } from '../core/platform.js';
+import { haptic, isNative, createMistakeBuzz } from '../core/platform.js';
 import { startRecorder, recorderSupported } from '../core/recorder.js';
 import { cloudStatus, transcribe, tajweedReview } from '../core/cloud.js';
 import { playRange, playAyah, stop as stopReciter, isPlaying as reciterPlaying } from '../core/audio.js';
@@ -164,6 +164,8 @@ function showHintNote(host) {
 /** The message sink of the running session (its status line in the strip above the bar); helper messages go here, not into floating toasts. */
 let msgSink = null;
 const tell = (t) => { if (msgSink) msgSink(t); else toast(t); };
+/** One short buzz per wrong word (like a phone's gentle alert), never more than one per ~1 s. */
+const mistakeBuzz = createMistakeBuzz();
 // «إعادة المحاولة» in the message strip after a mic / engine failure (a clear state + one tap to try again); cleared when tapped
 let retrySink = null;
 const offerRetry = fn => { if (retrySink) retrySink(fn); };
@@ -820,7 +822,7 @@ export default {
         }
         prevSt = st;
         drawMarker(st, finished ? -1 : ptr);
-        if ((newBad || newAyah) && opts.vibrate) haptic('light');      // no haptic per written word: only mistakes / ayah completion
+        if (newBad && opts.vibrate) mistakeBuzz();      // a buzz only for a mistake: nothing per written word, nothing for a finished ayah
         if (newBad && voiceLike && !ending && !finished) mistakeAlert(newBadIdx);
         if (fixIdx >= 0 && (st[fixIdx] === 'ok' || st[fixIdx] === 'uns')) { fixIdx = -1; hideFix(); }
         const acc = total ? Math.round(100 * ok / total) : 0;
@@ -1020,7 +1022,7 @@ export default {
         const items = [];
         for (let k = 0; k < n; k++) items.push({ a: issue.a, w: issue.w + k, st: 'wrong' });
         for (const i of mapVerdicts(items, groups).keys()) { if (!qIssues.has(i) || kind !== 'vowel') qIssues.set(i, kind); if (kind === 'vowel') qVowel.add(i); }
-        if (hardKind(kind) && opts.vibrate) haptic('light');
+        if (hardKind(kind) && opts.vibrate) mistakeBuzz();
         applyQuran(qVerdicts);
       }
       async function toggleQuran() {
@@ -1574,6 +1576,7 @@ export default {
         page.lastJ = lastJ; page.curNow = curI; page.st = st;
         if (mp.locating !== locatingNow) { locatingNow = mp.locating; if (recState === 'rec') setStatus(locatingNow ? 'جارٍ تحديد الموضع…' : listenText()); }
         if (newConfirmed && !finished && !ending && recState === 'rec') {
+          if (opts.vibrate) mistakeBuzz();      // a confirmed wrong word (never an engine doubt): one short buzz
           const act = errorAction({ mode: reciteCfg().onError, certainty: 'confirmed' });
           if (act.stop) stopAtErrorFree(newConfirmed.g, newConfirmed.i);
         }
@@ -1710,7 +1713,7 @@ export default {
         issueAyahs.add(s + ':' + issue.a);
         if (hardKind(kind)) {
           mistakes++;
-          if (sard && (WARN_KINDS.has(issue.kind) || kind === 'vowel')) warn(s, issue.a, issue.w); else if (opts.vibrate) haptic('light');
+          if (sard && (WARN_KINDS.has(issue.kind) || kind === 'vowel')) warn(s, issue.a, issue.w); else if (opts.vibrate) mistakeBuzz();
         }
         updateCount();
         schedulePaint();
@@ -1888,7 +1891,10 @@ export default {
         const i = +sp.dataset.i, g = page.groups.find(x => i >= x.start && i < x.end);
         if (!g) return;
         const n = g.end - g.start, en = counts()[g.s + ':' + g.a] | 0;
-        playWordAt(g.s, g.a, (page.mode === 'madani' ? i - g.start : en && en !== n ? Math.floor((i - g.start) * en / n) : i - g.start) + 1);
+        const k0 = page.mode === 'madani' ? i - g.start : en && en !== n ? Math.floor((i - g.start) * en / n) : i - g.start;
+        const right = splitWords(ayah(g.s, g.a) || '')[k0];
+        if (right) tell(`الصواب: «${right}» — آية ${N(g.a)}`);
+        playWordAt(g.s, g.a, k0 + 1);
       });
       // the page where the last free session ended (or the first page) waits under the mic until the engine locates
       showPage(startPage, '');
